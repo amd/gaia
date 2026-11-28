@@ -283,7 +283,7 @@ void GaiaAgent::registerTools() {
                         std::string ext = p.extension().u8string();
                         std::transform(ext.begin(), ext.end(), ext.begin(),
                                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                        if (ext != ".pdf" && ext != ".docx") continue;
+                        if (ext != ".pdf" && ext != ".docx" && ext != ".xlsx" && ext != ".pptx") continue;
                         const std::string name = p.filename().u8string();
                         if (name.empty() || !mentionsFilename(advised, name)) continue;
                         std::lock_guard<std::mutex> lock(turnListingMu_);
@@ -412,7 +412,7 @@ std::string GaiaAgent::getSystemPrompt() const {
 ## How to work
 1. Look before you answer. If the request names files or a folder, list and read them first. Never say a file or fact does not exist without checking.
 2. Use tools to do the work, not to describe it. A request to create, fix, convert or save a file is done only when the file exists on disk; write it with file_write or a program, then confirm it is there. Writing for the user to read (a story, poem, essay, letter or explanation) goes in your reply, not in a file, unless they ask for a file or name a place to save it.
-3. For PDF and Word (.docx) documents, use query_documents to read and search them (calling index_document first if the file is not already listed as indexed under Environment). Once query_documents returns passages that answer the question, answer directly from them instead of running bash_execute to re-read or verify the file. For formats query_documents cannot index (Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with openpyxl/pandas or python-pptx. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
+3. For PDF, Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) documents, use query_documents to read and search them (calling index_document first if the file is not already listed as indexed under Environment). Once query_documents returns passages that answer the question, answer directly from them instead of running bash_execute to re-read or verify the file. For formats query_documents cannot index (legacy .xls/.ppt, images, archives), or when you need to compute across a spreadsheet or edit a file, run a program with bash_execute — for example Python with openpyxl/pandas or python-pptx. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
 4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source. A sum the user states outright, with no file or data behind it (17 times 23), is not data work: answer it yourself, with no tool.
 5. Verify. After a change, re-read the file, run the test or the program, and look at the output.
 6. Keep going until the task is finished or you are truly blocked, then answer.
@@ -2738,15 +2738,26 @@ std::optional<std::string> GaiaAgent::uncomputedFiguresNote(const std::string& a
         std::regex::icase);
     if (!std::regex_search(answer, figure)) return std::nullopt;
     static const std::regex dataFile(R"(\.(?:csv|tsv|xlsx|xls)\b)", std::regex::icase);
+    static const std::regex xlsxFile(R"(\.xlsx\b)", std::regex::icase);
     static const std::regex ranOnData(R"(\.(?:csv|tsv|xlsx|xls|py)\b)", std::regex::icase);
     bool readData = false;
+    bool indexedXlsx = false;
+    bool queriedDocs = false;
     for (const auto& c : calls) {
         // A program that names a data file or a script ran, or the read itself totalled the file.
         if (c.name == "bash_execute" && std::regex_search(argsText(c), ranOnData)) return std::nullopt;
         if (c.name == "file_read" && c.output.find("\"summary\"") != std::string::npos) return std::nullopt;
+        if (c.name == "query_documents") {
+            queriedDocs = true;
+            if (std::regex_search(argsText(c), xlsxFile)) continue;
+        }
+        if (c.name == "index_document" && std::regex_search(argsText(c), xlsxFile)) {
+            indexedXlsx = true;
+            continue;
+        }
         if (readsContents(c.name) && std::regex_search(argsText(c), dataFile)) readData = true;
     }
-    if (!readData) return std::nullopt;
+    if (!readData && (!indexedXlsx || queriedDocs)) return std::nullopt;
     return "Your answer gives totals or rates from a data file, but no program read that file in this "
            "request. Compute them with a short script that reads the file by its path (Python as named "
            "under Environment), then answer with the computed figures.";

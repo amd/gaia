@@ -429,6 +429,88 @@ void expectDocxIsRead(const fs::path& docx) {
     EXPECT_NE(text.find("The owner is Marit Oksanen."), std::string::npos) << text;
 }
 
+std::uint32_t zipCrc32(const std::string& data) {
+    std::uint32_t crc = 0xFFFFFFFFu;
+    for (unsigned char b : data) {
+        crc ^= b;
+        for (int i = 0; i < 8; ++i) crc = (crc & 1u) ? (crc >> 1) ^ 0xEDB88320u : (crc >> 1);
+    }
+    return ~crc;
+}
+
+std::string buildStoredZip(const std::vector<std::pair<std::string, std::string>>& entries) {
+    auto put16 = [](std::string& out, std::uint16_t v) {
+        out.push_back(static_cast<char>(v & 0xFFu));
+        out.push_back(static_cast<char>((v >> 8) & 0xFFu));
+    };
+    auto put32 = [](std::string& out, std::uint32_t v) {
+        for (int i = 0; i < 4; ++i) out.push_back(static_cast<char>((v >> (i * 8)) & 0xFFu));
+    };
+
+    std::string body;
+    std::string central;
+    for (const auto& [name, data] : entries) {
+        const std::uint32_t offset = static_cast<std::uint32_t>(body.size());
+        const std::uint32_t crc = zipCrc32(data);
+        const std::uint32_t size = static_cast<std::uint32_t>(data.size());
+        const std::uint16_t nameLen = static_cast<std::uint16_t>(name.size());
+
+        put32(body, 0x04034B50u);
+        put16(body, 20);
+        put16(body, 0);
+        put16(body, 0);
+        put16(body, 0);
+        put16(body, 0x5C21);
+        put32(body, crc);
+        put32(body, size);
+        put32(body, size);
+        put16(body, nameLen);
+        put16(body, 0);
+        body += name;
+        body += data;
+
+        put32(central, 0x02014B50u);
+        put16(central, 20);
+        put16(central, 20);
+        put16(central, 0);
+        put16(central, 0);
+        put16(central, 0);
+        put16(central, 0x5C21);
+        put32(central, crc);
+        put32(central, size);
+        put32(central, size);
+        put16(central, nameLen);
+        put16(central, 0);
+        put16(central, 0);
+        put16(central, 0);
+        put16(central, 0);
+        put32(central, 0);
+        put32(central, offset);
+        central += name;
+    }
+
+    const std::uint32_t cdOffset = static_cast<std::uint32_t>(body.size());
+    const std::uint32_t cdSize = static_cast<std::uint32_t>(central.size());
+    const std::uint16_t count = static_cast<std::uint16_t>(entries.size());
+
+    std::string eocd;
+    put32(eocd, 0x06054B50u);
+    put16(eocd, 0);
+    put16(eocd, 0);
+    put16(eocd, count);
+    put16(eocd, count);
+    put32(eocd, cdSize);
+    put32(eocd, cdOffset);
+    put16(eocd, 0);
+
+    return body + central + eocd;
+}
+
+std::string writeBinary(const fs::path& file, const std::string& bytes) {
+    std::ofstream(file, std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    return file.string();
+}
+
 }  // namespace
 
 TEST(DocumentIndexTest, AWordFileInAFolderWithASpaceIsRead) {
@@ -443,20 +525,339 @@ TEST(DocumentIndexTest, AWordFileWithPercentSignsInItsNameIsRead) {
     expectDocxIsRead(d.path / "budget %PATH% 100%.docx");
 }
 
+TEST(DocumentIndexTest, XlsxExtractsMultipleSheetsSharedAndInlineStringsNumbersAndEntities) {
+    TempDir d;
+    const std::string workbook =
+        R"(<?xml version="1.0" encoding="UTF-8"?>)"
+        R"(<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" )"
+        R"(xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">)"
+        R"(<sheets>)"
+        R"(<sheet name="Budget &amp; Plan" sheetId="1" r:id="rId1"/>)"
+        R"(<sheet name="Q4 Breakdown" sheetId="2" r:id="rId2"/>)"
+        R"(</sheets></workbook>)";
+    const std::string rels =
+        R"(<?xml version="1.0" encoding="UTF-8"?>)"
+        R"(<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">)"
+        R"(<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>)"
+        R"(<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet2.xml"/>)"
+        R"(</Relationships>)";
+    const std::string sharedStrings =
+        R"(<?xml version="1.0" encoding="UTF-8"?>)"
+        R"(<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">)"
+        R"(<si><t>Department</t></si>)"
+        R"(<si><t>Allocated</t></si>)"
+        R"(<si><t>Approved</t></si>)"
+        R"(<si><t>Notes</t></si>)"
+        R"(<si><r><t>R&amp;D </t></r><r><t>Core&#x2019;s Team</t></r><rPh sb="0" eb="1"><t>IGNORE_PHONETIC</t></rPh></si>)"
+        R"(<si><t>Metric</t></si>)"
+        R"(<si><t>Value</t></si>)"
+        R"(<si><t>Target Margin</t></si>)"
+        R"(</sst>)";
+    const std::string sheet1 =
+        R"(<?xml version="1.0" encoding="UTF-8"?>)"
+        R"(<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>)"
+        R"(<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c><c r="D1" t="s"><v>3</v></c></row>)"
+        R"(<row r="2"><c r="A2" t="s"><v>4</v></c><c r="B2"><f>100000+48250</f><v>148250</v></c><c r="C2" t="b"><v>1</v></c><c r="D2" t="inlineStr"><is><t>Cap &lt; 150k</t></is></c></row>)"
+        R"(<row r="3"><c r="A3" t="str"><v>Marketing</v></c><c r="B3"><v>62400</v></c><c r="C3" t="b"><v>0</v></c></row>)"
+        R"(</sheetData></worksheet>)";
+    const std::string sheet2 =
+        R"(<?xml version="1.0" encoding="UTF-8"?>)"
+        R"(<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>)"
+        R"(<row r="1"><c r="A1" t="s"><v>5</v></c><c r="B1" t="s"><v>6</v></c></row>)"
+        R"(<row r="2"><c r="A2" t="s"><v>7</v></c><c r="B2"><v>38.5</v></c></row>)"
+        R"(</sheetData></worksheet>)";
+
+    const std::string xlsx = writeBinary(
+        d.path / "budget_sheet.xlsx",
+        buildStoredZip({{"xl/workbook.xml", workbook},
+                        {"xl/_rels/workbook.xml.rels", rels},
+                        {"xl/sharedStrings.xml", sharedStrings},
+                        {"xl/worksheets/sheet1.xml", sheet1},
+                        {"xl/worksheets/sheet2.xml", sheet2}}));
+
+    std::vector<std::pair<int, std::string>> pages;
+    try {
+        pages = DocumentIndex::extractPages(xlsx);
+    } catch (const std::runtime_error& e) {
+        if (std::string(e.what()).find("is not installed") != std::string::npos) {
+            GTEST_SKIP() << "no zip reader on this machine: " << e.what();
+        }
+        FAIL() << e.what();
+    }
+    ASSERT_EQ(pages.size(), 2u);
+    EXPECT_EQ(pages[0].first, 0);
+    EXPECT_NE(pages[0].second.find("Sheet: Budget & Plan"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[0].second.find("R&D Core\xE2\x80\x99s Team"), std::string::npos) << pages[0].second;
+    EXPECT_EQ(pages[0].second.find("IGNORE_PHONETIC"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[0].second.find("148250"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[0].second.find("TRUE"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[0].second.find("FALSE"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[0].second.find("Cap < 150k"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[0].second.find("Marketing"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[1].second.find("Sheet: Q4 Breakdown"), std::string::npos) << pages[1].second;
+    EXPECT_NE(pages[1].second.find("Target Margin"), std::string::npos) << pages[1].second;
+    EXPECT_NE(pages[1].second.find("38.5"), std::string::npos) << pages[1].second;
+
+    DocumentIndex idx;
+    EXPECT_GE(idx.indexFile(xlsx), 2u);
+    auto hits = idx.query("Target Margin Q4 Breakdown", 3);
+    ASSERT_FALSE(hits.empty());
+    EXPECT_NE(hits[0].chunk.text.find("38.5"), std::string::npos) << hits[0].chunk.text;
+}
+
+TEST(DocumentIndexTest, XlsxFallsBackToNumericWorksheetOrderWithoutWorkbookXml) {
+    TempDir d;
+    const std::string s10 =
+        R"(<?xml version="1.0"?><worksheet><sheetData><row><c t="inlineStr"><is><t>TenthSheetMarker</t></is></c></row></sheetData></worksheet>)";
+    const std::string s2 =
+        R"(<?xml version="1.0"?><worksheet><sheetData><row><c t="inlineStr"><is><t>SecondSheetMarker</t></is></c></row></sheetData></worksheet>)";
+    const std::string xlsx = writeBinary(
+        d.path / "minimal.xlsx",
+        buildStoredZip({{"xl/worksheets/sheet10.xml", s10}, {"xl/worksheets/sheet2.xml", s2}}));
+
+    const auto pages = DocumentIndex::extractPages(xlsx);
+    ASSERT_EQ(pages.size(), 2u);
+    EXPECT_NE(pages[0].second.find("SecondSheetMarker"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[1].second.find("TenthSheetMarker"), std::string::npos) << pages[1].second;
+}
+
+TEST(DocumentIndexTest, PptxExtractsSlidesInNumericOrderWithNotesAndTables) {
+    TempDir d;
+    std::vector<std::pair<std::string, std::string>> entries;
+    // Insert slide10 before slide2 to verify numeric slide sorting, not lexicographical.
+    for (int n : {10, 9, 8, 7, 6, 5, 4, 3, 2, 1}) {
+        std::string xml =
+            R"(<?xml version="1.0" encoding="UTF-8"?>)"
+            R"(<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" )"
+            R"(xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree>)"
+            R"(<p:sp><p:txBody><a:p><a:r><a:t>Milestone &amp; Goal #)" +
+            std::to_string(n) + R"(</a:t></a:r></a:p></p:txBody></p:sp>)";
+        if (n == 3) {
+            xml += R"(<p:graphicFrame><a:graphic><a:graphicData><a:tbl>)"
+                   R"(<a:tr><a:tc><a:txBody><a:p><a:r><a:t>Region</a:t></a:r></a:p></a:txBody></a:tc>)"
+                   R"(<a:tc><a:txBody><a:p><a:r><a:t>ARR</a:t></a:r></a:p></a:txBody></a:tc></a:tr>)"
+                   R"(<a:tr><a:tc><a:txBody><a:p><a:r><a:t>EMEA</a:t></a:r></a:p></a:txBody></a:tc>)"
+                   R"(<a:tc><a:txBody><a:p><a:r><a:t>$4.2M</a:t></a:r></a:p></a:txBody></a:tc></a:tr>)"
+                   R"(</a:tbl></a:graphicData></a:graphic></p:graphicFrame>)";
+        }
+        xml += R"(</p:spTree></p:cSld></p:sld>)";
+        entries.emplace_back("ppt/slides/slide" + std::to_string(n) + ".xml", xml);
+    }
+    entries.emplace_back(
+        "ppt/slides/_rels/slide2.xml.rels",
+        R"(<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">)"
+        R"(<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide2.xml"/>)"
+        R"(</Relationships>)");
+    entries.emplace_back(
+        "ppt/notesSlides/notesSlide2.xml",
+        R"(<?xml version="1.0"?><p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">)"
+        R"(<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Remind investors about Q3 runway.</a:t></a:r></a:p></p:txBody></p:sp>)"
+        R"(<p:sp><p:txBody><a:p><a:fld type="slidenum"><a:t>2</a:t></a:fld></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>)");
+    // Slide 4 has a notes slide containing only the slide number placeholder — must not add empty notes.
+    entries.emplace_back(
+        "ppt/notesSlides/notesSlide4.xml",
+        R"(<?xml version="1.0"?><p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">)"
+        R"(<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:fld type="slidenum"><a:t>4</a:t></a:fld></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>)");
+
+    const std::string pptx = writeBinary(d.path / "pitch_deck.pptx", buildStoredZip(entries));
+    const auto pages = DocumentIndex::extractPages(pptx);
+    ASSERT_EQ(pages.size(), 10u);
+    for (int i = 0; i < 10; ++i) {
+        EXPECT_EQ(pages[i].first, i + 1);
+        EXPECT_EQ(pages[i].second.rfind("Slide " + std::to_string(i + 1) + "\n", 0), 0u) << pages[i].second;
+        EXPECT_NE(pages[i].second.find("Milestone & Goal #" + std::to_string(i + 1)), std::string::npos)
+            << pages[i].second;
+    }
+    EXPECT_NE(pages[1].second.find("Speaker Notes:"), std::string::npos) << pages[1].second;
+    EXPECT_NE(pages[1].second.find("Remind investors about Q3 runway."), std::string::npos) << pages[1].second;
+    EXPECT_NE(pages[2].second.find("EMEA | $4.2M"), std::string::npos) << pages[2].second;
+    EXPECT_EQ(pages[3].second.find("Speaker Notes:"), std::string::npos) << pages[3].second;
+
+    DocumentIndex idx;
+    EXPECT_GE(idx.indexFile(pptx), 10u);
+    auto hits = idx.query("Q3 runway investors", 3);
+    ASSERT_FALSE(hits.empty());
+    EXPECT_EQ(hits[0].chunk.page, 2);
+    EXPECT_NE(hits[0].chunk.text.find("Slide 2"), std::string::npos);
+}
+
+TEST(DocumentIndexTest, PptxRespectsPresentationSlideOrder) {
+    TempDir d;
+    const std::string pres =
+        R"(<?xml version="1.0"?><p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">)"
+        R"(<p:sldIdLst><p:sldId id="256" r:id="rId2"/><p:sldId id="257" r:id="rId1"/></p:sldIdLst></p:presentation>)";
+    const std::string rels =
+        R"(<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">)"
+        R"(<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>)"
+        R"(<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>)"
+        R"(</Relationships>)";
+    const std::string slide1 =
+        R"(<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second In Deck</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>)";
+    const std::string slide2 =
+        R"(<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>First In Deck</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>)";
+    const std::string pptx = writeBinary(
+        d.path / "reordered.pptx",
+        buildStoredZip({{"ppt/presentation.xml", pres},
+                        {"ppt/_rels/presentation.xml.rels", rels},
+                        {"ppt/slides/slide1.xml", slide1},
+                        {"ppt/slides/slide2.xml", slide2}}));
+    const auto pages = DocumentIndex::extractPages(pptx);
+    ASSERT_EQ(pages.size(), 2u);
+    EXPECT_EQ(pages[0].first, 1);
+    EXPECT_NE(pages[0].second.find("First In Deck"), std::string::npos);
+    EXPECT_EQ(pages[1].first, 2);
+    EXPECT_NE(pages[1].second.find("Second In Deck"), std::string::npos);
+}
+
+TEST(DocumentIndexTest, PptxDoesNotAttachNotesSlide1ToSlide1WhenRelsLinkItToSlide2) {
+    TempDir d;
+    // python-pptx numbers notes slides sequentially starting at notesSlide1.xml even when only slide 2 has notes.
+    const std::string slide1 =
+        R"(<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Overview Slide</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>)";
+    const std::string slide2 =
+        R"(<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Traction Slide</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>)";
+    const std::string slide1Rels =
+        R"(<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>)";
+    const std::string slide2Rels =
+        R"(<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/></Relationships>)";
+    const std::string notes1 =
+        R"(<?xml version="1.0"?><p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Slide 2 private runway note.</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>)";
+    const std::string pptx = writeBinary(
+        d.path / "sparse_notes.pptx",
+        buildStoredZip({{"ppt/slides/slide1.xml", slide1},
+                        {"ppt/slides/slide2.xml", slide2},
+                        {"ppt/slides/_rels/slide1.xml.rels", slide1Rels},
+                        {"ppt/slides/_rels/slide2.xml.rels", slide2Rels},
+                        {"ppt/notesSlides/notesSlide1.xml", notes1}}));
+
+    const auto pages = DocumentIndex::extractPages(pptx);
+    ASSERT_EQ(pages.size(), 2u);
+    EXPECT_EQ(pages[0].second.find("runway"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[1].second.find("Slide 2 private runway note."), std::string::npos) << pages[1].second;
+}
+
+TEST(DocumentIndexTest, CorruptAndPasswordProtectedXlsxAndPptxFailLoudly) {
+    TempDir d;
+    const std::string corruptXlsx = writeBinary(d.path / "corrupt.xlsx", std::string("PK\x03\x04\x00\x00truncated", 15));
+    const std::string corruptPptx = writeBinary(d.path / "corrupt.pptx", std::string("PK\x03\x04\x00\x00truncated", 15));
+    const std::string ole2Header("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1" "encrypted", 17);
+    const std::string lockedXlsx = writeBinary(d.path / "locked.xlsx", ole2Header);
+    const std::string lockedPptx = writeBinary(d.path / "locked.pptx", ole2Header);
+    const std::string emptyXlsx = writeBinary(
+        d.path / "empty.xlsx",
+        buildStoredZip({{"xl/worksheets/sheet1.xml",
+                         R"(<?xml version="1.0"?><worksheet><sheetData/></worksheet>)"}}));
+    const std::string emptyPptx = writeBinary(
+        d.path / "empty.pptx",
+        buildStoredZip({{"ppt/slides/slide1.xml",
+                         R"(<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree/></p:cSld></p:sld>)"}}));
+
+    EXPECT_THROW(DocumentIndex::extractPages(corruptXlsx), std::runtime_error);
+    EXPECT_THROW(DocumentIndex::extractPages(corruptPptx), std::runtime_error);
+    EXPECT_THROW(DocumentIndex::extractPages(emptyXlsx), std::runtime_error);
+    EXPECT_THROW(DocumentIndex::extractPages(emptyPptx), std::runtime_error);
+
+    for (const std::string& locked : {lockedXlsx, lockedPptx}) {
+        try {
+            DocumentIndex::extractPages(locked);
+            FAIL() << "locked archive should have failed: " << locked;
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string(e.what()).find("password-protected"), std::string::npos) << e.what();
+        }
+    }
+}
+
+TEST(DocumentIndexTest, FolderIndexIncludesXlsxAndPptx) {
+    TempDir d;
+    writeBinary(
+        d.path / "numbers.xlsx",
+        buildStoredZip({{"xl/worksheets/sheet1.xml",
+                         R"(<?xml version="1.0"?><worksheet><sheetData><row><c t="inlineStr"><is><t>Revenue</t></is></c><c><v>91000</v></c></row></sheetData></worksheet>)"}}));
+    writeBinary(
+        d.path / "slides.pptx",
+        buildStoredZip({{"ppt/slides/slide1.xml",
+                         R"(<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Roadmap Launch Q2</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>)"}}));
+    DocumentIndex idx;
+    ToolRegistry reg;
+    idx.registerTools(reg, nullptr);
+    const json res = reg.executeTool("index_document", json{{"path", d.path.string()}});
+    ASSERT_EQ(res["status"], "success") << res.dump();
+    EXPECT_EQ(res["indexed"].size(), 2u) << res.dump();
+}
+
+TEST(DocumentIndexTest, XlsxFormatsBuiltInDateAndPercentStyles) {
+    TempDir d;
+    const std::string stylesXml = R"(<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <cellXfs count="3">
+    <xf numFmtId="0"/>
+    <xf numFmtId="14"/>
+    <xf numFmtId="10"/>
+  </cellXfs>
+</styleSheet>)";
+    const std::string sheetXml = R"(<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Milestone</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>Date</t></is></c>
+      <c r="C1" t="inlineStr"><is><t>Margin</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>Launch</t></is></c>
+      <c r="B2" s="1"><v>45231</v></c>
+      <c r="C2" s="2"><v>0.15</v></c>
+    </row>
+  </sheetData>
+</worksheet>)";
+    const std::string xlsxPath = writeBinary(
+        d.path / "dates_percent.xlsx",
+        buildStoredZip({{"xl/styles.xml", stylesXml}, {"xl/worksheets/sheet1.xml", sheetXml}}));
+    const auto pages = DocumentIndex::extractPages(xlsxPath);
+    ASSERT_EQ(pages.size(), 1u);
+    EXPECT_NE(pages[0].second.find("2023-11-01"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[0].second.find("15%"), std::string::npos) << pages[0].second;
+    EXPECT_EQ(pages[0].second.find("45231"), std::string::npos) << pages[0].second;
+}
+
+TEST(DocumentIndexTest, RejectsZipEntryWithGlobWildcards) {
+    TempDir d;
+    const std::string workbookXml = R"(<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Bad" sheetId="1" r:id="rId1"/></sheets>
+</workbook>)";
+    const std::string relsXml = R"(<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet[1].xml"/>
+</Relationships>)";
+    const std::string badXlsx = writeBinary(
+        d.path / "wildcard.xlsx",
+        buildStoredZip({
+            {"xl/workbook.xml", workbookXml},
+            {"xl/_rels/workbook.xml.rels", relsXml},
+            {"xl/worksheets/sheet[1].xml", "<worksheet><sheetData><row><c><v>1</v></c></row></sheetData></worksheet>"},
+        }));
+    EXPECT_THROW(DocumentIndex::extractPages(badXlsx), std::runtime_error);
+}
+
 TEST(DocumentIndexTest, UnsupportedOfficeFormatsReportPlainEnglishErrors) {
     TempDir d;
-    const std::string xlsx = d.write("budget_sheet.xlsx", std::string("PK\x03\x04\x00\x00binary", 12));
-    const std::string pptx = d.write("pitch_deck.pptx", std::string("PK\x03\x04\x00\x00binary", 12));
+    const std::string xls = d.write("legacy_budget.xls", std::string("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8));
+    const std::string ppt = d.write("legacy_deck.ppt", std::string("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8));
+    const std::string doc = d.write("legacy_note.doc", std::string("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8));
     const std::string bin = d.write("blob.bin", std::string("\x00\x01\x02\x03", 4));
 
     for (const auto& [file, expectedFormat] :
-         std::vector<std::pair<std::string, std::string>>{{xlsx, "Excel"}, {pptx, "PowerPoint"}, {bin, "binary"}}) {
+         std::vector<std::pair<std::string, std::string>>{{xls, "Excel"}, {ppt, "PowerPoint"}, {doc, "legacy Word"}, {bin, "binary"}}) {
         try {
             DocumentIndex::extractPages(file);
             FAIL() << "unsupported file should have failed: " << file;
         } catch (const std::runtime_error& e) {
             const std::string msg = e.what();
             EXPECT_NE(msg.find(expectedFormat), std::string::npos) << msg;
+            EXPECT_NE(msg.find("Excel (.xlsx)"), std::string::npos) << msg;
+            EXPECT_NE(msg.find("PowerPoint (.pptx)"), std::string::npos) << msg;
             EXPECT_EQ(msg.find("registerExtractor"), std::string::npos) << "leaked C++ SDK jargon: " << msg;
             EXPECT_EQ(msg.find("NUL bytes"), std::string::npos) << "leaked binary NUL jargon: " << msg;
         }

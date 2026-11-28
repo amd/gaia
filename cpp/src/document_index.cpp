@@ -9,10 +9,12 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <random>
 #include <regex>
 #include <set>
 #include <sstream>
+#include <string_view>
 
 #include "gaia/ignore.h"
 #include "gaia/process.h"
@@ -90,17 +92,1053 @@ function run(argv) {
 })JS";
 #endif
 
-std::string decodeXmlEntities(std::string s) {
-    const std::pair<const char*, const char*> ents[] = {
-        {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"}, {"&amp;", "&"}};
-    for (const auto& [from, to] : ents) {
-        size_t pos = 0;
-        while ((pos = s.find(from, pos)) != std::string::npos) {
-            s.replace(pos, std::strlen(from), to);
-            pos += std::strlen(to);
+void appendUtf8(std::string& out, unsigned cp) {
+    if (cp == 0 || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) return;
+    if (cp < 0x80u) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp < 0x800u) {
+        out.push_back(static_cast<char>(0xC0u | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    } else if (cp < 0x10000u) {
+        out.push_back(static_cast<char>(0xE0u | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
+        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    } else {
+        out.push_back(static_cast<char>(0xF0u | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu)));
+        out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
+        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    }
+}
+
+std::string decodeXmlEntities(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+        if (s[i] != '&') {
+            out.push_back(s[i++]);
+            continue;
+        }
+        const size_t limit = std::min(s.size(), i + 16);
+        const size_t semi = s.find(';', i + 1);
+        if (semi == std::string_view::npos || semi >= limit) {
+            out.push_back(s[i++]);
+            continue;
+        }
+        const std::string_view ent = s.substr(i + 1, semi - i - 1);
+        if (ent == "lt") {
+            out.push_back('<');
+        } else if (ent == "gt") {
+            out.push_back('>');
+        } else if (ent == "quot") {
+            out.push_back('"');
+        } else if (ent == "apos") {
+            out.push_back('\'');
+        } else if (ent == "amp") {
+            out.push_back('&');
+        } else if (ent.size() >= 2 && ent[0] == '#') {
+            unsigned cp = 0;
+            bool ok = false;
+            if (ent.size() >= 3 && (ent[1] == 'x' || ent[1] == 'X')) {
+                ok = true;
+                for (size_t k = 2; k < ent.size(); ++k) {
+                    const char ch = ent[k];
+                    unsigned d = 0;
+                    if (ch >= '0' && ch <= '9') d = static_cast<unsigned>(ch - '0');
+                    else if (ch >= 'a' && ch <= 'f') d = static_cast<unsigned>(10 + ch - 'a');
+                    else if (ch >= 'A' && ch <= 'F') d = static_cast<unsigned>(10 + ch - 'A');
+                    else { ok = false; break; }
+                    if (cp > 0x10FFFFu) { ok = false; break; }
+                    cp = (cp << 4) | d;
+                }
+            } else {
+                ok = true;
+                for (size_t k = 1; k < ent.size(); ++k) {
+                    const char ch = ent[k];
+                    if (ch < '0' || ch > '9') { ok = false; break; }
+                    if (cp > 0x10FFFFu) { ok = false; break; }
+                    cp = cp * 10u + static_cast<unsigned>(ch - '0');
+                }
+            }
+            if (ok && cp > 0 && cp <= 0x10FFFFu && !(cp >= 0xD800u && cp <= 0xDFFFu)) {
+                appendUtf8(out, cp);
+            } else {
+                out.push_back(s[i++]);
+                continue;
+            }
+        } else {
+            out.push_back(s[i++]);
+            continue;
+        }
+        i = semi + 1;
+    }
+    return out;
+}
+
+constexpr size_t kMaxZipEntries = 4096;
+constexpr size_t kMaxSpreadsheetColumns = 256;
+
+std::string trimAscii(std::string_view s) {
+    size_t start = 0;
+    while (start < s.size() && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r' || s[start] == '\n')) {
+        ++start;
+    }
+    size_t end = s.size();
+    while (end > start && (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\r' || s[end - 1] == '\n')) {
+        --end;
+    }
+    return std::string(s.substr(start, end - start));
+}
+
+bool looksEncryptedError(const std::string& stderrText) {
+    const std::string low = detail::lowerAscii(stderrText);
+    return low.find("password") != std::string::npos || low.find("encrypted") != std::string::npos;
+}
+
+void checkOfficeZipHeader(const std::string& path, const std::string& format, const std::string& ext) {
+    std::ifstream in(fs::u8path(path), std::ios::binary);
+    char hdr[8] = {};
+    in.read(hdr, sizeof(hdr));
+    const std::streamsize n = in.gcount();
+    static constexpr unsigned char kOle2[8] = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
+    const std::string name = fs::path(path).filename().u8string();
+    if (n == 8 && std::memcmp(hdr, kOle2, 8) == 0) {
+        throw std::runtime_error("Can't read " + format + " file " + name +
+                                 ": it is password-protected or in legacy binary format. Save an unprotected copy as " +
+                                 ext + " and try again.");
+    }
+    const bool zipMagic = n >= 4 && hdr[0] == 'P' && hdr[1] == 'K' &&
+                          ((hdr[2] == 0x03 && hdr[3] == 0x04) || (hdr[2] == 0x05 && hdr[3] == 0x06));
+    if (!zipMagic) {
+        throw std::runtime_error("Can't read " + format + " file " + name + ": it is not a valid " + ext + " file.");
+    }
+}
+
+class ZipArchive {
+public:
+    ZipArchive(const std::string& path, std::string format, std::string ext)
+        : name_(fs::path(path).filename().u8string()),
+          safe_(path),
+          format_(std::move(format)),
+          ext_(std::move(ext)) {
+        checkOfficeZipHeader(path, format_, ext_);
+#ifdef _WIN32
+        const std::string tar = systemProgramPath("tar.exe");
+        const std::string listCmd = "\"\"" + tar + "\" -tf " + detail::shellQuote(safe_.str()) + "\"";
+        const char* tool = "tar";
+#else
+        const std::string listCmd = "unzip -Z1 " + detail::shellQuote(safe_.str());
+        const char* tool = "unzip";
+#endif
+        ProcessResult r = ProcessRunner::run(listCmd, 60000, "", {}, 4u * 1024u * 1024u);
+        if (r.exitCode != 0) {
+            const bool missing = r.exitCode == 127 || r.exitCode == 9009;
+            if (missing) {
+                throw std::runtime_error("Can't read " + format_ + " file " + name_ + ": " + std::string(tool) +
+                                         " is not installed");
+            }
+            if (looksEncryptedError(r.stderr_output)) {
+                throw std::runtime_error("Can't read " + format_ + " file " + name_ +
+                                         ": it is password-protected. Save an unprotected copy as " + ext_ +
+                                         " and try again.");
+            }
+            throw std::runtime_error("Can't read " + format_ + " file " + name_ + ": it is not a valid " + ext_ +
+                                     " (" + trimAscii(r.stderr_output.substr(0, 200)) + ")");
+        }
+        std::istringstream in(r.stdout_output);
+        for (std::string line; std::getline(in, line);) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            if (entries_.size() >= kMaxZipEntries) {
+                throw std::runtime_error("Can't read " + format_ + " file " + name_ +
+                                         ": archive has too many entries (limit " + std::to_string(kMaxZipEntries) +
+                                         ").");
+            }
+            entries_.push_back(line);
+            entryLookup_.emplace(detail::lowerAscii(line), line);
         }
     }
-    return s;
+
+    const std::vector<std::string>& entries() const { return entries_; }
+
+    std::string resolve(const std::string& target) const {
+        if (std::find(entries_.begin(), entries_.end(), target) != entries_.end()) return target;
+        auto it = entryLookup_.find(detail::lowerAscii(target));
+        return it == entryLookup_.end() ? "" : it->second;
+    }
+
+    std::string readEntry(const std::string& entry) {
+        if (entry.empty() || entry[0] == '-' || entry.find('\0') != std::string::npos ||
+            entry.find('\n') != std::string::npos || entry.find('\r') != std::string::npos ||
+            entry.find("..") != std::string::npos || entry.find_first_of("*?[]") != std::string::npos) {
+            throw std::runtime_error("Can't read " + format_ + " file " + name_ + ": invalid archive entry path.");
+        }
+        if (totalExtracted_ >= kMaxExtractBytes) {
+            throw std::runtime_error("Can't read " + format_ + " file " + name_ + ": decompressed content exceeds " +
+                                     std::to_string(kMaxExtractBytes >> 20) + " MB.");
+        }
+        const size_t remaining = kMaxExtractBytes - totalExtracted_;
+#ifdef _WIN32
+        const std::string tar = systemProgramPath("tar.exe");
+        const std::string cmd = "\"\"" + tar + "\" -xOf " + detail::shellQuote(safe_.str()) + " " +
+                                detail::shellQuote(entry) + "\"";
+        const char* tool = "tar";
+#else
+        // -P '' prevents unzip from blocking on a password prompt if an entry is encrypted.
+        const std::string cmd = "unzip -P '' -p " + detail::shellQuote(safe_.str()) + " " + detail::shellQuote(entry);
+        const char* tool = "unzip";
+#endif
+        ProcessResult r = ProcessRunner::run(cmd, 60000, "", {}, remaining);
+        if (r.stdout_output.size() >= remaining) {
+            throw std::runtime_error("Can't read " + format_ + " file " + name_ + ": decompressed content exceeds " +
+                                     std::to_string(kMaxExtractBytes >> 20) + " MB.");
+        }
+        if (r.exitCode != 0) {
+            const bool missing = r.exitCode == 127 || r.exitCode == 9009;
+            if (missing) {
+                throw std::runtime_error("Can't read " + format_ + " file " + name_ + ": " + std::string(tool) +
+                                         " is not installed");
+            }
+            if (looksEncryptedError(r.stderr_output)) {
+                throw std::runtime_error("Can't read " + format_ + " file " + name_ +
+                                         ": it is password-protected. Save an unprotected copy as " + ext_ +
+                                         " and try again.");
+            }
+            throw std::runtime_error("Can't read " + format_ + " file " + name_ + ": it is not a valid " + ext_ +
+                                     " (" + trimAscii(r.stderr_output.substr(0, 200)) + ")");
+        }
+        totalExtracted_ += r.stdout_output.size();
+        return r.stdout_output;
+    }
+
+private:
+    std::string name_;
+    ShellSafePath safe_;
+    std::string format_;
+    std::string ext_;
+    std::vector<std::string> entries_;
+    std::map<std::string, std::string> entryLookup_;
+    size_t totalExtracted_ = 0;
+};
+
+std::string_view xmlLocalName(std::string_view name) {
+    const size_t colon = name.find(':');
+    return colon == std::string_view::npos ? name : name.substr(colon + 1);
+}
+
+bool isXmlSpace(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+
+bool isXmlNameChar(char c) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    return std::isalnum(u) || c == '_' || c == '-' || c == ':' || c == '.';
+}
+
+struct XmlTag {
+    bool closing = false;
+    bool selfClosing = false;
+    std::string_view fullName;
+    std::string_view local;
+    std::string_view attrs;
+    size_t start = 0;
+    size_t end = 0;  // index after '>'
+};
+
+bool nextXmlTag(std::string_view xml, size_t pos, XmlTag& out) {
+    while (pos < xml.size()) {
+        const size_t lt = xml.find('<', pos);
+        if (lt == std::string_view::npos) return false;
+        if (lt + 1 >= xml.size()) return false;
+        if (xml.compare(lt, 4, "<!--") == 0) {
+            const size_t end = xml.find("-->", lt + 4);
+            if (end == std::string_view::npos) return false;
+            pos = end + 3;
+            continue;
+        }
+        if (xml.compare(lt, 9, "<![CDATA[") == 0) {
+            const size_t end = xml.find("]]>", lt + 9);
+            if (end == std::string_view::npos) return false;
+            pos = end + 3;
+            continue;
+        }
+        if (xml[lt + 1] == '?' || xml[lt + 1] == '!') {
+            const size_t gt = xml.find('>', lt + 2);
+            if (gt == std::string_view::npos) return false;
+            pos = gt + 1;
+            continue;
+        }
+        size_t gt = lt + 1;
+        char quote = 0;
+        while (gt < xml.size()) {
+            const char c = xml[gt];
+            if (quote != 0) {
+                if (c == quote) quote = 0;
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '>') {
+                break;
+            }
+            ++gt;
+        }
+        if (gt >= xml.size()) return false;
+        size_t p = lt + 1;
+        const bool closing = xml[p] == '/';
+        if (closing) ++p;
+        while (p < gt && isXmlSpace(xml[p])) ++p;
+        const size_t nameStart = p;
+        while (p < gt && isXmlNameChar(xml[p])) ++p;
+        const std::string_view fullName = xml.substr(nameStart, p - nameStart);
+        size_t attrEnd = gt;
+        while (attrEnd > p && isXmlSpace(xml[attrEnd - 1])) --attrEnd;
+        const bool selfClosing = !closing && attrEnd > p && xml[attrEnd - 1] == '/';
+        if (selfClosing) --attrEnd;
+
+        out.closing = closing;
+        out.selfClosing = selfClosing;
+        out.fullName = fullName;
+        out.local = xmlLocalName(fullName);
+        out.attrs = xml.substr(p, attrEnd - p);
+        out.start = lt;
+        out.end = gt + 1;
+        return true;
+    }
+    return false;
+}
+
+std::string extractXmlAttr(std::string_view attrs, std::string_view attrName) {
+    size_t i = 0;
+    while (i < attrs.size()) {
+        while (i < attrs.size() && isXmlSpace(attrs[i])) ++i;
+        const size_t nameStart = i;
+        while (i < attrs.size() && isXmlNameChar(attrs[i])) ++i;
+        const std::string_view name = attrs.substr(nameStart, i - nameStart);
+        while (i < attrs.size() && isXmlSpace(attrs[i])) ++i;
+        if (i >= attrs.size() || attrs[i] != '=') {
+            if (i == nameStart) ++i;
+            continue;
+        }
+        ++i;
+        while (i < attrs.size() && isXmlSpace(attrs[i])) ++i;
+        if (i >= attrs.size() || (attrs[i] != '"' && attrs[i] != '\'')) continue;
+        const char q = attrs[i++];
+        const size_t valStart = i;
+        const size_t valEnd = attrs.find(q, valStart);
+        if (valEnd == std::string_view::npos) break;
+        i = valEnd + 1;
+        if (name == attrName) {
+            return decodeXmlEntities(attrs.substr(valStart, valEnd - valStart));
+        }
+    }
+    return "";
+}
+
+// Finds the closing tag matching an already-opened element with local name `localName`.
+// Returns the byte offset of the matching closing tag's `<`, and sets `afterClose` past `>`.
+size_t findMatchingClose(std::string_view xml, size_t bodyStart, std::string_view localName, size_t& afterClose) {
+    int depth = 1;
+    size_t pos = bodyStart;
+    XmlTag tag;
+    while (nextXmlTag(xml, pos, tag)) {
+        pos = tag.end;
+        if (tag.local != localName) continue;
+        if (tag.closing) {
+            if (--depth == 0) {
+                afterClose = tag.end;
+                return tag.start;
+            }
+        } else if (!tag.selfClosing) {
+            ++depth;
+        }
+    }
+    afterClose = xml.size();
+    return std::string_view::npos;
+}
+
+std::string normalizeZipTarget(const std::string& baseDir, std::string target) {
+    for (char& c : target) {
+        if (c == '\\') c = '/';
+    }
+    std::string combined;
+    if (!target.empty() && target[0] == '/') {
+        combined = target.substr(1);
+    } else {
+        combined = baseDir + target;
+    }
+    std::vector<std::string> segs;
+    size_t i = 0;
+    while (i <= combined.size()) {
+        size_t slash = combined.find('/', i);
+        std::string part = combined.substr(i, slash == std::string::npos ? std::string::npos : slash - i);
+        if (part == "..") {
+            if (!segs.empty()) segs.pop_back();
+        } else if (!part.empty() && part != ".") {
+            segs.push_back(std::move(part));
+        }
+        if (slash == std::string::npos) break;
+        i = slash + 1;
+    }
+    std::string out;
+    for (size_t k = 0; k < segs.size(); ++k) {
+        if (k > 0) out += '/';
+        out += segs[k];
+    }
+    return out;
+}
+
+struct OoxmlRel {
+    std::string id;
+    std::string type;
+    std::string target;
+};
+
+std::vector<OoxmlRel> parseRelationships(std::string_view xml, const std::string& baseDir) {
+    std::vector<OoxmlRel> rels;
+    XmlTag tag;
+    size_t pos = 0;
+    while (nextXmlTag(xml, pos, tag)) {
+        pos = tag.end;
+        if (tag.closing || tag.local != "Relationship") continue;
+        if (detail::lowerAscii(extractXmlAttr(tag.attrs, "TargetMode")) == "external") continue;
+        OoxmlRel r;
+        r.id = extractXmlAttr(tag.attrs, "Id");
+        r.type = extractXmlAttr(tag.attrs, "Type");
+        const std::string rawTarget = extractXmlAttr(tag.attrs, "Target");
+        if (!rawTarget.empty()) r.target = normalizeZipTarget(baseDir, rawTarget);
+        if (!r.id.empty() && !r.target.empty()) rels.push_back(std::move(r));
+    }
+    return rels;
+}
+
+bool parseUnsignedDecimal(std::string_view digits, size_t maxVal, size_t& out) {
+    if (digits.empty()) return false;
+    size_t val = 0;
+    for (char c : digits) {
+        if (c < '0' || c > '9') return false;
+        const size_t d = static_cast<size_t>(c - '0');
+        if (val > (maxVal - d) / 10) return false;
+        val = val * 10 + d;
+    }
+    out = val;
+    return true;
+}
+
+bool parseNumberedEntry(const std::string& entry, const std::string& prefix, const std::string& suffix, int& number) {
+    const std::string low = detail::lowerAscii(entry);
+    if (low.size() <= prefix.size() + suffix.size()) return false;
+    if (low.compare(0, prefix.size(), prefix) != 0) return false;
+    if (low.compare(low.size() - suffix.size(), suffix.size(), suffix) != 0) return false;
+    const std::string_view digits =
+        std::string_view(low).substr(prefix.size(), low.size() - prefix.size() - suffix.size());
+    size_t parsed = 0;
+    if (!parseUnsignedDecimal(digits, 1000000u, parsed)) return false;
+    number = static_cast<int>(parsed);
+    return true;
+}
+
+std::string collectTElements(std::string_view xml, bool skipPhonetic, bool skipSlideNumField, bool handleBreaks) {
+    std::string out;
+    XmlTag tag;
+    size_t pos = 0;
+    while (nextXmlTag(xml, pos, tag)) {
+        pos = tag.end;
+        if (tag.closing) continue;
+        if (skipPhonetic && tag.local == "rPh" && !tag.selfClosing) {
+            size_t after = pos;
+            findMatchingClose(xml, pos, "rPh", after);
+            pos = after;
+            continue;
+        }
+        if (skipSlideNumField && tag.local == "fld" && !tag.selfClosing) {
+            if (detail::lowerAscii(extractXmlAttr(tag.attrs, "type")) == "slidenum") {
+                size_t after = pos;
+                findMatchingClose(xml, pos, "fld", after);
+                pos = after;
+                continue;
+            }
+        }
+        if (handleBreaks && tag.local == "tab") {
+            out.push_back('\t');
+            continue;
+        }
+        if (handleBreaks && tag.local == "br") {
+            out.push_back('\n');
+            continue;
+        }
+        if (tag.local == "t" && !tag.selfClosing) {
+            size_t after = pos;
+            const size_t closeStart = findMatchingClose(xml, pos, "t", after);
+            if (closeStart == std::string_view::npos) break;
+            out += decodeXmlEntities(xml.substr(pos, closeStart - pos));
+            pos = after;
+        }
+    }
+    return out;
+}
+
+std::vector<std::string> parseSharedStrings(std::string_view xml) {
+    std::vector<std::string> strings;
+    XmlTag tag;
+    size_t pos = 0;
+    while (nextXmlTag(xml, pos, tag)) {
+        pos = tag.end;
+        if (tag.closing || tag.local != "si") continue;
+        if (tag.selfClosing) {
+            strings.emplace_back();
+            continue;
+        }
+        size_t after = pos;
+        const size_t closeStart = findMatchingClose(xml, pos, "si", after);
+        if (closeStart == std::string_view::npos) break;
+        strings.push_back(collectTElements(xml.substr(pos, closeStart - pos), true, false, false));
+        pos = after;
+    }
+    return strings;
+}
+
+int parseCellColumn(const std::string& cellRef) {
+    int col = 0;
+    bool any = false;
+    for (unsigned char c : cellRef) {
+        if (c >= 'A' && c <= 'Z') {
+            col = col * 26 + (c - 'A' + 1);
+            any = true;
+        } else if (c >= 'a' && c <= 'z') {
+            col = col * 26 + (c - 'a' + 1);
+            any = true;
+        } else {
+            break;
+        }
+        if (col > 16384) return -1;
+    }
+    return any ? (col - 1) : -1;
+}
+
+std::string extractFirstV(std::string_view cellBody) {
+    XmlTag tag;
+    size_t pos = 0;
+    while (nextXmlTag(cellBody, pos, tag)) {
+        pos = tag.end;
+        if (tag.closing || tag.local != "v" || tag.selfClosing) continue;
+        size_t after = pos;
+        const size_t closeStart = findMatchingClose(cellBody, pos, "v", after);
+        if (closeStart == std::string_view::npos) return "";
+        return decodeXmlEntities(cellBody.substr(pos, closeStart - pos));
+    }
+    return "";
+}
+
+enum class CellNumKind { Plain, Date, Percent };
+
+CellNumKind classifyNumFmt(int numFmtId, const std::string& formatCode) {
+    if ((numFmtId >= 14 && numFmtId <= 22) || (numFmtId >= 45 && numFmtId <= 47)) return CellNumKind::Date;
+    if (numFmtId == 9 || numFmtId == 10) return CellNumKind::Percent;
+    if (formatCode.empty()) return CellNumKind::Plain;
+    // Strip quoted literals and bracketed conditions before inspecting custom format tokens.
+    std::string cleaned;
+    bool inQuote = false;
+    bool inBracket = false;
+    for (char c : formatCode) {
+        if (c == '"') {
+            inQuote = !inQuote;
+            continue;
+        }
+        if (inQuote) continue;
+        if (c == '[') {
+            inBracket = true;
+            continue;
+        }
+        if (c == ']') {
+            inBracket = false;
+            continue;
+        }
+        if (!inBracket) cleaned.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    if (cleaned.find('%') != std::string::npos) return CellNumKind::Percent;
+    if (cleaned.find("yy") != std::string::npos || cleaned.find("dd") != std::string::npos) {
+        return CellNumKind::Date;
+    }
+    return CellNumKind::Plain;
+}
+
+std::vector<CellNumKind> parseCellStyleKinds(std::string_view xml) {
+    std::map<int, std::string> customCodes;
+    std::vector<CellNumKind> styles;
+    XmlTag tag;
+    size_t pos = 0;
+    while (nextXmlTag(xml, pos, tag)) {
+        pos = tag.end;
+        if (tag.closing) continue;
+        if (tag.local == "numFmt") {
+            size_t id = 0;
+            if (parseUnsignedDecimal(extractXmlAttr(tag.attrs, "numFmtId"), 100000u, id)) {
+                customCodes[static_cast<int>(id)] = extractXmlAttr(tag.attrs, "formatCode");
+            }
+        } else if (tag.local == "cellXfs" && !tag.selfClosing) {
+            size_t afterXfs = pos;
+            const size_t closeXfs = findMatchingClose(xml, pos, "cellXfs", afterXfs);
+            if (closeXfs == std::string_view::npos) break;
+            const std::string_view body = xml.substr(pos, closeXfs - pos);
+            pos = afterXfs;
+            size_t xPos = 0;
+            XmlTag xTag;
+            while (nextXmlTag(body, xPos, xTag)) {
+                xPos = xTag.end;
+                if (xTag.closing || xTag.local != "xf") continue;
+                size_t id = 0;
+                const std::string idStr = extractXmlAttr(xTag.attrs, "numFmtId");
+                const int numFmtId = parseUnsignedDecimal(idStr, 100000u, id) ? static_cast<int>(id) : 0;
+                auto it = customCodes.find(numFmtId);
+                styles.push_back(classifyNumFmt(numFmtId, it == customCodes.end() ? std::string() : it->second));
+            }
+        }
+    }
+    return styles;
+}
+
+std::string formatExcelDate(double serial) {
+    if (!std::isfinite(serial) || serial < 1.0 || serial >= 2958466.0) return "";
+    // Excel's 1900 epoch has a phantom 1900-02-29 at serial 60; 1899-12-30 is Unix day -25569.
+    const std::int64_t whole = static_cast<std::int64_t>(std::floor(serial));
+    const std::int64_t unixDays = (whole >= 60 ? whole : whole + 1) - 25569;
+    // Civil date from Unix days (Howard Hinnant's algorithm, timezone-independent).
+    const std::int64_t z = unixDays + 719468;
+    const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const std::int64_t doe = z - era * 146097;
+    const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    std::int64_t y = yoe + era * 400;
+    const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const std::int64_t mp = (5 * doy + 2) / 153;
+    const std::int64_t d = doy - (153 * mp + 2) / 5 + 1;
+    const std::int64_t m = mp + (mp < 10 ? 3 : -9);
+    y += (m <= 2 ? 1 : 0);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04lld-%02lld-%02lld", static_cast<long long>(y), static_cast<long long>(m),
+                  static_cast<long long>(d));
+    return buf;
+}
+
+std::string formatExcelPercent(double v) {
+    if (!std::isfinite(v)) return "";
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.4f", v * 100.0);
+    std::string s = buf;
+    if (s.find('.') != std::string::npos) {
+        while (!s.empty() && s.back() == '0') s.pop_back();
+        if (!s.empty() && s.back() == '.') s.pop_back();
+    }
+    return s + "%";
+}
+
+std::vector<std::vector<std::string>> parseWorksheetRows(std::string_view xml,
+                                                         const std::vector<std::string>& sharedStrings,
+                                                         const std::vector<CellNumKind>& styleKinds = {}) {
+    std::vector<std::vector<std::string>> rows;
+    XmlTag tag;
+    size_t pos = 0;
+    while (nextXmlTag(xml, pos, tag)) {
+        pos = tag.end;
+        if (tag.closing || tag.local != "row" || tag.selfClosing) continue;
+        size_t afterRow = pos;
+        const size_t closeRow = findMatchingClose(xml, pos, "row", afterRow);
+        if (closeRow == std::string_view::npos) break;
+        const std::string_view rowBody = xml.substr(pos, closeRow - pos);
+        pos = afterRow;
+
+        std::vector<std::string> cells;
+        bool hasAnyText = false;
+        size_t cPos = 0;
+        XmlTag cTag;
+        while (nextXmlTag(rowBody, cPos, cTag)) {
+            cPos = cTag.end;
+            if (cTag.closing || cTag.local != "c") continue;
+            const int parsedCol = parseCellColumn(extractXmlAttr(cTag.attrs, "r"));
+            const std::string cellType = extractXmlAttr(cTag.attrs, "t");
+            const std::string styleAttr = extractXmlAttr(cTag.attrs, "s");
+            std::string_view cellBody;
+            if (!cTag.selfClosing) {
+                size_t afterCell = cPos;
+                const size_t closeCell = findMatchingClose(rowBody, cPos, "c", afterCell);
+                if (closeCell == std::string_view::npos) break;
+                cellBody = rowBody.substr(cPos, closeCell - cPos);
+                cPos = afterCell;
+            }
+
+            std::string value;
+            if (cellType == "inlineStr") {
+                value = collectTElements(cellBody, true, false, false);
+            } else if (cellType == "s") {
+                const std::string idxText = trimAscii(extractFirstV(cellBody));
+                size_t idx = 0;
+                if (parseUnsignedDecimal(idxText, sharedStrings.size(), idx) && idx < sharedStrings.size()) {
+                    value = sharedStrings[idx];
+                }
+            } else if (cellType == "b") {
+                const std::string raw = trimAscii(extractFirstV(cellBody));
+                if (raw == "1") value = "TRUE";
+                else if (raw == "0") value = "FALSE";
+                else value = raw;
+            } else {
+                value = extractFirstV(cellBody);
+                if ((cellType.empty() || cellType == "n") && !styleAttr.empty() && !value.empty()) {
+                    size_t styleIdx = 0;
+                    if (parseUnsignedDecimal(styleAttr, styleKinds.size(), styleIdx) &&
+                        styleIdx < styleKinds.size() && styleKinds[styleIdx] != CellNumKind::Plain) {
+                        char* endPtr = nullptr;
+                        const double num = std::strtod(value.c_str(), &endPtr);
+                        if (endPtr && endPtr != value.c_str()) {
+                            const std::string formatted = styleKinds[styleIdx] == CellNumKind::Date
+                                                              ? formatExcelDate(num)
+                                                              : formatExcelPercent(num);
+                            if (!formatted.empty()) value = formatted;
+                        }
+                    }
+                }
+            }
+
+            if (!trimAscii(value).empty()) hasAnyText = true;
+            if (parsedCol >= 0 && static_cast<size_t>(parsedCol) < kMaxSpreadsheetColumns) {
+                if (cells.size() <= static_cast<size_t>(parsedCol)) {
+                    cells.resize(static_cast<size_t>(parsedCol) + 1);
+                }
+                cells[static_cast<size_t>(parsedCol)] = std::move(value);
+            } else {
+                cells.push_back(std::move(value));
+            }
+        }
+        if (hasAnyText) rows.push_back(std::move(cells));
+    }
+    return rows;
+}
+
+bool isNumericCell(const std::string& cell) {
+    const std::string t = trimAscii(cell);
+    if (t.empty()) return false;
+    bool digit = false;
+    for (unsigned char c : t) {
+        if (std::isdigit(c)) {
+            digit = true;
+        } else if (c != '.' && c != '-' && c != '+' && c != ',' && c != '%' && c != '$') {
+            return false;
+        }
+    }
+    return digit;
+}
+
+std::string formatSheetText(const std::string& sheetName, std::vector<std::vector<std::string>> rows) {
+    if (rows.empty()) return "";
+    std::vector<std::string> lines;
+    lines.push_back("Sheet: " + sheetName);
+
+    auto nonEmptyCount = [](const std::vector<std::string>& row) {
+        size_t n = 0;
+        for (const auto& c : row) {
+            if (!trimAscii(c).empty()) ++n;
+        }
+        return n;
+    };
+
+    size_t firstWide = 0;
+    while (firstWide < rows.size() && nonEmptyCount(rows[firstWide]) <= 1) ++firstWide;
+    if (firstWide > 0 && firstWide + 1 < rows.size()) {
+        bool headerHasNum = false;
+        for (const auto& c : rows[firstWide]) {
+            if (isNumericCell(c)) headerHasNum = true;
+        }
+        bool nextHasNum = false;
+        for (const auto& c : rows[firstWide + 1]) {
+            if (isNumericCell(c)) nextHasNum = true;
+        }
+        if (!headerHasNum && nextHasNum) {
+            for (size_t i = 0; i < firstWide; ++i) {
+                std::string title;
+                for (const auto& c : rows[i]) {
+                    const std::string t = trimAscii(c);
+                    if (!t.empty()) title += (title.empty() ? "" : " ") + t;
+                }
+                if (!title.empty()) lines.push_back(std::move(title));
+            }
+            rows.erase(rows.begin(), rows.begin() + static_cast<std::ptrdiff_t>(firstWide));
+        }
+    }
+
+    const auto& header = rows[0];
+    bool hasHeader = false;
+    for (const auto& c : header) {
+        if (!trimAscii(c).empty() && !isNumericCell(c)) {
+            hasHeader = true;
+            break;
+        }
+    }
+
+    if (hasHeader && rows.size() > 1) {
+        std::string cols;
+        for (const auto& c : header) {
+            const std::string t = trimAscii(c);
+            if (!t.empty()) cols += (cols.empty() ? "" : ", ") + t;
+        }
+        if (!cols.empty()) lines.push_back("Columns: " + cols);
+        for (size_t r = 1; r < rows.size(); ++r) {
+            std::string rowLine;
+            for (size_t c = 0; c < rows[r].size(); ++c) {
+                const std::string val = trimAscii(rows[r][c]);
+                if (val.empty()) continue;
+                std::string colName = c < header.size() ? trimAscii(header[c]) : "";
+                if (colName.empty()) colName = "Col" + std::to_string(c + 1);
+                rowLine += (rowLine.empty() ? "" : " | ") + colName + ": " + val;
+            }
+            if (!rowLine.empty()) lines.push_back(std::move(rowLine));
+        }
+    } else {
+        for (const auto& row : rows) {
+            std::string rowLine;
+            for (const auto& c : row) {
+                const std::string val = trimAscii(c);
+                if (!val.empty()) rowLine += (rowLine.empty() ? "" : " | ") + val;
+            }
+            if (!rowLine.empty()) lines.push_back(std::move(rowLine));
+        }
+    }
+
+    std::string out;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0) out += '\n';
+        out += lines[i];
+    }
+    return out;
+}
+
+std::vector<std::pair<int, std::string>> extractXlsxPages(const std::string& path) {
+    ZipArchive zip(path, "Excel", ".xlsx");
+    std::vector<std::string> sharedStrings;
+    const std::string ssEntry = zip.resolve("xl/sharedStrings.xml");
+    if (!ssEntry.empty()) sharedStrings = parseSharedStrings(zip.readEntry(ssEntry));
+
+    std::vector<CellNumKind> styleKinds;
+    const std::string stylesEntry = zip.resolve("xl/styles.xml");
+    if (!stylesEntry.empty()) styleKinds = parseCellStyleKinds(zip.readEntry(stylesEntry));
+
+    struct SheetSpec {
+        std::string name;
+        std::string entry;
+    };
+    std::vector<SheetSpec> sheets;
+
+    const std::string wbEntry = zip.resolve("xl/workbook.xml");
+    const std::string wbRelsEntry = zip.resolve("xl/_rels/workbook.xml.rels");
+    if (!wbEntry.empty() && !wbRelsEntry.empty()) {
+        std::map<std::string, std::string> relMap;
+        for (const auto& r : parseRelationships(zip.readEntry(wbRelsEntry), "xl/")) {
+            relMap[r.id] = r.target;
+        }
+        const std::string wbXml = zip.readEntry(wbEntry);
+        XmlTag tag;
+        size_t pos = 0;
+        while (nextXmlTag(wbXml, pos, tag)) {
+            pos = tag.end;
+            if (tag.closing || tag.local != "sheet") continue;
+            const std::string name = extractXmlAttr(tag.attrs, "name");
+            std::string rId = extractXmlAttr(tag.attrs, "r:id");
+            if (rId.empty()) rId = extractXmlAttr(tag.attrs, "id");
+            auto it = relMap.find(rId);
+            if (it == relMap.end()) continue;
+            const std::string resolved = zip.resolve(it->second);
+            if (!resolved.empty()) {
+                sheets.push_back({name.empty() ? ("Sheet" + std::to_string(sheets.size() + 1)) : name, resolved});
+            }
+        }
+    }
+
+    if (sheets.empty()) {
+        std::vector<std::pair<int, std::string>> numbered;
+        for (const auto& entry : zip.entries()) {
+            int num = 0;
+            if (parseNumberedEntry(entry, "xl/worksheets/sheet", ".xml", num)) {
+                numbered.emplace_back(num, entry);
+            }
+        }
+        std::sort(numbered.begin(), numbered.end());
+        for (const auto& [num, entry] : numbered) {
+            sheets.push_back({"Sheet" + std::to_string(num), entry});
+        }
+    }
+
+    const std::string fileName = fs::path(path).filename().u8string();
+    if (sheets.empty()) {
+        throw std::runtime_error("Can't read Excel file " + fileName + ": it is not a valid .xlsx workbook.");
+    }
+
+    std::vector<std::pair<int, std::string>> pages;
+    for (const auto& sheet : sheets) {
+        auto rows = parseWorksheetRows(zip.readEntry(sheet.entry), sharedStrings, styleKinds);
+        const std::string text = formatSheetText(sheet.name, std::move(rows));
+        if (!text.empty()) pages.emplace_back(0, text);
+    }
+    if (pages.empty()) {
+        throw std::runtime_error("Can't index " + fileName + ": Excel workbook has no cell values.");
+    }
+    return pages;
+}
+
+std::string extractPptxXmlText(std::string_view xml, bool skipSlideNumField) {
+    std::vector<std::string> lines;
+    XmlTag tag;
+    size_t pos = 0;
+    while (nextXmlTag(xml, pos, tag)) {
+        pos = tag.end;
+        if (tag.closing || tag.selfClosing) continue;
+        if (tag.local == "tbl") {
+            size_t afterTbl = pos;
+            const size_t closeTbl = findMatchingClose(xml, pos, "tbl", afterTbl);
+            if (closeTbl == std::string_view::npos) break;
+            const std::string_view tblBody = xml.substr(pos, closeTbl - pos);
+            pos = afterTbl;
+
+            size_t trPos = 0;
+            XmlTag trTag;
+            while (nextXmlTag(tblBody, trPos, trTag)) {
+                trPos = trTag.end;
+                if (trTag.closing || trTag.local != "tr" || trTag.selfClosing) continue;
+                size_t afterTr = trPos;
+                const size_t closeTr = findMatchingClose(tblBody, trPos, "tr", afterTr);
+                if (closeTr == std::string_view::npos) break;
+                const std::string_view trBody = tblBody.substr(trPos, closeTr - trPos);
+                trPos = afterTr;
+
+                std::string rowLine;
+                size_t tcPos = 0;
+                XmlTag tcTag;
+                while (nextXmlTag(trBody, tcPos, tcTag)) {
+                    tcPos = tcTag.end;
+                    if (tcTag.closing || tcTag.local != "tc" || tcTag.selfClosing) continue;
+                    size_t afterTc = tcPos;
+                    const size_t closeTc = findMatchingClose(trBody, tcPos, "tc", afterTc);
+                    if (closeTc == std::string_view::npos) break;
+                    const std::string_view tcBody = trBody.substr(tcPos, closeTc - tcPos);
+                    tcPos = afterTc;
+
+                    std::string cellText;
+                    size_t pPos = 0;
+                    XmlTag pTag;
+                    while (nextXmlTag(tcBody, pPos, pTag)) {
+                        pPos = pTag.end;
+                        if (pTag.closing || pTag.local != "p" || pTag.selfClosing) continue;
+                        size_t afterP = pPos;
+                        const size_t closeP = findMatchingClose(tcBody, pPos, "p", afterP);
+                        if (closeP == std::string_view::npos) break;
+                        const std::string para =
+                            trimAscii(collectTElements(tcBody.substr(pPos, closeP - pPos), false, skipSlideNumField, true));
+                        if (!para.empty()) cellText += (cellText.empty() ? "" : " ") + para;
+                        pPos = afterP;
+                    }
+                    if (!cellText.empty()) rowLine += (rowLine.empty() ? "" : " | ") + cellText;
+                }
+                if (!rowLine.empty()) lines.push_back(std::move(rowLine));
+            }
+            continue;
+        }
+        if (tag.local == "p") {
+            size_t afterP = pos;
+            const size_t closeP = findMatchingClose(xml, pos, "p", afterP);
+            if (closeP == std::string_view::npos) break;
+            const std::string para =
+                trimAscii(collectTElements(xml.substr(pos, closeP - pos), false, skipSlideNumField, true));
+            if (!para.empty()) lines.push_back(para);
+            pos = afterP;
+        }
+    }
+    std::string out;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0) out += '\n';
+        out += lines[i];
+    }
+    return out;
+}
+
+std::vector<std::pair<int, std::string>> extractPptxPages(const std::string& path) {
+    ZipArchive zip(path, "PowerPoint", ".pptx");
+    std::vector<std::string> slides;
+
+    const std::string presEntry = zip.resolve("ppt/presentation.xml");
+    const std::string presRelsEntry = zip.resolve("ppt/_rels/presentation.xml.rels");
+    if (!presEntry.empty() && !presRelsEntry.empty()) {
+        std::map<std::string, std::string> relMap;
+        for (const auto& r : parseRelationships(zip.readEntry(presRelsEntry), "ppt/")) {
+            relMap[r.id] = r.target;
+        }
+        const std::string presXml = zip.readEntry(presEntry);
+        XmlTag tag;
+        size_t pos = 0;
+        while (nextXmlTag(presXml, pos, tag)) {
+            pos = tag.end;
+            if (tag.closing || tag.local != "sldId") continue;
+            std::string rId = extractXmlAttr(tag.attrs, "r:id");
+            if (rId.empty()) rId = extractXmlAttr(tag.attrs, "id");
+            auto it = relMap.find(rId);
+            if (it == relMap.end()) continue;
+            const std::string resolved = zip.resolve(it->second);
+            if (!resolved.empty()) slides.push_back(resolved);
+        }
+    }
+
+    if (slides.empty()) {
+        std::vector<std::pair<int, std::string>> numbered;
+        for (const auto& entry : zip.entries()) {
+            int num = 0;
+            if (parseNumberedEntry(entry, "ppt/slides/slide", ".xml", num)) {
+                numbered.emplace_back(num, entry);
+            }
+        }
+        std::sort(numbered.begin(), numbered.end());
+        for (const auto& [_, entry] : numbered) slides.push_back(entry);
+    }
+
+    const std::string fileName = fs::path(path).filename().u8string();
+    if (slides.empty()) {
+        throw std::runtime_error("Can't read PowerPoint file " + fileName +
+                                 ": it is not a valid .pptx presentation.");
+    }
+
+    std::vector<std::pair<int, std::string>> pages;
+    for (size_t i = 0; i < slides.size(); ++i) {
+        const int slideNum = static_cast<int>(i + 1);
+        const std::string& slideEntry = slides[i];
+        std::string body = extractPptxXmlText(zip.readEntry(slideEntry), false);
+
+        std::string notesEntry;
+        const size_t slash = slideEntry.rfind('/');
+        const std::string slideDir = slash == std::string::npos ? "" : slideEntry.substr(0, slash + 1);
+        const std::string slideFile = slash == std::string::npos ? slideEntry : slideEntry.substr(slash + 1);
+        const std::string slideRels = zip.resolve(slideDir + "_rels/" + slideFile + ".rels");
+        if (!slideRels.empty()) {
+            for (const auto& r : parseRelationships(zip.readEntry(slideRels), slideDir)) {
+                if (detail::lowerAscii(r.type).find("notesslide") != std::string::npos ||
+                    detail::lowerAscii(r.target).find("notesslide") != std::string::npos) {
+                    notesEntry = zip.resolve(r.target);
+                    if (!notesEntry.empty()) break;
+                }
+            }
+        } else {
+            // Only fall back to filename numbering when the slide has no .rels file at all.
+            int fileNum = 0;
+            if (parseNumberedEntry(slideEntry, "ppt/slides/slide", ".xml", fileNum)) {
+                notesEntry = zip.resolve("ppt/notesSlides/notesSlide" + std::to_string(fileNum) + ".xml");
+            }
+        }
+        if (!notesEntry.empty()) {
+            const std::string notes = extractPptxXmlText(zip.readEntry(notesEntry), true);
+            if (!notes.empty()) {
+                body += (body.empty() ? "" : "\n\n") + std::string("Speaker Notes:\n") + notes;
+            }
+        }
+        if (!body.empty()) {
+            pages.emplace_back(slideNum, "Slide " + std::to_string(slideNum) + "\n" + body);
+        }
+    }
+
+    if (pages.empty()) {
+        throw std::runtime_error("Can't index " + fileName +
+                                 ": PowerPoint presentation has no extractable text.");
+    }
+    return pages;
 }
 
 // Paragraph text of a .docx: <w:t> runs, <w:p> ends become newlines.
@@ -114,7 +1152,7 @@ std::string docxText(const std::string& path) {
     const std::string extract = "\"\"" + tar + "\" -xOf " + detail::shellQuote(safe.str()) + " word/document.xml\"";
     const char* tool = "tar";
 #else
-    const std::string extract = "unzip -p " + detail::shellQuote(safe.str()) + " word/document.xml";
+    const std::string extract = "unzip -P '' -p " + detail::shellQuote(safe.str()) + " word/document.xml";
     const char* tool = "unzip";
 #endif
     ProcessResult r = ProcessRunner::run(extract, 60000, "", {}, kMaxExtractBytes);
@@ -169,7 +1207,7 @@ struct SkippedFiles {
             parts.push_back(std::to_string(inSkippedFolder) + " in a skipped folder (" + names + ")");
         }
         if (tooLarge) {
-            parts.push_back(std::to_string(tooLarge) + " too large (text over 1 MB, PDF or Word over " +
+            parts.push_back(std::to_string(tooLarge) + " too large (text over 1 MB, documents over " +
                             std::to_string(kMaxExtractBytes >> 20) + " MB)");
         }
         std::string out;
@@ -187,7 +1225,7 @@ struct SkippedFiles {
 
 bool indexableExtension(const fs::path& p, bool withDocuments, bool* document = nullptr) {
     const std::string ext = lowerExt(p.string());
-    const bool doc = withDocuments && (ext == ".pdf" || ext == ".docx");
+    const bool doc = withDocuments && (ext == ".pdf" || ext == ".docx" || ext == ".xlsx" || ext == ".pptx");
     if (document) *document = doc;
     return doc || isSupportedExtension(ext);
 }
@@ -269,9 +1307,8 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
 
 const char* unsupportedDocumentFormat(const std::string& ext) {
     static const std::map<std::string, const char*> kFormats = {
-        {".xlsx", "Excel"},          {".xlsm", "Excel"},
-        {".xlsb", "Excel"},          {".xls", "Excel"},
-        {".pptx", "PowerPoint"},     {".pptm", "PowerPoint"},
+        {".xlsm", "Excel"},          {".xlsb", "Excel"},
+        {".xls", "Excel"},           {".pptm", "PowerPoint"},
         {".ppt", "PowerPoint"},      {".doc", "legacy Word"},
         {".ods", "OpenDocument spreadsheet"},
         {".odp", "OpenDocument presentation"},
@@ -373,13 +1410,19 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
         pages.emplace_back(0, docxText(path));
         return pages;
     }
+    if (ext == ".xlsx") {
+        return extractXlsxPages(path);
+    }
+    if (ext == ".pptx") {
+        return extractPptxPages(path);
+    }
     // A reader the app registered for one of these formats still wins.
     if (const char* format = isSupportedExtension(ext) ? nullptr : unsupportedDocumentFormat(ext)) {
         const std::string name = fs::path(path).filename().u8string();
         throw std::runtime_error(
             "Can't index " + name + ": " + format + " (" + ext +
             ") files aren't supported for automatic indexing. Supported formats are PDF, Word (.docx), "
-            "and plain text or code files.");
+            "Excel (.xlsx), PowerPoint (.pptx), and plain text or code files.");
     }
     try {
         ExtractedText e = isSupportedExtension(ext) ? extractFile(path) : extractPlainTextFile(path);
@@ -391,7 +1434,8 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
             const std::string name = fs::path(path).filename().u8string();
             throw std::runtime_error(
                 "Can't index " + name + ": binary files aren't supported for automatic indexing. "
-                "Supported formats are PDF, Word (.docx), and plain text or code files.");
+                "Supported formats are PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), "
+                "and plain text or code files.");
         }
         throw;
     }
@@ -676,8 +1720,9 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
     ToolInfo index;
     index.name = "index_document";
     index.description =
-        "Index a document (PDF, Word .docx, text, Markdown, code) or every supported file in a "
-        "folder so query_documents can find passages in it, with page numbers for PDFs.";
+        "Index a document (PDF, Word .docx, Excel .xlsx, PowerPoint .pptx, text, Markdown, code) "
+        "or every supported file in a folder so query_documents can find passages in it, with page "
+        "numbers for PDFs and slide numbers for PowerPoint.";
     index.parameters = {{"path", ToolParamType::STRING, true, "File or folder to index."}};
     index.policy = ToolPolicy::ALLOW;
     index.callback = [this, checkPath, mode](const json& args) -> json {
