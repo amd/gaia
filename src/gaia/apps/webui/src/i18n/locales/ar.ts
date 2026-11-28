@@ -2302,6 +2302,7 @@ const messages: Messages = {
     'setup.agent.diff.undo': 'لا يمكن التراجع من المحادثة عن تغييراته في الملفات.',
     'setup.agent.diff.search': 'البحث في المستندات يطابق الكلمات لا المعنى.',
     'setup.agent.diff.media': 'لا يستطيع إنشاء الصور ولا تحويل الصوت إلى نص ولا تحويل مستند إلى كلام.',
+    'setup.agent.diff.email': 'يستطيع قراءة بريدك الإلكتروني، لكنه لا يستطيع إرساله ولا استخدام تقويمك.',
     'setup.agent.diff.context': 'مؤشر السياق لا يعرض مدى امتلاء المحادثة.',
     'setup.agent.notInstalledMore': 'غير مثبَّت على هذا الجهاز، لذا لا يمكن اختياره.',
     'setup.agent.cantDownload': 'غير موجود على هذا الجهاز ولا يمكن تنزيله هنا: {reason}',

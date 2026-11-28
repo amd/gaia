@@ -1527,6 +1527,7 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     EXPECT_FALSE(has(compactTools, "git_status"));
     EXPECT_FALSE(has(compactTools, "search_code"));
     EXPECT_FALSE(has(compactTools, "env_inspect"));
+    EXPECT_FALSE(has(compactTools, "list_inbox")) << "no compact model has passed the email evals";
     EXPECT_TRUE(has(compactTools, "bash_execute"));
     EXPECT_TRUE(has(compactTools, "file_read"));
     EXPECT_EQ(compactBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
@@ -1537,6 +1538,7 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     agent.processQuery("hello again");
     const json fullBody = json::parse(mock.receivedBodies().back());
     EXPECT_TRUE(has(toolNamesIn(fullBody), "git_status")) << "the tier follows the config each turn";
+    EXPECT_TRUE(has(toolNamesIn(fullBody), "list_inbox"));
     EXPECT_NE(fullBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
     EXPECT_GT(fullBody.dump().size(), compactBody.dump().size() + 4000);
 }
@@ -2510,6 +2512,29 @@ TEST(GaiaAgentTest, EveryToolIsOnTheListTheAppsWordInPlainLanguage) {
         }
     }
     for (const auto& name : gated) EXPECT_TRUE(tools.count(name)) << name;
+}
+
+TEST(GaiaAgentTest, TheMailToolsDoNotRunWhileTheInternetIsOff) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.internetOff = std::make_shared<std::atomic<bool>>(true);
+    GaiaAgent agent(cfgFor(mock), o);
+    for (const auto& name : EmailTools::toolNames()) {
+        ASSERT_TRUE(agent.toolRegistry().hasTool(name)) << name;
+        if (name == "list_connected_mailboxes") {  // reads only this PC, as on the Python agent
+            EXPECT_FALSE(agent.toolRegistry().findTool(name)->onlineService);
+            continue;
+        }
+        json args = json::object();
+        for (const auto& p : agent.toolRegistry().allTools().at(name).parameters) {
+            if (p.required) args[p.name] = "x";
+        }
+        json r = agent.toolRegistry().executeTool(name, args);
+        EXPECT_EQ(r.value("executed", true), false) << name << ": " << r.dump();
+        EXPECT_NE(r.value("error", "").find(name + ", which calls an online service"), std::string::npos)
+            << name << ": " << r.dump();
+    }
 }
 
 TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInternetIsOff) {

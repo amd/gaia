@@ -413,6 +413,55 @@ class TestCanonicalEventShapes:
         assert result_event["render"] == "email_pre_scan"
         assert result_event["data"] == {"kind": "email_pre_scan"}
 
+    def test_a_connect_card_in_a_native_result_becomes_the_connect_button(self):
+        handler = _FakeHandler()
+        card = {
+            "kind": "connect_account",
+            "providers": ["google"],
+            "agent_id": "installed:gaia",
+        }
+        proxy = _ScriptedProxy(
+            _events(
+                {
+                    "type": "tool_result",
+                    "tool": "list_inbox",
+                    "data": {
+                        "success": False,
+                        "executed": False,
+                        "error": "No mailbox is connected.\nMore detail.",
+                        "connect_card": card,
+                    },
+                },
+                {"type": "final", "answer": "done"},
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        result_event = handler.events[0]
+        assert result_event["render"] == "connect_account"
+        assert result_event["summary"] == "No mailbox is connected."
+        assert result_event["data"] == {
+            **card,
+            "success": False,
+            "status": "error",
+            "display_message": "No mailbox is connected.",
+        }
+
+    def test_a_malformed_connect_card_is_not_drawn(self):
+        handler = _FakeHandler()
+        bad = {"kind": "connect_account", "providers": ["evil"]}
+        proxy = _ScriptedProxy(
+            _events(
+                {
+                    "type": "tool_result",
+                    "tool": "list_inbox",
+                    "data": {"success": False, "error": "x", "connect_card": bad},
+                },
+                {"type": "final", "answer": "done"},
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        assert "render" not in handler.events[0]
+
     def test_needs_confirmation_emitted_and_loop_continues(self):
         handler = _FakeHandler()
         proxy = _ScriptedProxy(

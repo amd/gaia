@@ -22,6 +22,7 @@
 
 #include <httplib.h>
 
+#include <gaia/connectors.h>
 #include <gaia/console.h>
 #include <gaia/document_index.h>
 #include <gaia/ignore.h>
@@ -353,7 +354,8 @@ public:
                                      "or ::1, not " + opts_.host + ".");
         }
         token_ = loadToken();
-        dropKeychainSecret();
+        // Connected accounts are read through the daemon's keychain, as the Python agent does.
+        connectors::installDaemonKeychainFromEnv();
         lemonadeKey_ = getEnvVar("LEMONADE_API_KEY");
         // Shells the agent starts inherit this environment; keep the secrets out of it.
         for (const char* secret : {"GAIA_GAIA_SIDECAR_TOKEN", "GAIA_GAIA_SIDECAR_TOKEN_FILE", "LEMONADE_API_KEY",
@@ -416,16 +418,6 @@ private:
                 "set GAIA_GAIA_SIDECAR_TOKEN.");
         }
         return env;
-    }
-
-    // The daemon hands over a keychain secret file the agent must remove; gaiacpp doesn't use it.
-    static void dropKeychainSecret() {
-        const std::string f = getEnvVar("GAIA_HOST_KEYCHAIN_SECRET_FILE");
-        if (!f.empty()) {
-            std::error_code ec;
-            fs::remove(f, ec);
-            if (ec) std::cerr << "gaiacpp: could not remove the keychain secret file " << f << ": " << ec.message() << std::endl;
-        }
     }
 
     // ---- request checks ----
@@ -553,6 +545,8 @@ private:
         cfg.maxHistoryMessages = 0;  // the UI fits history to the window
         cfg.responseMode = ResponseMode::Conversational;
         cfg.apiKey = server.apiKey;
+        // As on the Python agent and gaiacpp -p, this forces the model's feature tier.
+        if (const std::string tier = getEnvVar("GAIA_FEATURE_TIER"); !tier.empty()) cfg.featureTier = tier;
         GaiaAgent::Options o;
         o.maxHelpers = opts_.maxHelpers;
         if (roots.empty() && s.scoped) {
@@ -583,6 +577,10 @@ private:
         if (!s.shell) s.shell = BashTools::newSession();
         o.shell = s.shell;
         Session* raw = &s;
+        o.surface = [raw] {
+            std::lock_guard<std::mutex> lock(raw->currentMu);
+            return raw->current ? raw->current->surface : std::string();
+        };
         auto agent = std::make_unique<GaiaAgent>(cfg, o);
         agent->setPathAccessPrompt([this, raw](const std::string& path) { return askForPath(*raw, path); });
         auto console = std::make_unique<SidecarConsole>();

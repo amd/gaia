@@ -419,7 +419,7 @@ struct HttpClient::Impl {
         response.headers = convertHeaders(result->headers);
 
         const bool redirect = response.status >= 300 && response.status < 400;
-        if (!response.ok() && !(redirect && config.returnRedirects)) {
+        if (!response.ok() && !config.returnErrorStatuses && !(redirect && config.returnRedirects)) {
             throw HttpError(std::string(method) + " " + t.url + " returned HTTP " +
                                 std::to_string(response.status) +
                                 (response.body.empty()
@@ -552,7 +552,7 @@ HttpResponse HttpClient::Impl::doGet(const std::string& path, const HttpHeaders&
             cli.stop();  // the rest of the body is still on this connection
             // A long error page is still an error, not the content that was asked for.
             const bool redirect = capped.status >= 300 && capped.status < 400;
-            if (!capped.ok() && !(redirect && config.returnRedirects)) {
+            if (!capped.ok() && !config.returnErrorStatuses && !(redirect && config.returnRedirects)) {
                 throw HttpError("GET " + t.url + " returned HTTP " + std::to_string(capped.status) + ": " +
                                     truncateForError(capped.body),
                                 t.url, capped.status, capped.body);

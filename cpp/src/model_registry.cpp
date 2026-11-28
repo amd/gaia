@@ -94,6 +94,9 @@ const std::vector<std::string>& compactWithheldTools() {
         "index_codebase", "search_code",                  // grep and file_search find code
         "update_memory", "forget",                        // remember and recall stay
         "env_inspect",                                    // the prompt names the shell and Python
+        // Mail: no compact model has passed the email evals.
+        "check_mailbox_access", "list_inbox", "search_email", "read_email", "list_mail_folders", "get_thread",
+        "list_connected_mailboxes", "list_waiting_on_you",
     };
     return kWithheld;
 }

@@ -109,6 +109,11 @@ struct GAIA_API HttpClientConfig {
     /// caller can vet each redirect target itself.
     bool returnRedirects = false;
 
+    /// get, post and postMultipart return every status, 4xx and 5xx included,
+    /// instead of throwing, so a caller can classify each answer itself. A
+    /// request that got no answer still throws.
+    bool returnErrorStatuses = false;
+
     /// https only: custom CA bundle path (empty → system trust store).
     std::string caCertPath;
 

@@ -1420,6 +1420,7 @@ std::string internetRefusal(const ToolInfo& tool, const json& args, const std::m
     const std::string& name = tool.name;
     const std::string why = "The internet is off for this chat, so GAIA didn't run ";
     if (tool.mcpServer) return why + "the " + *tool.mcpServer + " connector. Turn the internet on to use it.";
+    if (tool.onlineService) return why + name + ", which calls an online service. Turn the internet on to use it.";
     if (name == "web_fetch") {
         const std::string url = args.value("url", "");
         if (!urlIsLocal(url)) return why + "web_fetch. Turn the internet on to read web pages.";
