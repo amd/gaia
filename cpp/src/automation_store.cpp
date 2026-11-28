@@ -26,6 +26,9 @@
 #include <thread>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <fcntl.h>
 #include <io.h>
 #include <sys/locking.h>
@@ -890,7 +893,7 @@ std::string readWinPipe(HANDLE h, size_t maxBytes) {
     DWORD got = 0;
     while (ReadFile(h, buf, sizeof(buf), &got, nullptr) && got > 0) {
         if (out.size() < maxBytes) {
-            out.append(buf, std::min(static_cast<size_t>(got), maxBytes - out.size()));
+            out.append(buf, (std::min)(static_cast<size_t>(got), maxBytes - out.size()));
         }
     }
     return out;
