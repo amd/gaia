@@ -3,16 +3,11 @@
 
 #include "mail_internal.h"
 
-#include <chrono>
 #include <cstdint>
-#include <map>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 
-#include <httplib.h>
-
-#include "lower_ascii.h"
+#include "gaia/http_client.h"
 
 namespace gaia::mail {
 
@@ -305,18 +300,9 @@ std::string queryString(const std::vector<std::pair<std::string, std::string>>& 
 namespace {
 
 constexpr int kTimeoutSec = 15;
-// Reopen a kept connection idle this long; servers drop them without saying so.
-constexpr auto kIdleReuse = std::chrono::seconds(4);
-constexpr std::size_t kIdlePerHost = 5;
 
-struct Target {
-    std::string host;
-    int port = 443;
-    std::string pathAndQuery;
-    std::string key() const { return host + ":" + std::to_string(port); }
-};
-
-Target parseHttps(const std::string& url) {
+// Refused before sending: the mail code only ever talks to the providers over https.
+void requireHttps(const std::string& url) {
     const std::string scheme = "https://";
     if (url.compare(0, scheme.size(), scheme) != 0) {
         throw std::invalid_argument("The mailbox transport only sends https:// requests, not " + url);
@@ -324,123 +310,33 @@ Target parseHttps(const std::string& url) {
     const std::size_t slash = url.find('/', scheme.size());
     const std::string authority =
         url.substr(scheme.size(), slash == std::string::npos ? std::string::npos : slash - scheme.size());
-    Target t;
-    t.pathAndQuery = slash == std::string::npos ? "/" : url.substr(slash);
     const std::size_t colon = authority.rfind(':');
-    t.host = authority.substr(0, colon);
     if (colon != std::string::npos) {
         const std::string port = authority.substr(colon + 1);
         if (port.empty() || port.find_first_not_of("0123456789") != std::string::npos || port.size() > 5 ||
             std::stoi(port) < 1 || std::stoi(port) > 65535) {
             throw std::invalid_argument("The mailbox transport got a URL with a bad port: " + url);
         }
-        t.port = std::stoi(port);
     }
-    if (t.host.empty()) throw std::invalid_argument("The mailbox transport got a URL with no host: " + url);
-    return t;
-}
-
-std::string describe(httplib::Error err, const std::string& host) {
-    switch (err) {
-        case httplib::Error::Connection:
-        case httplib::Error::ConnectionTimeout:
-            return "could not connect to " + host + " (no network, host unreachable, or no answer within " +
-                   std::to_string(kTimeoutSec) + " s)";
-        case httplib::Error::Read:
-            return "no complete answer from " + host + " within " + std::to_string(kTimeoutSec) +
-                   " s (connection dropped or too slow)";
-        case httplib::Error::Write:
-            return "the request to " + host + " could not be sent (connection closed while writing)";
-        case httplib::Error::SSLConnection:
-            return "the TLS handshake with " + host + " failed";
-        case httplib::Error::SSLLoadingCerts:
-            return "the system's TLS certificates could not be loaded";
-        case httplib::Error::SSLServerVerification:
-            return "the TLS certificate of " + host + " could not be verified";
-        default:
-            return "transport error talking to " + host + ": " + httplib::to_string(err);
+    if (authority.substr(0, colon).empty()) {
+        throw std::invalid_argument("The mailbox transport got a URL with no host: " + url);
     }
 }
-
-struct Idle {
-    std::unique_ptr<httplib::SSLClient> client;
-    std::chrono::steady_clock::time_point since;
-};
-
-// Fan-out calls run on several threads, and an SSLClient serves one request at a
-// time, so each call leases its own and hands it back for the next.
-class ClientPool {
-public:
-    std::unique_ptr<httplib::SSLClient> take(const Target& t) {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            auto& idle = idle_[t.key()];
-            while (!idle.empty()) {
-                Idle entry = std::move(idle.back());
-                idle.pop_back();
-                if (std::chrono::steady_clock::now() - entry.since < kIdleReuse) return std::move(entry.client);
-            }
-        }
-        auto cli = std::make_unique<httplib::SSLClient>(t.host, t.port);
-        cli->enable_server_certificate_verification(true);
-        cli->set_connection_timeout(kTimeoutSec);
-        cli->set_read_timeout(kTimeoutSec);
-        cli->set_write_timeout(kTimeoutSec);
-        cli->set_keep_alive(true);
-        cli->set_url_encode(false);
-        return cli;
-    }
-
-    void give(const Target& t, std::unique_ptr<httplib::SSLClient> cli) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto& idle = idle_[t.key()];
-        if (idle.size() < kIdlePerHost) idle.push_back({std::move(cli), std::chrono::steady_clock::now()});
-    }
-
-private:
-    std::mutex mutex_;
-    std::map<std::string, std::vector<Idle>> idle_;
-};
 
 }  // namespace
 
 Transport httpsTransport() {
-    auto pool = std::make_shared<ClientPool>();
-    return [pool](const HttpCall& call) -> HttpResponse {
-        const Target t = parseHttps(call.url);
-        httplib::Request req;
-        req.method = call.method;
-        req.path = t.pathAndQuery;
-        bool hasType = false;
-        for (const auto& [name, value] : call.headers) {
-            hasType = hasType || gaia::detail::lowerAscii(name) == "content-type";
-            req.headers.emplace(name, value);
-        }
-        if (!call.body.empty()) {
-            req.body = call.body;
-            if (!hasType) req.headers.emplace("Content-Type", "application/json");
-        }
-
-        auto cli = pool->take(t);
-        httplib::Result result = cli->send(req);
-        if (!result) throw std::runtime_error(describe(result.error(), t.host));
-
-        HttpResponse response;
-        response.status = result->status;
-        response.body = result->body;
-        for (const auto& [name, value] : result->headers) {
-            auto it = response.headers.begin();
-            for (; it != response.headers.end(); ++it) {
-                if (gaia::detail::lowerAscii(it->first) == gaia::detail::lowerAscii(name)) break;
-            }
-            if (it == response.headers.end()) {
-                response.headers.emplace(name, value);
-            } else {
-                it->second += ", " + value;
-            }
-        }
-        pool->give(t, std::move(cli));
-        return response;
+    HttpClientConfig config;
+    config.timeoutSec = kTimeoutSec;
+    config.connectTimeoutSec = kTimeoutSec;
+    config.returnErrorStatuses = true;
+    // One client keeps each host's connection open; concurrent calls open their own.
+    auto client = std::make_shared<HttpClient>(config);
+    return [client](const HttpCall& call) -> HttpResponse {
+        requireHttps(call.url);
+        if (call.method == "GET") return client->get(call.url, call.headers);
+        if (call.method == "POST") return client->post(call.url, call.body, call.headers);
+        throw std::invalid_argument("The mailbox transport sends GET and POST only, not " + call.method);
     };
 }
 
