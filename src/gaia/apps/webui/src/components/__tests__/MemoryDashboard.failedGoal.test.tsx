@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryDashboard } from '../MemoryDashboard';
 import * as memoryApi from '../../services/memoryApi';
+import { PYTHON_MEMORY_STORE } from '../../test/memoryStore';
 
 vi.mock('../../services/memoryApi');
 
@@ -37,6 +38,7 @@ beforeEach(() => {
     mockedApi.listGoals.mockResolvedValue({ goals: [], total: 0 });
     mockedApi.getGoalStats.mockResolvedValue({ goals: {}, tasks: {} });
     mockedApi.getMemorySettings.mockResolvedValue({ memory_enabled: true, mcp_memory_enabled: false, system_discovery_consent: false });
+    mockedApi.getMemoryStore.mockResolvedValue(PYTHON_MEMORY_STORE);
 });
 
 async function openGoals(status: string) {
