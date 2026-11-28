@@ -299,7 +299,7 @@ void MemoryStore::registerTools(ToolRegistry& registry) {
         json items = json::array();
         const std::string query = a.value("query", "");
         // Sensitive only keeps a fact out of listings; asked for by name, it is the user's own.
-        const bool sensitive = !query.empty() || a.value("include_sensitive", false);
+        const bool sensitive = !ftsQuery(query).empty() || a.value("include_sensitive", false);
         for (const auto& e : this->recall(query, a.value("category", ""), a.value("limit", 10), sensitive)) {
             items.push_back(entryJson(e));
         }

@@ -101,6 +101,7 @@ TEST(MemoryStoreTest, ASearchFindsASensitiveFactButAListingLeavesItOut) {
     ASSERT_EQ(found["count"], 1);
     EXPECT_NE(found["memories"][0]["content"].get<std::string>().find("4471"), std::string::npos);
     EXPECT_EQ(reg.executeTool("recall", json::object())["count"], 0);
+    EXPECT_EQ(reg.executeTool("recall", json{{"query", " ?! "}})["count"], 0) << "no words is a listing";
     EXPECT_EQ(reg.executeTool("recall", json{{"include_sensitive", true}})["count"], 1);
 }
 
