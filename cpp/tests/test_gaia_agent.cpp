@@ -2514,6 +2514,62 @@ TEST(GaiaAgentTest, EveryToolIsOnTheListTheAppsWordInPlainLanguage) {
     for (const auto& name : gated) EXPECT_TRUE(tools.count(name)) << name;
 }
 
+namespace {
+// The shipped calendar SKILL.md, in a skills folder of its own.
+struct CalendarSkillHome {
+    Workdir dir;
+    CalendarSkillHome() {
+        fs::create_directories(dir.path / "skills" / "calendar");
+        fs::copy_file(fs::path(GAIA_CPP_SOURCE_DIR) / ".." / "hub" / "skills" / "calendar" / "SKILL.md",
+                      dir.path / "skills" / "calendar" / "SKILL.md");
+        set(dir.path.u8string().c_str());
+    }
+    ~CalendarSkillHome() { set(""); }
+    static void set(const char* v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_HOME", v);
+#else
+        if (*v) setenv("GAIA_HOME", v, 1); else unsetenv("GAIA_HOME");
+#endif
+    }
+};
+}  // namespace
+
+TEST(GaiaAgentTest, TheCalendarToolsTurnOnWhenTheSkillLoads) {
+    Workdir w;
+    CalendarSkillHome home;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";
+    GaiaAgent agent(cfg, o);
+    ASSERT_FALSE(cfg.compactFeatures());
+    for (const auto& name : CalendarTools::toolNames()) EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "calendar"}});
+    ASSERT_EQ(loaded["status"], "success") << loaded.dump();
+    EXPECT_EQ(loaded["tools_available"], json(CalendarTools::toolNames()));
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : CalendarTools::toolNames()) {
+        EXPECT_TRUE(agent.toolRegistry().isEnabled(name)) << name << " stays on for the chat";
+    }
+
+    cfg.modelId = "Gemma-4-E4B-it-GGUF";
+    agent.setConfig(cfg);
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : CalendarTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " is withheld from a compact model";
+    }
+    json refused = agent.toolRegistry().executeTool("load_skill", json{{"name", "calendar"}});
+    EXPECT_EQ(refused["status"], "error");
+    EXPECT_EQ(refused["error_type"], "SkillUnavailableError");
+    EXPECT_NE(refused["error"].get<std::string>().find("needs a larger model"), std::string::npos) << refused.dump();
+    for (const auto& name : CalendarTools::toolNames()) EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+}
+
 TEST(GaiaAgentTest, TheMailToolsDoNotRunWhileTheInternetIsOff) {
     Workdir w;
     bench::MockLlmServer mock;

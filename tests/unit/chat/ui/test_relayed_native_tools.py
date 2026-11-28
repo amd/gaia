@@ -15,6 +15,7 @@ import pytest
 
 import gaia.ui.sidecar.relay as relay_module
 from gaia.ui.sidecar.native_tools import (
+    NATIVE_CHANGE_TOOLS,
     NATIVE_TOOL_LABELS,
     NATIVE_TOOL_NAMES,
     as_flagship_call,
@@ -306,6 +307,7 @@ class TestEveryGaiacppToolHasWords:
             tool
             for tool in listed["gated"]
             if tool not in reads
+            and tool not in NATIVE_CHANGE_TOOLS
             and as_flagship_call(tool, None)[0] not in GAIA_PROFILE.mutating_tools
         ]
         assert not unmarked, f"gated gaiacpp tools not marked as changes: {unmarked}"

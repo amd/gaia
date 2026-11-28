@@ -144,6 +144,13 @@ var toolPhrases = map[string]toolPhrase{
 	"list_connected_mailboxes": {Without: "Checking connected mailboxes"},
 	"list_waiting_on_you":      {Without: "Finding mail waiting on you"},
 
+	// Calendar skill
+	"calendar/list_calendar_events":        {Without: "Reading your calendar"},
+	"calendar/check_calendar_availability": {Without: "Checking when you're free"},
+	"calendar/create_calendar_event":       {With: "Adding %s to your calendar", Without: "Adding an event to your calendar", Arg: "title"},
+	"calendar/update_calendar_event":       {With: "Changing %s on your calendar", Without: "Changing a calendar event", Arg: "expected_title"},
+	"calendar/cancel_calendar_event":       {With: "Cancelling %s on your calendar", Without: "Cancelling a calendar event", Arg: "expected_title"},
+
 	// Not tools: the agent checking in on a long turn, and asking to reach a
 	// path outside the session.
 	"continue_long_turn": {Without: "Asking whether to keep going"},

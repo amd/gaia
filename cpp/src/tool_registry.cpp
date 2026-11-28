@@ -9,6 +9,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "gaia/person_approval.h"
+
 namespace gaia {
 
 void ToolRegistry::registerTool(ToolInfo info) {
@@ -197,6 +199,21 @@ json ToolRegistry::buildOpenAiToolSchemas() const {
     return schemas;
 }
 
+namespace {
+
+// agent.py's wording when a tool's own permission check raises.
+json permissionCheckFailed(const std::string& tool, const std::exception& e) {
+    const char* type = dynamic_cast<const std::invalid_argument*>(&e) ? "ValueError" : "RuntimeError";
+    return json{{"status", "error"},
+                {"error", tool + " was not run: its permission check failed (" + type + ": " + e.what() +
+                              "). Tell the user it did not run."},
+                {"tool_name", tool},
+                {"permission_check_failed", true},
+                {"executed", false}};
+}
+
+}  // namespace
+
 json ToolRegistry::executeTool(const std::string& name, const json& args) {
     const ToolInfo* tool = findTool(name);
     if (!tool) {
@@ -246,13 +263,26 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
     if (preCheck_) {
         if (auto refused = preCheck_(*tool, effectiveArgs)) return *refused;
     }
+    if (tool->preflight) {
+        std::optional<json> refused;
+        try {
+            refused = tool->preflight(effectiveArgs);
+        } catch (const std::exception& e) {
+            return permissionCheckFailed(resolvedName, e);
+        }
+        if (refused) {
+            json result = *refused;
+            if (result.is_object()) result["executed"] = false;
+            return result;
+        }
+    }
 
     // 3. CONFIRM check
     if (tool->policy == ToolPolicy::CONFIRM && !(tool->needsConfirm && !tool->needsConfirm(effectiveArgs))) {
         // Fast path: already permanently allowed
         const std::string grantKey =
             tool->grantScope ? resolvedName + ":" + tool->grantScope(effectiveArgs) : resolvedName;
-        if (allowedStore_ && allowedStore_->isAlwaysAllowed(grantKey)) {
+        if (!tool->personMustApprove && allowedStore_ && allowedStore_->isAlwaysAllowed(grantKey)) {
             // proceed
         } else {
             // Fail-closed: no callback = deny
@@ -262,7 +292,28 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
 
             if (auto refused = declinedRefusal(resolvedName, effectiveArgs)) return *refused;
 
-            ToolConfirmResult decision = confirmCallback_(resolvedName, effectiveArgs);
+            json shown = effectiveArgs;
+            if (tool->promptArgs) {
+                try {
+                    shown = tool->promptArgs(effectiveArgs);
+                } catch (const std::exception& e) {
+                    return permissionCheckFailed(resolvedName, e);
+                }
+            }
+            if (tool->personMustApprove && shown.is_object()) shown[approval::kNeedsPersonArg] = true;
+            ToolConfirmResult decision = confirmCallback_(resolvedName, shown);
+            // A person approves each call on its own card, so nothing is remembered.
+            if (tool->personMustApprove && decision == ToolConfirmResult::ALWAYS_ALLOW) {
+                decision = ToolConfirmResult::ALLOW_ONCE;
+            }
+            if (tool->personMustApprove && decision == ToolConfirmResult::UNATTENDED) {
+                return json{{"status", "error"},
+                            {"executed", false},
+                            {"not_executed", true},
+                            {"error", "'" + resolvedName +
+                                          "' needs your approval and nobody can answer on this run. Start the "
+                                          "request from the GAIA terminal UI or Agent UI to approve it there."}};
+            }
             if (decision == ToolConfirmResult::ALWAYS_ALLOW || decision == ToolConfirmResult::ALLOW_ONCE) {
                 noteApproved(resolvedName, effectiveArgs);
             }

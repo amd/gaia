@@ -15,7 +15,9 @@
 #include <string>
 #include <vector>
 
+#include "gaia/calendar_tools.h"
 #include "gaia/clean_console.h"
+#include "gaia/person_approval.h"
 #include "gaia/secrets.h"
 #include "lower_ascii.h"
 
@@ -136,7 +138,32 @@ bool isSafeShellArg(const std::string& arg) {
 // ---------------------------------------------------------------------------
 
 ToolConfirmCallback makeStdinConfirmCallback() {
-    return [](const std::string& toolName, const json& /*args*/) -> ToolConfirmResult {
+    return [](const std::string& toolName, const json& args) -> ToolConfirmResult {
+        if (args.is_object() && args.value(approval::kNeedsPersonArg, false)) {
+            // Approved one call at a time, from what the call will really do.
+            std::string body;
+            if (CalendarTools::isWriteTool(toolName)) {
+                body = CalendarTools::approvalSummary(args);
+                const json& note = args.value(approval::kRiskNoteArg, json());
+                if (note.is_string()) body += "\n" + note.get<std::string>();
+            } else {
+                json shown = args;
+                shown.erase(approval::kNeedsPersonArg);
+                body = approval::visible(shown.dump(2, ' ', false, json::error_handler_t::replace));
+            }
+            std::string indented = "  ";
+            for (char c : body) indented += c == '\n' ? std::string("\n  ") : std::string(1, c);
+            std::cerr << "\n"
+                      << "  \"" << toolName << "\" needs your approval for this call:\n"
+                      << indented << "\n"
+                      << color::YELLOW << "  [1] " << color::RESET << color::WHITE << "Allow once\n" << color::RESET
+                      << color::YELLOW << "  [2] " << color::RESET << color::WHITE << "Deny\n" << color::RESET
+                      << "  Choice: " << std::flush;
+            std::string input;
+            if (!std::getline(std::cin, input)) return ToolConfirmResult::UNATTENDED;
+            return input == "1" || input == "o" || input == "O" ? ToolConfirmResult::ALLOW_ONCE
+                                                                 : ToolConfirmResult::DENY;
+        }
         std::cerr << "\n"
                   << "  \"" << toolName << "\" requires confirmation. Allow this tool to run?\n"
                   << color::CYAN

@@ -28,7 +28,9 @@
 #include <gaia/clean_console.h>
 #include <gaia/console.h>
 #include <gaia/mcp_stdio_server.h>
+#include <gaia/person_approval.h>
 #include <gaia/repl.h>
+#include <gaia/security.h>
 #include <gaia/session.h>
 
 #include "gaia_agent.h"
@@ -644,6 +646,11 @@ gaia::GaiaAgent::Options unattended(gaia::GaiaAgent::Options o) {
     return o;
 }
 
+// A call only a person may approve; no switch answers it.
+bool needsPerson(const gaia::json& args) {
+    return args.is_object() && args.value(gaia::approval::kNeedsPersonArg, false);
+}
+
 // The server answers and the model is on disk, before a person waits on a load.
 void checkModelOnDisk(const Cli& cli, const Settings& settings) {
     gaia::LemonadeClient client(gaia::LemonadeClientConfig{settings.cfg.baseUrl});
@@ -685,7 +692,11 @@ int runMcp(const Cli& cli) {
     cfg.silentMode = true;
     gaia::GaiaAgent agent(cfg, unattended(agentOptions(cli, settings)));
     pinConfig(agent, cfg);
-    agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
+    agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json& args) {
+        if (needsPerson(args)) {
+            std::cerr << "[gaiacpp] denied " << tool << " (only a person may approve it)\n";
+            return gaia::ToolConfirmResult::UNATTENDED;
+        }
         if (!skip) {
             std::cerr << "[gaiacpp] denied " << tool
                       << " (nobody to ask over MCP; pass --dangerously-skip-permissions to allow)\n";
@@ -793,7 +804,11 @@ int runPrint(const Cli& cli) {
     gaia::GaiaAgent agent(cfg, unattended(agentOptions(cli, settings)));
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
-    agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
+    agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json& args) {
+        if (needsPerson(args)) {
+            std::cerr << "[gaiacpp] denied " << tool << " (only a person may approve it)\n";
+            return gaia::ToolConfirmResult::UNATTENDED;
+        }
         if (!skip) {
             std::cerr << "[gaiacpp] denied " << tool
                       << " (headless run; pass --dangerously-skip-permissions to allow)\n";
@@ -899,8 +914,8 @@ int runServe(const Cli& cli) {
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     // No person at the keyboard: the client that started the server owns safety.
-    agent.setToolConfirmCallback([](const std::string&, const gaia::json&) {
-        return gaia::ToolConfirmResult::ALLOW_ONCE;
+    agent.setToolConfirmCallback([](const std::string&, const gaia::json& args) {
+        return needsPerson(args) ? gaia::ToolConfirmResult::UNATTENDED : gaia::ToolConfirmResult::ALLOW_ONCE;
     });
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
 
@@ -954,8 +969,11 @@ int runInteractive(const Cli& cli) {
     gaia::GaiaAgent agent(settings.cfg, cli.skipPermissions ? unattended(agentOptions(cli, settings)) : agentOptions(cli, settings));
     pinConfig(agent, settings.cfg);
     if (cli.skipPermissions) {
-        agent.setToolConfirmCallback([](const std::string&, const gaia::json&) {
-            return gaia::ToolConfirmResult::ALLOW_ONCE;
+        agent.setToolConfirmCallback([&agent, ask = gaia::makeStdinConfirmCallback()](const std::string& tool,
+                                                                                        const gaia::json& args) {
+            if (!needsPerson(args)) return gaia::ToolConfirmResult::ALLOW_ONCE;
+            agent.releaseNpu();
+            return ask(tool, args);
         });
     }
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);

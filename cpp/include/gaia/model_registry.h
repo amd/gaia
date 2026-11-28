@@ -62,8 +62,9 @@ GAIA_API std::optional<bool> knownThinking(const std::string& modelId);
 /// gaiacpp has been measured on. Unlisted models get the full set.
 GAIA_API bool isCompactModel(const std::string& modelId);
 
-/// Tools a compact model is not offered: each has a shell or file-tool
-/// equivalent, and their schemas cost every step.
+/// Tools a compact model is not offered: most have a shell or file-tool
+/// equivalent and their schemas cost every step; mail and calendar have not
+/// passed their evals on one.
 GAIA_API const std::vector<std::string>& compactWithheldTools();
 
 } // namespace gaia

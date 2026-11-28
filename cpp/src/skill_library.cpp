@@ -10,6 +10,7 @@
 #include <fstream>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 #include "gaia/http_client.h"
@@ -234,12 +235,29 @@ void SkillLibrary::registerTools(ToolRegistry& registry) {
         } catch (const std::exception& e) {
             return json{{"status", "error"}, {"error", e.what()}};
         }
+        const auto native = native_.find(s.name);
+        if (native != native_.end()) {
+            const std::string refused = native->second.refusal ? native->second.refusal() : "";
+            if (!refused.empty()) {
+                return json{{"status", "error"},
+                            {"action", "load_skill"},
+                            {"error_type", "SkillUnavailableError"},
+                            {"error", refused}};
+            }
+        }
         json out = {{"status", "success"},
                     {"name", s.name},
                     {"directory", s.directory()},
                     {"tier", s.securityTier()},
                     {"instructions", s.body}};
-        if (!s.isInstructionOnly()) {
+        if (native != native_.end()) {
+            native->second.activate();
+            out["registered_tools"] = native->second.tools;
+            out["tools_available"] = native->second.tools;
+            out["tools_hint"] =
+                "These tools are on your tool list now and stay there for this chat. Call them directly, as the "
+                "skill's instructions say.";
+        } else if (!s.isInstructionOnly()) {
             out["note"] = "This skill also ships Python tools (" +
                           json(s.toolNames()).dump() +
                           "), which need the Python GAIA runtime. Follow the instructions with "
@@ -248,6 +266,11 @@ void SkillLibrary::registerTools(ToolRegistry& registry) {
         return out;
     };
     registry.registerTool(std::move(load));
+}
+
+void SkillLibrary::setNativeTools(const std::string& name, NativeSkillTools tools) {
+    if (!tools.activate) throw std::invalid_argument("setNativeTools needs activate for skill '" + name + "'");
+    native_[name] = std::move(tools);
 }
 
 std::string SkillLibrary::userRoot() {

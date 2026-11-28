@@ -17,6 +17,8 @@
 #include <ftxui/screen/screen.hpp>
 
 #include "gaia/agent.h"
+#include "gaia/calendar_tools.h"
+#include "gaia/person_approval.h"
 
 namespace gaia {
 
@@ -384,6 +386,9 @@ bool TuiApp::onModalEvent(const Event& event) {
         return true;
     }
     if (event == Event::Character('a') || event == Event::Character('A')) {
+        // A call only a person may approve offers no "always".
+        const json args = broker_->pending().args;
+        if (args.is_object() && args.value(approval::kNeedsPersonArg, false)) return true;
         if (broker_->resolve(id, ToolConfirmResult::ALWAYS_ALLOW)) {
             transcript_->addSystemLine("[ok] always allowed - stored in the allowed-tools file");
         }
@@ -547,13 +552,25 @@ std::string TuiApp::keyHint() const {
 
 Element TuiApp::buildModal() const {
     auto request = broker_->pending();
-    const std::string preview =
-        request.args.is_null()
-            ? std::string("{}")
-            : request.args.dump(-1, ' ', false, json::error_handler_t::replace);
+    const bool needsPerson = request.args.is_object() && request.args.value(approval::kNeedsPersonArg, false);
+    json shown = request.args;
+    if (needsPerson) shown.erase(approval::kNeedsPersonArg);
+    std::string preview = shown.is_null() ? std::string("{}") : shown.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (CalendarTools::isWriteTool(request.toolName) && needsPerson) {
+        preview = CalendarTools::approvalSummary(shown);
+        const json& note = shown.value(approval::kRiskNoteArg, json());
+        if (note.is_string()) preview += "\n" + note.get<std::string>();
+    }
 
     // The end of a command matters as much as its start, so a long one keeps both.
-    std::vector<std::string> lines = hardWrap(preview, kArgsLineWidth);
+    std::vector<std::string> lines;
+    std::size_t from = 0;
+    while (from <= preview.size()) {
+        const std::size_t to = std::min(preview.find('\n', from), preview.size());
+        const auto wrapped = hardWrap(preview.substr(from, to - from), kArgsLineWidth);
+        lines.insert(lines.end(), wrapped.begin(), wrapped.end());
+        from = to + 1;
+    }
     if (lines.size() > kArgsMaxLines) {
         const std::size_t keep = (kArgsMaxLines - 1) / 2;
         std::size_t hidden = 0;
@@ -581,7 +598,8 @@ Element TuiApp::buildModal() const {
         rows.push_back(text((i == 0 ? "args: " : "      ") + lines[i]));
     }
     rows.push_back(separatorCharacter("-"));
-    rows.push_back(text("[y] allow once   [a] always allow   [n] deny   [esc] deny"));
+    rows.push_back(text(needsPerson ? "[y] allow once   [n] deny   [esc] deny"
+                                    : "[y] allow once   [a] always allow   [n] deny   [esc] deny"));
     rows.push_back(separatorCharacter("="));
     return vbox(std::move(rows)) | size(WIDTH, LESS_THAN, 68) | size(HEIGHT, LESS_THAN, 17);
 }

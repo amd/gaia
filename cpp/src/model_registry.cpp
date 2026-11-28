@@ -97,6 +97,9 @@ const std::vector<std::string>& compactWithheldTools() {
         // Mail: no compact model has passed the email evals.
         "check_mailbox_access", "list_inbox", "search_email", "read_email", "list_mail_folders", "get_thread",
         "list_connected_mailboxes", "list_waiting_on_you",
+        // Calendar: no compact eval yet, and it writes to a real calendar.
+        "calendar/list_calendar_events", "calendar/check_calendar_availability", "calendar/create_calendar_event",
+        "calendar/update_calendar_event", "calendar/cancel_calendar_event",
     };
     return kWithheld;
 }

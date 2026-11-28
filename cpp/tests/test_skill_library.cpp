@@ -116,6 +116,41 @@ TEST(SkillLibraryTest, LoadSkillToolReturnsInstructions) {
     EXPECT_EQ(listed["skills"].size(), 2u);
 }
 
+TEST(SkillLibraryTest, ASkillWithNativeToolsTurnsThemOnWhenItLoads) {
+    TempTree t;
+    const auto withTool = [&](const std::string& name) {
+        t.raw("user", name,
+              "---\nname: " + name + "\ndescription: A skill.\nmetadata:\n  gaia:\n    tools:\n      - name: look\n"
+              "        description: Look.\n---\n\nBody.\n");
+    };
+    withTool("calendar");
+    withTool("other");
+    SkillLibrary lib({t.root("user", "user")});
+    ToolRegistry reg;
+    lib.registerTools(reg);
+    int activated = 0;
+    std::string refusal;
+    lib.setNativeTools("calendar", {{"calendar/list_calendar_events"}, [&] { return refusal; }, [&] { ++activated; }});
+
+    refusal = "Skill 'calendar' needs a larger model.";
+    json refused = reg.executeTool("load_skill", json{{"name", "calendar"}});
+    EXPECT_EQ(refused["status"], "error");
+    EXPECT_EQ(refused["error_type"], "SkillUnavailableError");
+    EXPECT_EQ(refused["error"], refusal);
+    EXPECT_EQ(activated, 0) << "a refused skill turns nothing on";
+
+    refusal.clear();
+    json loaded = reg.executeTool("load_skill", json{{"name", "calendar"}});
+    EXPECT_EQ(loaded["status"], "success");
+    EXPECT_EQ(activated, 1);
+    EXPECT_EQ(loaded["tools_available"], json::array({"calendar/list_calendar_events"}));
+    EXPECT_FALSE(loaded.contains("note")) << "its tools run here, so no 'needs Python' note";
+
+    json other = reg.executeTool("load_skill", json{{"name", "other"}});
+    ASSERT_TRUE(other.contains("note"));
+    EXPECT_NE(other["note"].get<std::string>().find("Python GAIA runtime"), std::string::npos);
+}
+
 TEST(SkillLibraryTest, LoaderSeamPutsBodyInPrompt) {
     TempTree t;
     t.skill("user", "coding", "Write and fix code.", "Always run the tests.");

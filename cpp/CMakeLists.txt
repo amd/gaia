@@ -299,6 +299,10 @@ add_library(gaia_core
     src/mail_graph.cpp
     src/connect_card.cpp
     src/email_tools.cpp
+    src/person_approval.cpp
+    src/calendar_model.cpp
+    src/calendar_backends.cpp
+    src/calendar_tools.cpp
 )
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
@@ -513,6 +517,8 @@ if(GAIA_BUILD_TESTS)
         tests/test_mail_screens.cpp
         tests/test_connectors.cpp
         tests/test_email_tools.cpp
+        tests/test_calendar_tools.cpp
+        tests/test_person_approval.cpp
         agents/gaiacpp/gaia_agent.cpp
         agents/gaiacpp/delegation.cpp
         agents/gaiacpp/bash_tools.cpp

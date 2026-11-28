@@ -27,6 +27,7 @@
 #include <gaia/ignore.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/person_approval.h>
 #include <gaia/security.h>
 #include <gaia/shell_guard.h>
 #include <gaia/skill_library.h>
@@ -611,14 +612,26 @@ private:
     }
 
     // Park the agent thread until the UI decides.
-    ToolConfirmResult confirm(Session& s, const std::string& tool, const json& args) {
-        if (s.bypass.load()) return ToolConfirmResult::ALLOW_ONCE;
+    ToolConfirmResult confirm(Session& s, const std::string& tool, const json& shownArgs) {
+        // A call only a person may approve: full access and pre-approval never answer it.
+        const bool needsPerson = shownArgs.is_object() && shownArgs.value(approval::kNeedsPersonArg, false);
+        json args = shownArgs;
+        std::string riskNote;
+        if (args.is_object()) {
+            args.erase(approval::kNeedsPersonArg);
+            if (args.contains(approval::kRiskNoteArg) && args[approval::kRiskNoteArg].is_string()) {
+                riskNote = args[approval::kRiskNoteArg].get<std::string>();
+            }
+            args.erase(approval::kRiskNoteArg);
+        }
+        if (s.bypass.load() && !needsPerson) return ToolConfirmResult::ALLOW_ONCE;
         std::shared_ptr<Run> run;
         {
             std::lock_guard<std::mutex> lock(s.currentMu);
             run = s.current;
         }
         if (!run) return ToolConfirmResult::UNATTENDED;
+        if (needsPerson && (run->unattended || run->skipPermissions)) return ToolConfirmResult::UNATTENDED;
         if (run->skipPermissions && tool != kPathAccessPrompt) return ToolConfirmResult::ALLOW_ONCE;
         if (run->unattended) {
             // Parking here would wait on a card nobody will ever see: end the turn instead.
@@ -640,16 +653,22 @@ private:
         const std::string scope = info && info->grantScope ? info->grantScope(args) : "";
         const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
                              judgeShellCommand(args.value("command", ""), "", {}, nullptr).compound;
-        const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
+        const std::string key = info && info->grantScope && !chained && !needsPerson ? tool + ":" + scope : "";
+        const bool calendarWrite = CalendarTools::isWriteTool(tool);
+        std::string summary = shell ? "Run: " + args.value("command", "")
+                              : pathAccess ? pathAccessQuestion(args)
+                              : calendarWrite ? CalendarTools::approvalSummary(args)
+                                              : "Use " + tool;
+        if (calendarWrite && !riskNote.empty()) summary += "\n" + riskNote;
         json ev = {{"type", "needs_confirmation"},
                    {"run_id", run->id},
                    {"action", tool},
-                   {"summary", shell ? "Run: " + args.value("command", "")
-                                     : pathAccess ? pathAccessQuestion(args) : "Use " + tool},
+                   {"summary", summary},
                    {"confirm_id", confirmId},
                    {"args", args}};
         if (!pathAccess) {
-            ev["risk"] = toolRisk(tool);
+            // As in Python, a calendar change leaves its label to the app's own table.
+            if (!calendarWrite) ev["risk"] = toolRisk(tool);
             ev["tool_label"] = tool;
         }
         if (!key.empty()) {
@@ -660,6 +679,9 @@ private:
         // The card's own risk line: this command was not checked, and can reach outside the chat's folders.
         const std::string unchecked = shell && s.agent ? s.agent->shellApprovalNote(args.value("command", "")) : "";
         if (!unchecked.empty()) ev["prompt_context"]["risk_note"] = unchecked;
+        if (!riskNote.empty()) ev["prompt_context"]["risk_note"] = riskNote;
+        // A calendar card shows the checked values: addresses as notified, the event's real title.
+        if (calendarWrite) ev["prompt_context"]["shown_args"] = args;
         run->push(ev);
         // Other chats may run while this one waits for its user.
         if (s.agent) s.agent->releaseNpu();

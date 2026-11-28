@@ -149,6 +149,11 @@ void GaiaAgent::registerTools() {
             EmailTools::Options{options_.surface, [this] { return config().toolResultCharLimit(); }, {}});
         email_->registerAll(toolRegistry());
     }
+    if (options_.calendar) {
+        calendar_ = std::make_unique<CalendarTools>(CalendarTools::Options{options_.surface, {}});
+        calendar_->registerAll(toolRegistry());
+        if (skills_) skills_->setNativeTools(CalendarTools::kSkillName, calendarSkillTools());
+    }
     if (docs_) {
         docs_->registerTools(toolRegistry(), ws ? std::function<std::string(const std::string&)>(
                                                       [ws](const std::string& p) { return ws->checkPath(p); })
@@ -631,16 +636,40 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
     return "about " + digits + " tokens of text in " + std::to_string(files) + " files";
 }
 
+NativeSkillTools GaiaAgent::calendarSkillTools() {
+    NativeSkillTools set;
+    set.tools = CalendarTools::toolNames();
+    set.refusal = [this] {
+        if (!config().compactFeatures()) return std::string();
+        std::vector<std::string> names = CalendarTools::toolNames();
+        std::sort(names.begin(), names.end());
+        std::string joined;
+        for (const auto& n : names) joined += (joined.empty() ? "" : ", ") + n;
+        return "Skill '" + std::string(CalendarTools::kSkillName) + "' needs " + joined + ", which " +
+               config().modelId + " is not offered. Tell the user this needs a larger model; they can pick one in "
+               "the model list.";
+    };
+    set.activate = [this] {
+        calendarLoaded_ = true;
+        for (const auto& name : CalendarTools::toolNames()) toolRegistry().setEnabled(name, true);
+        rebuildSystemPrompt();
+    };
+    return set;
+}
+
 void GaiaAgent::onTurnStart() {
     // A page read last turn may have changed, and fetching it again is the user's call.
     webPages_->clear();
     if (email_) email_->startTurn();
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
+    // A model the calendar tools are withheld from unloads the skill, as Python does.
+    if (compact) calendarLoaded_ = false;
     for (const auto& name : compactWithheldTools()) {
+        const bool offer = !compact && (!CalendarTools::isCalendarTool(name) || calendarLoaded_);
         // Written only on a change, so a turn doesn't race readers on other threads for nothing.
-        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) == compact) {
-            toolRegistry().setEnabled(name, !compact);
+        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != offer) {
+            toolRegistry().setEnabled(name, offer);
         }
     }
     // A compact model gets helpers only when asked for by number: its evals have not earned them.
