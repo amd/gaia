@@ -206,7 +206,8 @@ def test_cloud_without_a_working_key_is_refused_and_nothing_changes(client, db, 
     keys["ensure_result"] = False
     resp = client.post("/api/run-modes/select", json={"mode": "cloud"})
     assert resp.status_code == 409
-    assert "Fireworks AI has no working key" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "Fireworks AI" in detail and "no working key" in detail
     assert db.get_setting("custom_model") == QWEN
     assert client.get("/api/run-modes").json()["active"] == "local"
     assert not config_mod.GAIA_CONFIG_FILE.exists()
