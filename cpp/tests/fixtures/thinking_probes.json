@@ -1,0 +1,28 @@
+{
+  "_comment": "Model id -> enable_thinking GAIA sends (null: no field). Python's requested_thinking and gaiacpp's knownThinking must both return these.",
+  "probes": {
+    "Qwen3.5-2B-GGUF": false,
+    "Qwen3.5-4B-GGUF": false,
+    "qwen3.5-2b-gguf": false,
+    "QWEN3.5-4B-GGUF": false,
+    "user.Qwen3.5-2B-GGUF": false,
+    "User.Qwen3.5-4B-GGUF": false,
+    " Qwen3.5-2B-GGUF ": false,
+    "Qwen3.6-35B-A3B-GGUF": true,
+    "qwen3.6-35b-a3b-gguf": true,
+    "user.Qwen3.6-35B-A3B-GGUF": true,
+    "user.Qwen3.8-Flash-Next-GGUF": true,
+    "Qwen3.8-Flash-Next-GGUF": true,
+    "Gemma-4-E4B-it-GGUF": null,
+    "Qwen3.5-35B-A3B-GGUF": null,
+    "qwen3.5-2b-FLM": null,
+    "Qwen3.5-2B": null,
+    "Qwen3.5-2B-GGUF-extra": null,
+    "user.": null,
+    "": null,
+    "some-unknown-model": null,
+    "amd.Qwen3.5-2B-GGUF": null,
+    "fireworks.qwen3.5-2b-gguf": null,
+    "fireworks.deepseek-v4p1-flash": null
+  }
+}
