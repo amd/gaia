@@ -53,11 +53,6 @@ const std::string& summaryFields() {
     return fields;
 }
 
-bool isWordChar(char c, const char* extra) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-           std::string(extra).find(c) != std::string::npos;
-}
-
 // The shape Gmail issues for a message id. Thread ids share it.
 bool isGmailId(const std::string& s) {
     if (s.empty() || s.size() > 128) return false;
@@ -837,8 +832,8 @@ HeaderMap headerMap(const json& part) {
     const json& headers = field(part, "headers");
     if (!headers.is_array()) return out;
     for (const json& header : headers) {
-        const std::string name = lowerAscii(text(field(header, "name")));
-        if (!name.empty() && !out.count(name)) out[name] = text(field(header, "value"));
+        const std::string name = lowerAscii(textOf(field(header, "name")));
+        if (!name.empty() && !out.count(name)) out[name] = textOf(field(header, "value"));
     }
     return out;
 }
@@ -878,7 +873,7 @@ std::string received(const json& internalDate) {
 }
 
 const json* findPart(const json& part, const std::string& mimeType) {
-    if (lowerAscii(text(field(part, "mimeType"))) == mimeType && !truthy(field(part, "filename"))) return &part;
+    if (lowerAscii(textOf(field(part, "mimeType"))) == mimeType && !truthy(field(part, "filename"))) return &part;
     const json& parts = field(part, "parts");
     if (!parts.is_array()) return nullptr;
     for (const json& child : parts) {
@@ -888,7 +883,7 @@ const json* findPart(const json& part, const std::string& mimeType) {
 }
 
 std::string decodePart(const json& part) {
-    const std::string data = text(field(field(part, "body"), "data"));
+    const std::string data = textOf(field(field(part, "body"), "data"));
     if (data.empty()) return "";
     const auto badBase64 = [] {
         return MailboxError(
@@ -918,7 +913,7 @@ std::pair<std::string, std::string> selectBody(const json& payload) {
 // An inline image (signature logo, cid: reference), not a file. Apple Mail
 // marks PDFs inline too, so only images count.
 bool isInline(const json& part) {
-    if (lowerAscii(text(field(part, "mimeType"))).compare(0, 6, "image/") != 0) return false;
+    if (lowerAscii(textOf(field(part, "mimeType"))).compare(0, 6, "image/") != 0) return false;
     const HeaderMap headers = headerMap(part);
     const std::string disposition = lowerAscii(pyStrip(headerOf(headers, "content-disposition")));
     if (disposition.compare(0, 10, "attachment") == 0) return false;
@@ -926,7 +921,7 @@ bool isInline(const json& part) {
 }
 
 void collectAttachments(const json& part, json& found) {
-    const std::string filename = text(field(part, "filename"));
+    const std::string filename = textOf(field(part, "filename"));
     if (!filename.empty() && !isInline(part)) {
         long long size = 0;
         const json& rawSize = field(field(part, "body"), "size");
@@ -934,7 +929,7 @@ void collectAttachments(const json& part, json& found) {
             throw std::invalid_argument("Gmail returned a part size that is not a number: " + pyRepr(rawSize));
         }
         found.push_back({{"name", decodeWords(filename)},
-                         {"mime_type", lowerAscii(text(field(part, "mimeType")))},
+                         {"mime_type", lowerAscii(textOf(field(part, "mimeType")))},
                          {"size", size}});
     }
     const json& parts = field(part, "parts");
@@ -979,7 +974,7 @@ json messageSummary(const json& msg, const std::map<std::string, json>& labelNam
         {"flagged", hasLabel(labelIds, "STARRED")},
         {"categories", categories(labelIds, labelNames)},
         // Gmail entity-encodes the snippet where Graph's bodyPreview is plain.
-        {"preview", pyStrip(htmlUnescape(text(field(msg, "snippet"))))},
+        {"preview", pyStrip(htmlUnescape(textOf(field(msg, "snippet"))))},
         {"has_attachments", !attachments.empty()},
         {"attachments", attachments},
         {"auto_submitted", decodeWords(headerOf(headers, "auto-submitted"))},
@@ -1002,7 +997,7 @@ public:
 
     std::string getUserEmail() override {
         const json data = get("/users/me/profile");
-        const std::string address = pyStrip(text(field(data, "emailAddress")));
+        const std::string address = pyStrip(textOf(field(data, "emailAddress")));
         if (address.empty()) {
             throw withConnector(MailboxError("Gmail returned no address for the connected account (`emailAddress` "
                                              "was empty). The connection is in an unusable state and needs "

@@ -115,7 +115,12 @@ bool truthy(const json& value) {
     }
 }
 
-std::string text(const json& value) {
+bool isWordChar(char c, const char* extra) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+           std::string(extra).find(c) != std::string::npos;
+}
+
+std::string textOf(const json& value) {
     return value.is_string() ? value.get<std::string>() : std::string();
 }
 
