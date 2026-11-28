@@ -346,6 +346,18 @@ TEST(JsonEventHandlerTest, StreamEndNoEvent) {
     EXPECT_TRUE(cap.str().empty());
 }
 
+TEST(JsonEventHandlerTest, AnswerRetractedEmitsAnswerCheckWithoutLeakingDetail) {
+    JsonEventOutputHandler handler;
+    CoutCapture cap;
+    handler.printAnswerRetracted("Answer sent back: internal check note");
+    auto ev = cap.first();
+    EXPECT_EQ(ev["type"], "status");
+    EXPECT_EQ(ev["status"], "working");
+    EXPECT_EQ(ev["phase"], "answer_check");
+    EXPECT_EQ(ev["message"], "Checking the answer");
+    EXPECT_EQ(ev["retracts_answer"], true);
+}
+
 // ===========================================================================
 // Processing Reset
 // ===========================================================================
