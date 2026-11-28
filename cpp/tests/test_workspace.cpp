@@ -404,9 +404,11 @@ TEST(WorkspaceTest, AShortNameForAnOutsideFolderIsRefused) {
     EXPECT_FALSE(ws.contains(shortPath)) << shortPath;
     EXPECT_NE(ws.checkPath(shortPath), "") << shortPath;
     EXPECT_NE(ws.checkCommand("type \"" + shortPath + "\""), "") << shortPath;
-    InFolder in(d.work);
-    const std::string relative = (fs::path(buf).parent_path().filename() / "secret.txt").u8string();
-    EXPECT_NE(ws.checkCommand("cd .. && type " + relative), "") << relative;
+    // checkCommand leaves `..` to the read check, which judges a relative short name like its long name.
+    const std::string up = (fs::path("..") / fs::path(buf).parent_path().filename() / "secret.txt").generic_u8string();
+    const std::string upLong = (fs::path("..") / outside.filename() / "secret.txt").generic_u8string();
+    EXPECT_FALSE(staysInside(ws, "cat " + up, d.work.string())) << up;
+    EXPECT_FALSE(staysInside(ws, "cat " + upLong, d.work.string())) << upLong;
 }
 #endif
 
