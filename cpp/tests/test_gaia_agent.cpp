@@ -3155,7 +3155,11 @@ TEST(GaiaAgentTest, RanTheTestsToConfirmTheyPassIsAClaimNotAdvice) {
         EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(claim, onlyAFailure)), "the tests run this turn didn't pass") << claim;
     }
     for (const char* advice : {"Run the tests again to confirm they pass.", "You should run the tests to verify they pass.",
-                               "I ran the tests to confirm they pass, but one still fails."}) {
+                               "I ran the tests to confirm they pass, but one still fails.",
+                               "I ran the tests to confirm they pass, but test_total failed.",
+                               "I re-ran the tests to verify that they pass, but they didn't.",
+                               "After you have run the tests to confirm they pass, merge it.",
+                               "When you have run the tests to verify that they all pass, deploy."}) {
         EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(advice, onlyAFailure)) << advice;
     }
 }
