@@ -360,7 +360,7 @@ TransportError transportError(const HttpError& e, const std::string& host) {
     const auto has = [&](const char* s) { return what.find(s) != std::string::npos; };
     const bool unconnected = has("could not connect") || has("TLS ");
     const char* kind = unconnected                 ? "ConnectError"
-                       : has("read timeout")       ? "ReadError"
+                       : has("read timeout")       ? "ReadTimeout"
                        : has("could not be sent")  ? "WriteError"
                                                    : "TransportError";
     return TransportError(kind, unconnected, describe(e, host));
