@@ -123,7 +123,14 @@ func TestResearchModeLeavesSkillCommandsAlone(t *testing.T) {
 	if got := m.withResearch("/docx\nthe memo"); got != "/docx\nthe memo" {
 		t.Fatalf("researched a skill command with its request on the next line: %q", got)
 	}
-	for _, line := range []string{"/docs draft a memo", "/docx.txt notes", "/tmp/notes.txt", "plain question", "/docx-pro memo", "/docx/notes", "see /docx memo"} {
+	// Named later in the line, the skill runs on the whole line, as the agent reads it.
+	for _, line := range []string{"see /docx memo", "turn this into a memo with /docx.", "use /docs then /DOCX", "اكتب مذكرة بـ /docx؟"} {
+		want := strings.Replace(line, "/DOCX", "/docx", 1)
+		if got := m.withResearch(line); got != want {
+			t.Fatalf("researched a line naming a skill later on: %q was sent as %q", line, got)
+		}
+	}
+	for _, line := range []string{"/docs draft a memo", "/docx.txt notes", "/tmp/notes.txt", "plain question", "/docx-pro memo", "/docx/notes", "see https://x.test/docx", "and/docx"} {
 		if got := m.withResearch(line); got != "/research "+line {
 			t.Fatalf("%q was sent as %q, want the research prefix", line, got)
 		}

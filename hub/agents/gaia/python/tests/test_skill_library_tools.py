@@ -1607,11 +1607,19 @@ def test_a_typed_plugin_skill_command_runs_that_skill(session, tmp_path, monkeyp
 
 @pytest.mark.parametrize(
     "text",
-    ["/tmp/report.txt summarize it", "/not-installed hi", "/etc", "hi /note-taker"],
+    ["/tmp/report.txt summarize it", "/not-installed hi", "/etc", "see /etc/hosts"],
 )
 def test_text_that_names_no_installed_skill_passes_through(session, text):
     assert session.agent._expand_skill_command(text) == text
     assert "note-taker" not in session.agent.loaded_skills
+
+
+def test_a_skill_named_mid_sentence_runs_on_the_whole_message(session):
+    sent = session.agent._expand_skill_command("summarize this chat with /note-taker")
+
+    assert "note-taker" in session.agent.loaded_skills
+    assert sent.startswith("[GAIA: the user typed /note-taker")
+    assert sent.endswith("\n\nsummarize this chat with /note-taker")
 
 
 def test_a_refused_skill_is_reported_not_run(session):

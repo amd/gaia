@@ -983,14 +983,14 @@ class GaiaAgent(
         )
 
     def _skills_in_use(self, user_input: str) -> FrozenSet[str]:
-        """Loaded skills, plus one *user_input* runs as ``/<skill-name> ...``.
+        """Loaded skills, plus the one *user_input* names as ``/<skill-name>``.
 
         The command loads its skill after the turn's context is built, so
         without it the hint would name the skill the user just typed.
         """
         from gaia.skills.command import parse_skill_command
 
-        command = parse_skill_command(user_input or "")
+        command = parse_skill_command(user_input or "", self.skill_manager.discover())
         typed = {command.name} if command is not None else set()
         return frozenset(self.loaded_skills) | typed
 

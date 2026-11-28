@@ -663,12 +663,15 @@ collapses the rest to a one-line menu entry (re-activated by calling
 `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
 disables it for the session and every body renders.
 
-A query that starts with `/<skill-name>`, where the name is an installed skill,
-runs on that skill, as in Claude Code: the agent loads it exactly as
-`load_skill` would (same gates, same refusals), keeps its body in the prompt for
-the turn, and sends the model the rest of the line as the request. Host notes in
-front of the line (one `[…]` line each, then a blank line) are kept. Anything
-else, such as `/tmp/notes.txt`, is sent unchanged. A load that is refused is
+A query that names an installed skill as `/<skill-name>` runs on that skill,
+as in Claude Code: the agent loads it exactly as `load_skill` would (same gates,
+same refusals) and keeps its body in the prompt for the turn. The command is a
+whole word, in any case, at the start of the query or after any whitespace, and
+may end in sentence punctuation (`with /pdf.`). Only the first installed skill
+named runs. A command that starts the query is cut from it, and the rest is the
+request; one later in a sentence stays in the request, which is sent whole.
+Host notes in front of the query (one `[…]` line each, then a blank line) are
+kept. Anything else, such as `/tmp/notes.txt` or a URL, is sent unchanged. A load that is refused is
 reported to the user with its fix, and the request is not attempted. This holds
 on `/v1/gaia/query`, over stdio and in `process_query`.
 

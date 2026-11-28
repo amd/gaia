@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **A skill named anywhere in a message runs, as in Claude Code.** A
+  `/<skill-name>` command only ran at the start of a query, so "rewrite this
+  with /humanizer" was sent as plain text. An installed skill named as a whole
+  word anywhere now runs; the first one named wins, and a command later in a
+  sentence stays in the request. Paths such as `/tmp/x.txt` and URLs still
+  never match.
 - **Running the program it just wrote counts as testing it.** An answer that
   said "tested" was sent back unless a test runner had run, so on work with
   no test suite the agent re-ran its program and the answer still ended with

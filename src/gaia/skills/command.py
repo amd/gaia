@@ -1,54 +1,72 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Run a skill by typing ``/<skill-name> [request]``, as in Claude Code.
+"""Run a skill by naming it as ``/<skill-name>`` in a message, as in Claude Code.
 
 The agent calls :func:`parse_skill_command` on every message. A match names an
 installed skill; the agent turns it on and sends the model
-:func:`skill_command_message` in place of the typed line, so the turn follows
+:func:`skill_command_message` in place of the typed text, so the turn follows
 that skill's instructions instead of hoping the model picks it.
+
+The Agent UI (``webui/src/utils/skillCommand.ts``) and the TUI
+(``tui/internal/ui/chat/research.go``) read the same token rule.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Container, Dict, Optional
 
 # Notes a host puts in front of what the user typed (the Agent UI's folder
 # note), one line each and a blank line after. The command is the user's text.
-_COMMAND = re.compile(
-    r"\A(?P<lead>(?:\[[^\n]*\]\n\n)*)"
-    r"/(?P<name>(?:[a-z0-9]+(?:-[a-z0-9]+)*:)?[a-z0-9]+(?:-[a-z0-9]+)*)"
-    r"(?:[ \t]*\n|[ \t]+|\Z)(?P<request>.*)\Z",
-    re.DOTALL,
+_LEAD = re.compile(r"\A(?:\[[^\n]*\]\n\n)*")
+
+# A whole whitespace-separated word: /name or /plugin:name, then any sentence
+# punctuation. A second slash or a dot inside the word (/tmp/x.txt) is no match.
+_TOKEN = re.compile(
+    r"(?<!\S)/(?P<name>(?:[a-z0-9]+(?:-[a-z0-9]+)*:)?[a-z0-9]+(?:-[a-z0-9]+)*)"
+    r"[.,!?;:\u060c\u061f]*(?!\S)",
+    re.IGNORECASE,
 )
 
 
 @dataclass(frozen=True)
 class SkillCommand:
-    """``/name request`` as typed, plus any host notes that came before it."""
+    """The skill a message names, the request to send, and any host notes."""
 
     name: str
     request: str
     lead: str = ""
 
 
-def parse_skill_command(text: str) -> Optional[SkillCommand]:
-    """The skill command *text* starts with, or ``None``.
+def names_a_skill(text: str) -> bool:
+    """Whether *text* holds a word shaped like a skill command, installed or not."""
+    return _TOKEN.search(text or "") is not None
 
-    Only the shape is checked here; whether *name* is an installed skill is the
-    caller's question. ``/etc/hosts`` and ``/tmp/x.txt`` never match, because a
-    skill name cannot hold a second slash or a dot. A Claude Code plugin's
-    skill is typed as Claude Code types it: ``/<plugin>:<skill>``.
+
+def parse_skill_command(text: str, installed: Container[str]) -> Optional[SkillCommand]:
+    """The first installed skill *text* names as ``/<name>``, or ``None``.
+
+    The word may start the message or follow any whitespace, in any case;
+    ``/etc/hosts`` and ``/tmp/x.txt`` never match. A Claude Code plugin's skill
+    is typed as Claude Code types it: ``/<plugin>:<skill>``. Only the first
+    installed one runs, so a turn carries one skill's instructions.
+
+    A command that starts the message is cut from the request, as before. One
+    later in a sentence stays in it, so "rewrite this with /humanizer" still
+    reads as what the user asked.
     """
-    match = _COMMAND.match(text or "")
-    if match is None:
-        return None
-    return SkillCommand(
-        name=match.group("name"),
-        request=match.group("request").strip(),
-        lead=match.group("lead"),
-    )
+    text = text or ""
+    lead = _LEAD.match(text).group(0)
+    typed = text[len(lead) :]
+    for match in _TOKEN.finditer(typed):
+        name = match.group("name").lower()
+        if name not in installed:
+            continue
+        leading = not typed[: match.start()].strip()
+        request = typed[match.end() :] if leading else typed
+        return SkillCommand(name=name, request=request.strip(), lead=lead)
+    return None
 
 
 def skill_command_message(command: SkillCommand, activation: Dict[str, Any]) -> str:
