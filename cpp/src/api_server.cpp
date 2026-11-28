@@ -582,6 +582,14 @@ struct ApiServer::Impl {
 
     void setupRoutes() {
         server.set_payload_max_length(opts.maxRequestBytes);
+        // httplib refuses an oversized body itself, with an empty reply; say why.
+        server.set_error_handler([this](const httplib::Request&, httplib::Response& res) {
+            if (res.status != 413 || !res.body.empty()) return;
+            sendError(res, 413,
+                      "The request body is larger than this server accepts (" +
+                          std::to_string(opts.maxRequestBytes) + " bytes). Send a shorter conversation or smaller images.",
+                      "invalid_request_error", "request_too_large");
+        });
         // A refusal sent before the body is read leaves it unread in the socket,
         // and closing that socket resets the connection: the client loses the
         // status it was just sent. So a request with a body is refused by its

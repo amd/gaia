@@ -12,6 +12,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryDashboard } from '../MemoryDashboard';
 import { dueLabel, MemoryDashboardAboutYou } from '../MemoryDashboardAboutYou';
 import * as memoryApi from '../../services/memoryApi';
+import { PYTHON_MEMORY_STORE } from '../../test/memoryStore';
 
 vi.mock('../../services/memoryApi');
 
@@ -58,6 +59,7 @@ beforeEach(() => {
     mockedApi.getEntities.mockResolvedValue([]);
     mockedApi.listGoals.mockResolvedValue({ goals: [], total: 0 });
     mockedApi.getGoalStats.mockResolvedValue({ goals: {}, tasks: {} });
+    mockedApi.getMemoryStore.mockResolvedValue(PYTHON_MEMORY_STORE);
     mockedApi.getMemorySettings.mockImplementation(async () => ({
         memory_enabled: memoryEnabled, mcp_memory_enabled: false, system_discovery_consent: false,
     }));
@@ -125,7 +127,7 @@ describe('What GAIA knows about you', () => {
 
     it('keeps a forgotten item gone when an older load lands afterwards', async () => {
         // The first About load answers at once; the second (from the page's
-        // own reload) is held until after the forget, then returns the old list.
+        // Refresh) is held until after the forget, then returns the old list.
         let release: (v: unknown) => void = () => {};
         const held = new Promise(r => { release = r; });
         let aboutLoads = 0;
@@ -135,6 +137,7 @@ describe('What GAIA knows about you', () => {
             return stale;
         });
         await renderAbout();
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh dashboard' }));
         await waitFor(() => expect(aboutLoads).toBe(2));
 
         fireEvent.click(within(itemRow('Lives in Calgary')).getByRole('button', { name: /Forget/ }));
@@ -341,6 +344,8 @@ describe('What GAIA knows about you', () => {
             return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
         });
         const props = {
+            agent: PYTHON_MEMORY_STORE.agent,
+            supports: PYTHON_MEMORY_STORE.supports,
             memoryEnabled: true,
             onChanged: () => {},
             onOpenAdvanced: () => {},

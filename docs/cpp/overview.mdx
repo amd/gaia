@@ -255,7 +255,7 @@ config.debug = true;
 | `maxToolResultChars` | `int` | `16000` | Tool output kept in the conversation; the rest is read with `read_tool_output` |
 | `maxPlanIterations` | `int` | `3` | Maximum plan/replan cycles before forcing completion |
 | `maxConsecutiveRepeats` | `int` | `4` | Back-to-back repeats of one tool call, or of a cycle of two or three calls, before loop-detection triggers |
-| `maxHistoryMessages` | `int` | `40` | Max messages kept between queries (0 = unlimited) |
+| `maxHistoryMessages` | `int` | `40` | Max messages kept between queries (0 = unlimited). Whatever it is, the oldest whole turns are dropped once the conversation outgrows the model's loaded context window, and the output handler gets one `printWarning` per conversation when turns are dropped |
 | `contextSize` | `int` | `16384` | LLM context window size in tokens (`n_ctx`) |
 | `debug` | `bool` | `false` | Enable verbose debug logging to stdout |
 | `showPrompts` | `bool` | `false` | Print full system prompts and LLM responses |

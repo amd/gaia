@@ -20,6 +20,7 @@ import { placeInLine } from '../utils/chatAlerts';
 import { formatShortcut } from '../utils/platform';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
 import { MAX_SESSION_TITLE_CHARS } from '../utils/constants';
+import { shownTitle as shownChatTitle } from '../utils/sessionTitle';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useToday } from '../hooks/useToday';
@@ -154,7 +155,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
     const waiting = failed > 0 ? t.plural('row.notSent', failed) : unsent > 0 ? t.plural('row.toSend', unsent) : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
-    const shownTitle = markStrayDirection(session.title);
+    const shownTitle = shownChatTitle(t, session);
     const title = <span className="sb-row-title" dir="auto">{titleMatch ? <Highlight parts={titleMatch} /> : shownTitle}</span>;
 
     return (
@@ -200,7 +201,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                     {snippet || note ? (
                         <span className="sb-row-text">
                             {title}
-                            {snippet && <span className="sb-row-snippet"><Highlight parts={snippet} /></span>}
+                            {snippet && <span className="sb-row-snippet" dir="auto"><Highlight parts={snippet} /></span>}
                             {/* Its own line, so the notes never cut a long title short; the second wraps rather than clip. */}
                             {note && (
                                 <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`} title={note}>

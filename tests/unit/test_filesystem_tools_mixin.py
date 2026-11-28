@@ -14,11 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.tools.filesystem_tools import (
-    FileSystemToolsMixin,
-    _format_date,
-    _format_size,
-)
+from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin, _format_date
+from gaia.utils.sizes import format_size as _format_size
 
 # =============================================================================
 # Test Helpers

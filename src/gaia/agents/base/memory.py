@@ -278,6 +278,8 @@ RRF_K = 60
 
 #: Memories surfaced per turn for the current request.
 TURN_RECALL_TOP_K = 3
+#: Most memories saved in this chat that every later turn is shown.
+SESSION_SAVED_SHOWN = 8
 #: With embeddinggemma-300m, a natural question scores the memory it is about
 #: only 0.35-0.55, while unrelated memories sit at 0.25-0.40. No single floor
 #: separates those, so a match passes on a sure score, or on standing clear of
@@ -4511,6 +4513,24 @@ class MemoryMixin(ProceduralMemoryMixin):
                 items.append(item)
         return self._redact_credentials(items)
 
+    def _with_saved_this_session(self, relevant: List[Dict]) -> List[Dict]:
+        """*relevant* plus what this chat saved and the frozen prompt doesn't show.
+
+        A young store rarely clears the recall bar ("best day for a promotion?"
+        scores 0.37 against "busiest days are Saturdays"), and small models
+        don't call recall themselves, so they answered as if nothing was saved.
+        """
+        shown = getattr(self, "_stable_memory_ids", set())
+        have = {item["id"] for item in relevant}
+        extra = []
+        for kid in getattr(self, "_session_saved_ids", []):
+            if kid in shown or kid in have:
+                continue
+            item = self._memory_store.get_item(kid)
+            if item and not item.get("sensitive") and not item.get("superseded_by"):
+                extra.append(item)
+        return relevant + self._redact_credentials(extra)
+
     def _reminder_window_open(self, now_ts: float) -> bool:
         """Whether this turn may carry proactive reminders.
 
@@ -4614,6 +4634,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 e,
             )
             relevant = []
+        relevant = self._with_saved_this_session(relevant)
         if relevant:
             mem_lines = [
                 f"  - [{item['category']}] {item['content']} "
@@ -5213,6 +5234,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._memory_saves_this_turn().append(
                 result if isinstance(result, dict) else {"status": "error"}
             )
+            saved = result.get("knowledge_id") if isinstance(result, dict) else None
+            if saved and result.get("status") in ("stored", "updated"):
+                kept = [
+                    k for k in getattr(self, "_session_saved_ids", []) if k != saved
+                ]
+                self._session_saved_ids = (kept + [saved])[-SESSION_SAVED_SHOWN:]
         return result
 
     def answer_problems(self, answer):

@@ -33,3 +33,16 @@ describe('image-reading caveat in Settings', () => {
         expect(screen.getAllByText(/can’t read images or screenshots/).length).toBeGreaterThan(0);
     });
 });
+
+describe('fit unknown in Settings', () => {
+    it("blames the model's unknown need, not the PC's memory, when the PC's memory is known", () => {
+        renderSettings([{ ...QWEN_VL, fits: null, need_gb: null, capacity_gb: 40.2 }]);
+        expect(screen.getByText(/doesn’t know how much memory this model needs/)).toBeInTheDocument();
+        expect(screen.queryByText(/couldn’t read this PC’s memory/)).not.toBeInTheDocument();
+    });
+
+    it("still blames the PC's memory when that is what couldn't be read", () => {
+        renderSettings([{ ...QWEN_VL, fits: null, need_gb: null, capacity_gb: null }]);
+        expect(screen.getByText(/couldn’t read this PC’s memory/)).toBeInTheDocument();
+    });
+});

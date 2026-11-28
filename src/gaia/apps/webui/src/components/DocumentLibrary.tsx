@@ -18,6 +18,7 @@ import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isEx
 import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
+import { shownTitle } from '../utils/sessionTitle';
 import { IndexingProgress } from './IndexingProgress';
 import { describeSkippedFiles } from './folderIndexResult';
 import { needsRetry, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
@@ -175,7 +176,7 @@ export function DocumentLibrary() {
     // A chat searches only its own attachments, so the user picks where new documents go.
     const [target, setTarget] = useState<'chat' | 'next'>(currentSessionId ? 'chat' : 'next');
     const targetSessionId = target === 'chat' ? currentSessionId : null;
-    const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
+    const targetChatName = `“${shownTitle(t, currentSession) || t('docs.untitledChat')}”`;
     const [notice, setNotice] = useState('');
     const [filter, setFilter] = useState('');
     const filterText = documents.length > FILTER_AFTER ? filter.trim().toLowerCase() : '';
@@ -431,8 +432,15 @@ export function DocumentLibrary() {
                 const name = doc.filename || filename;
                 setActionError(serverNotAddedText(doc.error_kind, name, t) ?? t('docs.notAdded', { name }));
             } else if (doc?.id) {
+                // The server matches by content, so a renamed copy comes back as the file already there.
+                const picked = visibleName(filename);
+                const existingName = visibleName(doc.filename || filename);
+                const sameAs = picked !== existingName
+                    && useChatStore.getState().documents.some((d) => d.id === doc.id)
+                    ? existingName : null;
                 try {
                     await attachToTarget(doc.id, doc.filename || filename);
+                    if (sameAs) setNotice((prev) => `${t('docs.sameContents', { name: picked, existing: sameAs })} ${prev}`);
                 } catch (attachErr) {
                     log.doc.error(`Could not attach "${filename}" to ${targetChatName}`, attachErr);
                     setUploadError({

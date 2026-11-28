@@ -74,12 +74,64 @@ def install_target() -> Path:
     return gaia_home() / "bin" / fetch.native_flagship_executable_name()
 
 
-def update_available(binary: Path) -> bool:
-    """True when *binary* was downloaded for another GAIA release than this one."""
+#: ``(path, mtime_ns, size)`` -> the version that file printed, or the
+#: :class:`PlatformError` it failed with, so a listing runs it once.
+_printed_versions: dict = {}
+
+
+def _is_own_build(binary: Path) -> bool:
+    """True when *binary* is the build ``GAIA_GAIACPP_PATH`` names."""
+    explicit = os.environ.get(fetch.NATIVE_FLAGSHIP_PATH_ENV, "").strip()
+    return bool(explicit) and Path(explicit) == binary
+
+
+def installed_version(binary: Path) -> str:
+    """The version of the gaiacpp at *binary*: its download record's, else what it prints.
+
+    Raises:
+        PlatformError: it has no record and does not print a version.
+        IntegrityError: its record cannot be read.
+    """
+    record = fetch.native_install_record(binary)
+    if record:
+        return record["version"]
+    stat_result = binary.stat()
+    key = (str(binary), stat_result.st_mtime_ns, stat_result.st_size)
+    if key not in _printed_versions:
+        try:
+            _printed_versions[key] = fetch.native_flagship_stamp(binary)
+        except PlatformError as e:
+            _printed_versions[key] = e
+    printed = _printed_versions[key]
+    if isinstance(printed, PlatformError):
+        raise printed.with_traceback(None)
+    return printed
+
+
+def release_version() -> Optional[str]:
+    """The version this GAIA release's gaiacpp prints; ``None`` on a development build."""
     try:
-        record = fetch.native_install_record(binary)
-        return bool(record) and record.get("version") != stamped_version(release_tag())
-    except (PlatformError, IntegrityError):
+        return stamped_version(release_tag())
+    except PlatformError:
+        return None
+
+
+def update_available(binary: Path) -> bool:
+    """True when *binary* is a gaiacpp from another GAIA release than this one.
+
+    A copy an older installer left on PATH has no download record, so it is
+    asked for its version. A development build of GAIA has no release to
+    compare with, and a build named by ``GAIA_GAIACPP_PATH`` is the user's own:
+    neither is ever out of date.
+    """
+    expected = release_version()
+    if expected is None or _is_own_build(binary):
+        return False
+    try:
+        return installed_version(binary) != expected
+    except (PlatformError, IntegrityError, OSError) as e:
+        # A copy that can't say its version fails loudly when it is started.
+        logger.warning("gaiacpp: could not read the version of %s: %s", binary, e)
         return False
 
 

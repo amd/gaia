@@ -20,6 +20,15 @@ it('shows a failed turn\'s error without a click', () => {
     expect(screen.getByText(failure)).toBeVisible();
 });
 
+it('lets the error text pick its own direction so English keeps its punctuation in Arabic', () => {
+    const steps: AgentStep[] = [
+        { id: 1, type: 'error', label: 'Error', detail: failure, active: false, success: false, timestamp: 1 },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByText(failure)).toHaveAttribute('dir', 'auto');
+});
+
 it('keeps steps whose only failure is a tool result folded', () => {
     const steps: AgentStep[] = [
         { id: 1, type: 'tool', label: 'Using tool', tool: 'read_file', active: false, success: false, timestamp: 1 },

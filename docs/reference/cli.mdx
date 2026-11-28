@@ -125,10 +125,17 @@ command is run again. A download that fails exits `1` with the reason.
 
 Where the agent ships as its own program, as in the desktop app, the terminal
 installers and the one-line installer, `gaia -p` and `gaia chat` run it through
-GAIA's background service in the current folder. Confirmation-gated tools are
-refused there, so `--dangerously-skip-permissions`, `--full-access`,
-`--base-url`, `--disallowed-tools`, `--no-web` and `--no-skills` work only with the
-agent package installed, as in a source checkout.
+GAIA's background service in the current folder. `gaia -p` passes
+`--time-limit`, `--disallowed-tools`, `--no-web`, `--no-skills`,
+`--dangerously-skip-permissions` and `--full-access` to that run, and they work
+as they do in a source checkout. A permission flag covers that one run only: it
+never carries over to your Agent UI chats, which share the service. Only
+`--base-url` is refused there, because the service always uses the model server
+GAIA is set up with (`gaia lemonade connect` changes that). They work with
+either agent, the Python one or `gaiacpp`. On `gaiacpp`, `--time-limit` stops
+the run at the limit without warning the model first. If the installed agent
+predates these flags, `gaia -p` refuses them before the run starts rather than
+running without them.
 There the agent is also told that nobody can answer questions during the run, so
 it settles an open choice from the files it has and says what it assumed, rather
 than ending on a question.
@@ -195,7 +202,8 @@ than `success`), when the model server could not be started, or when no prompt w
 given, when the model's download failed, or when a download was needed and not confirmed; `130` when interrupted; `2` for a usage error such as an unknown flag, a
 launcher flag (`--ui`, `--cli`) combined with `-p`, or `--verbose` without
 `--output-format json`. On any failure the reason
-goes to stderr; in json mode stdout still carries one object, with `is_error: true`
+goes to stderr, once: a failed turn whose answer is that reason (a refused gated
+tool, say) leaves stdout empty in text mode; in json mode stdout still carries one object, with `is_error: true`
 and an `error` field, so a script never has to parse a traceback. A failure
 before the turn starts (no prompt, server down) prints only `type`, `is_error`,
 `status` and `error`.
@@ -2406,7 +2414,7 @@ case a free one is picked and remembered, and the key changes with it. `start` w
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 2026.44.1 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.48.3 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:
@@ -4015,7 +4023,7 @@ gaia daemon stop-agent gaia               # stop one sidecar, daemon stays up
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |
-| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/gaia/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. For `--mode user` run from inside a GAIA checkout, that checkout's `hub/agents/<id>/npm/binaries.lock.json` is compared by SHA-256 against the daemon's own lock; if they pin different binaries (or the daemon has no lock), the start is refused, naming both lock files and the repo root to restart the daemon from. Outside a checkout there is no pin to compare and nothing is sent. |
+| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first; a running `gaiacpp` has no dev variant, so either mode attaches to it. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/gaia/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. For `--mode user` run from inside a GAIA checkout, that checkout's `hub/agents/<id>/npm/binaries.lock.json` is compared by SHA-256 against the daemon's own lock; if they pin different binaries (or the daemon has no lock), the start is refused, naming both lock files and the repo root to restart the daemon from. Outside a checkout there is no pin to compare and nothing is sent. |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
 A daemon also shuts down on its own, logging why, within a few seconds of its

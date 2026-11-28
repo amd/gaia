@@ -2042,9 +2042,46 @@ Used to reach the UI from a phone.
 
 The Memory endpoints expose the agent's persistent knowledge system. See the [Memory SDK Reference](/sdk/sdks/memory) for the underlying `MemoryStore` and `MemoryMixin` APIs.
 
+**These endpoints serve the memory of the agent this PC is set to use** (`flagship_agent`). The Python agent (`gaiapy`) and the native agent (`gaiacpp`) each keep their own store, and neither sees the other's. With `gaiacpp` chosen:
+
+- `stats`, and the `knowledge` list, get, create, edit and delete endpoints read and change `gaiacpp`'s store through its sidecar. Rows keep the same keys; what `gaiacpp` doesn't record is `null`, never made up: `source`, `confidence`, `use_count`, `last_used`, `due_at`, `domain`, `metadata`, `reminded_at`, `superseded_by`. The same goes for the stats `gaiacpp` doesn't track.
+- Every other endpoint that reads or changes memory contents answers `409` with a message that it works on the Python agent's memory and how to switch agent. Nothing from the Python store is shown or changed.
+- `/api/memory/settings` and `/api/memory/embedder` work for both; the memory on/off switch applies to `gaiacpp` too.
+- If `gaiacpp` can't be started, the endpoints answer `503` with the reason. They never fall back to the Python store.
+- A `gaiacpp` too old to be edited from the app still lists its memories; create, edit and delete answer `409` saying to update it under Settings › Agent & model. The backend tells by the `capabilities` list `gaiacpp` returns, not by its contract version (see `docs/spec/agent-ui-query-sse-contract.md` §5.6).
+
 <AccordionGroup>
+  <Accordion title="GET /api/memory/store">
+    Which agent's memory the other endpoints serve, and what that store can do. Reads the saved choice only; it never starts an agent.
+
+    **Response:**
+    ```json
+    {
+      "agent": "gaiacpp",
+      "other_available": true,
+      "supports": {
+        "due_dates": false,
+        "sources": false,
+        "sensitive_toggle": false,
+        "recategorize": false,
+        "goals": false,
+        "profile": false,
+        "advanced": false
+      }
+    }
+    ```
+
+    | Field | Description |
+    |-------|-------------|
+    | `agent` | `gaiapy` or `gaiacpp`. |
+    | `other_available` | Whether the other agent can be chosen on this PC. For `gaiapy` it says whether `gaiacpp` is installed; for `gaiacpp` it is always `true`. |
+    | `supports` | All `true` for `gaiapy`, all `false` for `gaiacpp`: its store has no due dates, no record of where a memory came from, can't change an existing memory's sensitive flag or category, and the goals, profile-discovery and Advanced tools belong to the Python agent's store. |
+  </Accordion>
+
   <Accordion title="GET /api/memory/stats">
     Aggregate statistics across all memory tables.
+
+    With `gaiacpp`, the reply also carries `"agent": "gaiacpp"` and `truncated`; `knowledge.total` is the whole store, the other `knowledge` counts cover the rows listed (all of them unless `truncated`), and every figure under `conversations`, `tools`, `temporal` and `procedures`, plus `embedding` and `db_size_bytes`, is `null`.
 
     **Response:**
     ```json
@@ -2125,6 +2162,8 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
       "limit": 50
     }
     ```
+
+    With `gaiacpp`, `search` is a keyword search run by `gaiacpp`, and the other filters, the sort and the paging are applied by the backend over the rows it returned; `about_user` leaves out only its `error` rows, the agent's own lessons. Sorting by a column it doesn't have (`confidence`, `use_count`) leaves the newest first. `gaiacpp` returns at most 1000 rows per request, so the reply adds `truncated` (`true` when some rows could not be fetched) and `store_total` (how many memories the store holds).
   </Accordion>
 
   <Accordion title="POST /api/memory/knowledge">
@@ -2149,6 +2188,8 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     ```
 
     If embedding fails the entry is still saved, and the response carries `"embedded": false` plus an `embed_error` saying what to do (run **Rebuild Embeddings**; keyword recall still finds it).
+
+    With `gaiacpp`, the response is `{ "status": "created", "knowledge_id": "..." }` with no `embedded`, since its store has no embeddings. A `due_at`, a `domain`, or a category it doesn't have (`profile`) is a `422` that says why, as is text `gaiacpp` refuses (empty, or shaped like a credential).
   </Accordion>
 
   <Accordion title="PUT /api/memory/knowledge/{knowledge_id}">
@@ -2161,10 +2202,14 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
       "due_at": "2026-04-20T09:00:00-07:00"
     }
     ```
+
+    With `gaiacpp`, only `content` can change; any other field is a `422`, and an unknown id is a `404`.
   </Accordion>
 
   <Accordion title="DELETE /api/memory/knowledge/{knowledge_id}">
     Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the same fact about the same subject, however it was worded or tagged, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`.
+
+    With `gaiacpp`, the one entry is deleted; its store keeps no forgotten record and looks for no copies.
   </Accordion>
 
   <Accordion title="GET /api/memory/upcoming">
@@ -2770,7 +2815,8 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
   <Accordion title="PATCH /api/schedules/{name}">
     Change when a scheduled task runs and what it asks, via `{"interval": ..., "prompt": ...}` and
     the same optional `timezone` as create. The name, chat and run history stay; an active task's
-    next run is worked out again, a paused one stays paused. `400` for a schedule GAIA can't read,
+    next run is worked out again only when its timing changes (kept when just the prompt or the
+    wording of the same schedule changes), a paused one stays paused. `400` for a schedule GAIA can't read,
     an empty prompt, or while a run of it is in flight.
   </Accordion>
 

@@ -5,6 +5,7 @@ import { act, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useWindowTitle } from '../useWindowTitle';
 import { useChatStore } from '../../stores/chatStore';
+import { stripIsolates } from '../../i18n/registry';
 import type { Session } from '../../types';
 
 function Harness() {
@@ -40,5 +41,15 @@ describe('window title', () => {
 
         act(() => useChatStore.setState({ currentSessionId: null }));
         expect(document.title).toBe('GAIA Agent UI');
+    });
+
+    it('names a chat GAIA made itself in the chosen language', () => {
+        const goals = { ...chat('g', 'Background goals'), kind: 'scheduled' as const };
+        useChatStore.setState({ sessions: [goals], currentSessionId: 'g', locale: 'ar' });
+        render(<Harness />);
+        expect(stripIsolates(document.title)).toContain('أهداف في الخلفية');
+
+        act(() => useChatStore.setState({ locale: 'en' }));
+        expect(document.title).toBe('Background goals - GAIA');
     });
 });

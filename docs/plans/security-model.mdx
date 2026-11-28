@@ -50,7 +50,7 @@ browser and desktop controls in v0.21.0, and autonomous execution safety in v0.2
 | Network ports | Remote exploitation | MCP bridge on `:8765`, API on `:8080` (localhost only) | Remain localhost-only; firewall rules enforced |
 | MCP tool execution | Malicious or unverified tools | No classification; all tools execute freely | Tiered classification: auto-approve, confirm, deny |
 | Shell commands | Arbitrary code execution | Whitelist in ShellToolsMixin (`ALLOWED_COMMANDS`) | Retain whitelist; extend to all agent types |
-| RAG cache | Pickle deserialization (RCE) | `pickle.load()` on cached data guarded by a `GAIA_CACHE_V1` magic header and 500 MB size cap (`src/gaia/rag/sdk.py`) — shipped in v0.17.2 | Migrate to fully safe serialization / HMAC (#447 follow-up) |
+| RAG cache | Pickle deserialization (RCE) | No pickle: chunks are HMAC-signed JSON, vectors are `.npy` loaded with `allow_pickle=False` (`src/gaia/rag/sdk.py`) — shipped in v0.17.3 | Done |
 | Credentials | Secret leakage via logs/env | Env vars (`ATLASSIAN_SITE_URL`, `GITHUB_TOKEN`, etc.) | Encrypted credential vault |
 | Browser automation | Navigation to malicious URLs | No URL restrictions on Playwright MCP | URL allowlist + domain restrictions (#459) |
 | Desktop control | Unauthorized system modification | Not yet implemented | Opt-in model with screenshot permissions (#461) |
@@ -739,13 +739,13 @@ Each messaging platform user maps to an isolated GAIA session:
 
 ---
 
-## 13. Pickle Deserialization Vulnerability — *Mitigated in v0.17.2*
+## 13. Pickle Deserialization Vulnerability — *Fixed in v0.17.3*
 
-**GitHub issue:** #447 — shipped in v0.17.2 via PR #722.
+**GitHub issue:** #447 — mitigated in v0.17.2 via PR #722, fixed in v0.17.3 via PR #768.
 
 ### 13.1 Historical Vulnerability
 
-The RAG SDK (`src/gaia/rag/sdk.py`) uses `pickle.load()` to deserialize cached
+The RAG SDK (`src/gaia/rag/sdk.py`) used `pickle.load()` to deserialize cached
 document indexes. Pickle deserialization of untrusted data can lead to
 arbitrary code execution.
 
@@ -753,40 +753,37 @@ Attack vector: A malicious PDF is indexed, the resulting cache file is tampered 
 (or a crafted `.pkl` file is placed in `~/.gaia/cache/`), and the next time the RAG
 SDK loads the cache, arbitrary code executes.
 
-### 13.2 What v0.17.2 shipped
+### 13.2 Current cache format
 
-The RAG cache now prepends a fixed magic header (`GAIA_CACHE_V1\n`) and enforces
-a `MAX_CACHE_SIZE` (500 MB) before any deserialization attempt. See
-`src/gaia/rag/sdk.py:44`. This closes the drive-by-write attack on
-`~/.gaia/cache/` without forcing a JSON migration. Future hardening — full
-JSON serialization or HMAC-authenticated pickle — remains tracked on #447.
+The RAG cache (`~/.gaia/cache/rag/` by default) no longer uses pickle anywhere:
 
-### 13.3 Future hardening (tracked as follow-up)
+| File | Contents | Read with |
+|------|----------|-----------|
+| `<path>_<content>_<chunking>.json` | Chunks, full text and metadata | `json.loads`, only after its signature verifies |
+| `<same name>.json.sig` | HMAC-SHA256 of the JSON bytes, hex-encoded | `hmac.compare_digest` |
+| `vectors_<hash>.npy` | float32 embeddings | `np.load(..., allow_pickle=False)`, then a row-count check |
+| `<content key>_extracted.md` | Extracted document text | Plain text |
 
-1. **Immediate (v0.17.2):** Replace `pickle.dump`/`pickle.load` with `json` for
-   the cache data structure. The cached data (`chunks`, `full_text`, `metadata`)
-   is JSON-serializable.
+- **Names bind entries to their inputs.** The JSON name hashes the file's path,
+  its full contents and the chunking settings; the vectors name hashes the
+  embedding model and the chunk text. A changed document or setting reads a new
+  entry instead of a stale one.
+- **Signing key.** A 32-byte random key is created once at `~/.gaia/cache/hmac.key`
+  (mode `0600`). The signature catches a planted or edited chunk cache; it does not
+  stop someone who can already read that key.
+- **Failure is a miss.** A missing or wrong signature or unreadable JSON is logged
+  and the document is indexed again from scratch; unreadable or wrong-shaped
+  vectors are re-embedded. Neither format can execute code, so a tampered entry
+  costs only that rework.
+- **No size limit.** Cache files are not size-capped; they are bounded by the
+  documents indexed.
+- **Cleanup touches only cache files.** `clear_cache()` deletes only names matching
+  the patterns above, and refuses a `cache_dir` that is your home or GAIA home folder.
 
-2. **If JSON is insufficient** (e.g., numpy arrays in embeddings): Use
-   `numpy.save`/`numpy.load` with `allow_pickle=False` for embedding vectors,
-   and JSON for metadata.
+### 13.3 Migration
 
-3. **Cache integrity:** Add HMAC-SHA256 verification to cache files. The HMAC key
-   is derived from the file content hash, ensuring tampered caches are rejected.
-
-```python
-# Before (vulnerable):
-with open(cache_path, "rb") as f:
-    cached_data = pickle.load(f)
-
-# After (safe):
-with open(cache_path, "r") as f:
-    cached_data = json.load(f)
-# Verify HMAC before using cached_data
-```
-
-4. **Migration:** Existing `.pkl` cache files are invalidated on upgrade. Users
-   will see a one-time re-indexing of their documents.
+Caches from before v0.17.3 (`.pkl`) are never read. Upgrading re-indexes each
+document once on first use.
 
 ---
 

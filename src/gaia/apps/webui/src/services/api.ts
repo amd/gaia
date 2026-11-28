@@ -511,6 +511,11 @@ export async function listSkills(): Promise<{ skills: SkillInfo[]; invalid: Reco
     return apiFetch('GET', '/skills');
 }
 
+/** Remove a skill you added from ~/.gaia/skills; the server refuses bundled and imported ones. */
+export async function removeSkill(name: string): Promise<{ removed: string }> {
+    return apiFetch('DELETE', `/skills/${encodeURIComponent(name)}`);
+}
+
 export async function listFeaturedSkillLibraries(): Promise<{ libraries: FeaturedLibrary[] }> {
     return apiFetch('GET', '/skills/featured');
 }

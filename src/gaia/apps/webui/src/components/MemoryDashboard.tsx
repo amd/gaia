@@ -326,11 +326,15 @@ const DOMAIN_COLORS: Record<string, string> = {
     general: 'gray',
 };
 
+/** The native agent's name; it is the same in every language. */
+const NATIVE_AGENT = 'gaiacpp';
+
 // ── Main Component ──────────────────────────────────────────────────────
 
 export function MemoryDashboard() {
     const t = useT();
-    const { setShowMemoryDashboard, sessions, setCurrentSession } = useChatStore();
+    const { setShowMemoryDashboard, sessions, setCurrentSession, openSettings } = useChatStore();
+    const settingsOpen = useChatStore((s) => s.settingsSection !== null);
     const sessionTitles = useMemo(() => new Map(sessions.map(s => [s.id, s.title])), [sessions]);
     // Chats deleted from the sidebar keep their memory turns but have no title.
     const convLabel = (sessionId: string) => sessionTitles.get(sessionId) || `${sessionId.slice(0, 8)}...`;
@@ -344,6 +348,12 @@ export function MemoryDashboard() {
     const [upcoming, setUpcoming] = useState<TemporalItem[]>([]);
     const [embeddingCoverage, setEmbeddingCoverage] = useState<EmbeddingCoverage | null>(null);
     const [entities, setEntities] = useState<EntityInfo[]>([]);
+
+    // Whose memory this is; null until the backend says.
+    const [store, setStore] = useState<memoryApi.MemoryStore | null>(null);
+    const [storeError, setStoreError] = useState<{ unknown: boolean; text: string } | null>(null);
+    const storeRef = useRef<memoryApi.MemoryStore | null>(null);
+    const canAdvanced = store?.supports.advanced === true;
 
     // UI state
     const [loading, setLoading] = useState(true);
@@ -503,6 +513,23 @@ export function MemoryDashboard() {
     }, [betaConfirm]);
 
     // ── Data loading ────────────────────────────────────────────────────
+
+    const loadStore = useCallback(async (): Promise<memoryApi.MemoryStore | null> => {
+        try {
+            const found = await memoryApi.getMemoryStore();
+            if (!found) throw new memoryApi.MemoryStoreUnknownError();
+            storeRef.current = found;
+            setStore(found);
+            setStoreError(null);
+            return found;
+        } catch (err) {
+            log.system.error('Could not tell which agent’s memory to show', err);
+            storeRef.current = null;
+            setStore(null);
+            setStoreError({ unknown: err instanceof memoryApi.MemoryStoreUnknownError, text: errorText(err) });
+            return null;
+        }
+    }, []);
 
     const loadStats = useCallback(async () => {
         try {
@@ -674,17 +701,23 @@ export function MemoryDashboard() {
         setLoading(true);
         setLoadFailed(false);
         try {
+            const found = await loadStore();
+            // No store, no reads: the other agent's memory must not stand in.
+            if (!found) return;
             await Promise.all([
-                loadStats(),
-                loadActivity(),
-                loadKnowledge(),
-                loadTools(),
-                loadConversations(),
-                loadUpcoming(),
-                loadEmbeddingCoverage(),
-                loadEntities(),
                 loadSettings(),
-                loadGoals(),
+                // A store without these answers 409, so they are never asked for.
+                ...(found.supports.advanced ? [
+                    loadStats(),
+                    loadActivity(),
+                    loadKnowledge(),
+                    loadTools(),
+                    loadConversations(),
+                    loadUpcoming(),
+                    loadEmbeddingCoverage(),
+                    loadEntities(),
+                ] : []),
+                ...(found.supports.goals ? [loadGoals()] : []),
             ]);
             setAboutReloadKey(k => k + 1);
         } catch (err) {
@@ -693,14 +726,34 @@ export function MemoryDashboard() {
         } finally {
             setLoading(false);
         }
-    }, [loadStats, loadActivity, loadKnowledge, loadTools, loadConversations, loadUpcoming, loadEmbeddingCoverage, loadEntities, loadSettings, loadGoals]);
+    }, [loadStore, loadStats, loadActivity, loadKnowledge, loadTools, loadConversations, loadUpcoming, loadEmbeddingCoverage, loadEntities, loadSettings, loadGoals]);
 
     useEffect(() => {
         loadAll();
     }, [loadAll]);
 
+    // The agent can be changed in Settings while this page is open; another agent is another memory.
+    const settingsWasOpen = useRef(false);
+    useEffect(() => {
+        const closed = settingsWasOpen.current && !settingsOpen;
+        settingsWasOpen.current = settingsOpen;
+        if (!closed) return;
+        let live = true;
+        (async () => {
+            let agent: string | null = null;
+            try {
+                agent = (await memoryApi.getMemoryStore())?.agent ?? null;
+            } catch (err) {
+                log.system.warn('Could not re-check which agent’s memory to show', err);
+            }
+            if (live && agent !== storeRef.current?.agent) loadAll();
+        })();
+        return () => { live = false; };
+    }, [settingsOpen, loadAll]);
+
     // Reload knowledge when filters change
     useEffect(() => {
+        if (!storeRef.current?.supports.advanced) return;
         loadKnowledge();
     }, [loadKnowledge]);
 
@@ -708,6 +761,7 @@ export function MemoryDashboard() {
     const isFirstRender = useRef(true);
     useEffect(() => {
         if (isFirstRender.current) { isFirstRender.current = false; return; }
+        if (!storeRef.current?.supports.advanced) return;
         loadActivity();
     }, [loadActivity]);
 
@@ -727,6 +781,7 @@ export function MemoryDashboard() {
     // Every panel that shows a memory: a changed due date or entity moves it
     // in Upcoming and the entity filter, not just in the table.
     const refreshAdvancedViews = useCallback(() => {
+        if (!storeRef.current?.supports.advanced) return;
         loadKnowledge();
         loadStats();
         loadEmbeddingCoverage();
@@ -1200,7 +1255,7 @@ export function MemoryDashboard() {
                         <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 500, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
                     </div>
                     <div className="memory-dashboard-header-actions">
-                        {activeTab === 'advanced' && <>
+                        {activeTab === 'advanced' && canAdvanced && <>
                         {/* Embedding coverage indicator */}
                         {embeddingCoverage && embeddingCoverage.total_items > 0 && (
                             <div className="mem-embedding-coverage" title={t('mem.coverage.title', { n: embeddingCoverage.with_embedding, total: embeddingCoverage.total_items })}>
@@ -1304,7 +1359,7 @@ export function MemoryDashboard() {
                     </button>
                     <button
                         className={`mem-tab-btn${activeTab === 'goals' ? ' mem-tab-active' : ''}`}
-                        onClick={() => { setActiveTab('goals'); loadGoals(); }}
+                        onClick={() => { setActiveTab('goals'); if (store?.supports.goals) loadGoals(); }}
                         role="tab"
                         aria-selected={activeTab === 'goals'}
                     >
@@ -1331,9 +1386,37 @@ export function MemoryDashboard() {
                     </button>
                 </div>
 
+                {store && (store.agent === NATIVE_AGENT || store.other_available) && (
+                    <p className="mem-store-banner" role="note">
+                        <span>{t(store.agent === NATIVE_AGENT ? 'mem.store.native' : 'mem.store.python', { name: NATIVE_AGENT })}</span>{' '}
+                        <button type="button" className="link-btn" onClick={() => openSettings('model')}>
+                            {t.compose((say) => say('mem.store.change', { tab: say('settings.section.model') }))}
+                        </button>
+                    </p>
+                )}
+
                 <div className="memory-dashboard-body">
+                    {storeError && (
+                        <div className="mem-empty" role="alert">
+                            <div className="mem-empty-icon"><AlertTriangle size={32} /></div>
+                            <p>{storeError.unknown ? t('mem.store.unknown') : t('mem.store.loadFailed', { error: storeError.text })}</p>
+                            <button className="btn-secondary" onClick={loadAll} style={{ marginTop: 12 }}>
+                                <RefreshCw size={14} /> {t('mem.retry')}
+                            </button>
+                        </div>
+                    )}
+                    {!store && !storeError && (
+                        <div className="mem-loading">
+                            <div className="mem-spinner" />
+                            {t('mem.loadingData')}
+                        </div>
+                    )}
+                    {store && <>
                     {activeTab === 'about' && (
                         <MemoryDashboardAboutYou
+                            key={store.agent}
+                            agent={store.agent}
+                            supports={store.supports}
                             memoryEnabled={memoryEnabled}
                             reloadKey={aboutReloadKey}
                             onChanged={refreshAdvancedViews}
@@ -1342,6 +1425,9 @@ export function MemoryDashboard() {
                         />
                     )}
 
+                    {activeTab === 'advanced' && !canAdvanced && (
+                        <p className="mem-store-only" role="note">{t('mem.store.pythonOnly.advanced', { name: NATIVE_AGENT })}</p>
+                    )}
                     {activeTab === 'advanced' && (<>
                     {loading && !stats ? (
                         <div className="mem-loading">
@@ -1358,7 +1444,7 @@ export function MemoryDashboard() {
                         </div>
                     ) : (
                         <>
-                            {!memoryEnabled && (
+                            {!memoryEnabled && canAdvanced && (
                                 <div className="mem-empty-state" style={{ margin: '40px 0' }}>
                                     <div className="mem-empty-icon" style={{ opacity: 0.5 }}>
                                         <Shield size={32} />
@@ -1367,7 +1453,7 @@ export function MemoryDashboard() {
                                 </div>
                             )}
 
-                            {memoryEnabled && <>
+                            {memoryEnabled && canAdvanced && <>
                             {stats?.embedding_error && (
                                 <div className="mem-advanced-error" role="alert">
                                     <AlertTriangle size={14} /> <bdi>{stats.embedding_error}</bdi>
@@ -2311,6 +2397,7 @@ export function MemoryDashboard() {
                                     </>
                                     );
                                 })()}
+                                {canAdvanced && <>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
                                         <span className="mem-setting-label">{t('mem.settings.mcp')}</span>
@@ -2472,6 +2559,7 @@ export function MemoryDashboard() {
                                         </button>
                                     )}
                                 </div>
+                                </>}
                             </div>
 
                             {/* DB size footer */}
@@ -2498,7 +2586,10 @@ export function MemoryDashboard() {
                     </>)}
 
                     {/* ── Profile Setup Tab ──────────────────────────── */}
-                    {activeTab === 'profile' && (
+                    {activeTab === 'profile' && !store.supports.profile && (
+                        <p className="mem-store-only" role="note">{t('mem.store.pythonOnly.profile', { name: NATIVE_AGENT })}</p>
+                    )}
+                    {activeTab === 'profile' && store.supports.profile && (
                         <div className="mem-profile-grid">
                             <p className="mem-tab-intro">{t('mem.profile.intro')}</p>
                             {/* Card A: System Discovery */}
@@ -2706,9 +2797,12 @@ export function MemoryDashboard() {
                     )}
 
                     {/* ── Goals Tab ──────────────────────────────────────── */}
-                    {activeTab === 'goals' && (
+                    {activeTab === 'goals' && !store.supports.goals && (
+                        <p className="mem-store-only" role="note">{t('mem.store.pythonOnly.goals', { name: NATIVE_AGENT })}</p>
+                    )}
+                    {activeTab === 'goals' && store.supports.goals && (
                         <div className="mem-goals-tab">
-                            <p className="mem-tab-intro">{t('mem.goals.intro')}</p>
+                            <p className="mem-tab-intro">{t('mem.goals.intro', { name: ref('chat.title.goals') })}</p>
                             {goalStoreError && (goalStoreDamaged ? (
                                 <div className="mem-advanced-error" role="alert">
                                     <AlertTriangle size={14} /> {t('mem.goals.storeDamaged')}{' '}
@@ -2905,6 +2999,7 @@ export function MemoryDashboard() {
                             )}
                         </div>
                     )}
+                    </>}
                 </div>
 
             {/* Toast container */}

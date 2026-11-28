@@ -9,7 +9,8 @@
 // with vector ranking when an embedding model is configured. Without one it is
 // keyword-only, and every result says which mode produced it.
 //
-// PDFs are read with `pdftotext -layout` (poppler), whose form feeds give page
+// PDFs are read with `pdftotext -layout` (poppler), or on a Mac without it by the system's
+// PDFKit; form feeds give page
 // numbers; .docx with the zip's document.xml. Other formats go through
 // gaia::extractFile (plain text, Markdown, source) or registerExtractor().
 
@@ -45,6 +46,14 @@ struct GAIA_API DocumentHit {
     double score = 0;  // fused reciprocal-rank score, higher is better
 };
 
+/// A document needs a program this PC lacks. what() says how to get it, or what to use instead.
+struct GAIA_API MissingDocumentReader : std::runtime_error {
+    MissingDocumentReader(const std::string& path, std::string program);
+    /// What failed and what the user can do, without the note what() adds for the model.
+    static std::string remedy(const std::string& file, const std::string& program);
+    std::string program;
+};
+
 class GAIA_API DocumentIndex {
 public:
     /// @param embed  Vector embedder, or empty for keyword-only retrieval.
@@ -54,6 +63,10 @@ public:
 
     /// Split a file into page-tagged text. Throws with the reason a file can't be read.
     static std::vector<std::pair<int, std::string>> extractPages(const std::string& path);
+
+    /// A PDF page's text with each run of unreadable glyphs (U+FFFD, e.g. a
+    /// table's dot leaders) and stray control characters made one space.
+    static std::string tidyPdfText(const std::string& text);
 
     /// Index (or re-index) a file. Returns the number of chunks added.
     size_t indexFile(const std::string& path);

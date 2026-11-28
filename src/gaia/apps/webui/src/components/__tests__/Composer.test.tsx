@@ -151,6 +151,16 @@ describe('Composer with a recording', () => {
 });
 
 describe('Composer', () => {
+    it('follows the page direction while empty, so an Arabic placeholder starts at the right, and the text once typed', () => {
+        render(<Harness />);
+        const box = screen.getByRole('textbox', { name: 'Message' });
+        expect(box).not.toHaveAttribute('dir');
+        fireEvent.change(box, { target: { value: 'hello' } });
+        expect(box).toHaveAttribute('dir', 'auto');
+        fireEvent.change(box, { target: { value: '' } });
+        expect(box).not.toHaveAttribute('dir');
+    });
+
     it('sends on Enter', () => {
         const onSubmit = vi.fn();
         render(<Harness initial="hello" onSubmit={onSubmit} />);

@@ -442,6 +442,15 @@ describe('ContextMeter entry point', () => {
             await screen.findByText('tokenizer exploded');
         });
 
+        it('says in Arabic why Fast and light has no measurement', async () => {
+            mockedApi.getContextUsage.mockResolvedValue({
+                available: false,
+                reason: "Not available yet: gaiacpp doesn't report what fills its context.",
+            });
+            render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+            await waitFor(() => expect(text(document.body)).toContain('غير متاح بعد: «سريع وخفيف» لا يذكر ما يملأ سياقه.'));
+        });
+
         it('translates the meter and its popover, keeping the counts left to right', () => {
             render(<ContextMeter usage={full({ turns_hidden: 3 })} sessionId="s1" />);
             const meter = screen.getByRole('button', { name: /السياق ممتلئ بنسبة 61%/ });

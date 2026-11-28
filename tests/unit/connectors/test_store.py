@@ -188,8 +188,27 @@ class TestLargeBlobChunking:
         assert blob["refresh_token"] == big_token
 
     def test_large_blob_is_in_vault_and_mirrored_as_legacy_chunks(self):
+        import json as _json
+
         from gaia.connectors import vault
         from gaia.connectors.store import _kr_legacy_get
+
+        username = _connection_username("microsoft", "default")
+        keyring.set_password(
+            SERVICE_NAME,
+            username,
+            _json.dumps(
+                {
+                    "account_email": "a@example.com",
+                    "client_id_hash": "h",
+                    "connected_at": 1.0,
+                    "refresh_token": "old",
+                    "scopes": ["s1"],
+                }
+            ),
+        )
+        # Reading migrates it, which is what makes later saves mirror it.
+        assert load_connection("microsoft", current_client_id_hash="h")
 
         big_token = "R" * (_CHUNK_CHARS * 2)
         save_connection(
@@ -199,7 +218,6 @@ class TestLargeBlobChunking:
             scopes=["s1"],
             client_id_hash="h",
         )
-        username = _connection_username("microsoft", "default")
         assert keyring.get_password(SERVICE_NAME, vault.MASTER_KEY_USERNAME) is not None
         assert vault.vault_path().exists()
         # Transition release: an older build still reads the chunked legacy copy.
@@ -222,17 +240,28 @@ class TestLargeBlobChunking:
         assert load_connection("microsoft", current_client_id_hash="h") is None
 
     def test_overwrite_sweeps_legacy_chunk_slots(self):
-        # Overwriting a connection that previously had legacy chunked Keychain
+        # Overwriting a migrated connection that had legacy chunked Keychain
         # slots replaces the legacy copy with the current value and sweeps the
         # stale chunk slots.
+        import json as _json
+
+        from gaia.connectors.store import _kr_legacy_set
+
         username = _connection_username("microsoft", "default")
-        keyring.set_password(SERVICE_NAME, username, f"{_CHUNK_SENTINEL}2:00000000")
-        keyring.set_password(
-            SERVICE_NAME, _chunk_username(username, 0), "R" * _CHUNK_CHARS
+        _kr_legacy_set(
+            username,
+            _json.dumps(
+                {
+                    "account_email": "a@example.com",
+                    "client_id_hash": "h",
+                    "connected_at": 1.0,
+                    "refresh_token": "R" * (_CHUNK_CHARS * 2),
+                    "scopes": ["s1"],
+                }
+            ),
         )
-        keyring.set_password(
-            SERVICE_NAME, _chunk_username(username, 1), "R" * _CHUNK_CHARS
-        )
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 1))
+        assert load_connection("microsoft", current_client_id_hash="h")
         save_connection(
             provider="microsoft",
             account_email="a@example.com",
@@ -834,7 +863,15 @@ class TestMacOSKeychainNulTruncation:
             scopes=["s1"],
             client_id_hash="h",
         )
-        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+        assert (
+            load_connection("microsoft", current_client_id_hash="h")["refresh_token"]
+            == "fresh"
+        )
+        # An unreadable legacy item was never migrated, so the save leaves it
+        # alone rather than writing old-style items.
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) == (
+            "stale"
+        )
 
 
 def test_manifest_from_an_earlier_release_still_reads_where_nul_survives():
