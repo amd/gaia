@@ -128,7 +128,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     onKeyDown={(e) => {
-                        if (e.key !== 'Escape' || !(preview || url)) return;
+                        if (e.key !== 'Escape' || busy !== null || !(preview || url)) return;
                         e.preventDefault();
                         if (preview) setPreview(null); else setUrl('');
                     }}
