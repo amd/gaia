@@ -2523,13 +2523,13 @@ TEST_F(GaiacppSidecar, InvalidWorkingDirectoryIsRejectedAndDoesNotPoisonSession)
 
 TEST_F(GaiacppSidecar, IndexDocumentsReportsErrorPartialAndOkWithPlainSummary) {
     fs::create_directories(root_ / "home" / "chat" / "uploads");
-    const fs::path xlsx = root_ / "home" / "chat" / "uploads" / "budget_sheet.xlsx";
-    const fs::path pptx = root_ / "home" / "chat" / "uploads" / "pitch_deck.pptx";
+    const fs::path xls = root_ / "home" / "chat" / "uploads" / "legacy_budget.xls";
+    const fs::path ppt = root_ / "home" / "chat" / "uploads" / "legacy_deck.ppt";
     const fs::path memo = root_ / "home" / "chat" / "uploads" / "memo.txt";
     {
-        const std::string fakeZip("PK\x03\x04\x00\x00binary", 12);
-        std::ofstream(xlsx, std::ios::binary).write(fakeZip.data(), static_cast<std::streamsize>(fakeZip.size()));
-        std::ofstream(pptx, std::ios::binary).write(fakeZip.data(), static_cast<std::streamsize>(fakeZip.size()));
+        const std::string ole2("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1" "binary", 14);
+        std::ofstream(xls, std::ios::binary).write(ole2.data(), static_cast<std::streamsize>(ole2.size()));
+        std::ofstream(ppt, std::ios::binary).write(ole2.data(), static_cast<std::streamsize>(ole2.size()));
         std::ofstream(memo) << "Quarterly budget cap is $48,250.";
     }
     mock().pushResponse(answerReply("Unsupported."));
@@ -2541,7 +2541,7 @@ TEST_F(GaiacppSidecar, IndexDocumentsReportsErrorPartialAndOkWithPlainSummary) {
     {
         Turn t(port_, queryBody("run-idx-err", "check files",
                                 {{"session_id", "chat-idx-err"},
-                                 {"documents", json::array({xlsx.string(), pptx.string()})},
+                                 {"documents", json::array({xls.string(), ppt.string()})},
                                  {"allowed_paths", json::array({work_.string()})}}));
         ASSERT_TRUE(t.waitDone()) << t.describe();
         auto events = t.events();
@@ -2555,8 +2555,8 @@ TEST_F(GaiacppSidecar, IndexDocumentsReportsErrorPartialAndOkWithPlainSummary) {
         EXPECT_TRUE(data["indexed"].is_array() && data["indexed"].empty()) << data.dump();
         ASSERT_TRUE(data["failed"].is_array() && data["failed"].size() == 2u) << data.dump();
         const std::string summary = data.value("summary", "");
-        EXPECT_NE(summary.find("budget_sheet.xlsx"), std::string::npos) << summary;
-        EXPECT_NE(summary.find("pitch_deck.pptx"), std::string::npos) << summary;
+        EXPECT_NE(summary.find("legacy_budget.xls"), std::string::npos) << summary;
+        EXPECT_NE(summary.find("legacy_deck.ppt"), std::string::npos) << summary;
         EXPECT_EQ(summary.find("registerExtractor"), std::string::npos) << summary;
     }
 
@@ -2564,7 +2564,7 @@ TEST_F(GaiacppSidecar, IndexDocumentsReportsErrorPartialAndOkWithPlainSummary) {
     {
         Turn t(port_, queryBody("run-idx-partial", "check mixed",
                                 {{"session_id", "chat-idx-partial"},
-                                 {"documents", json::array({memo.string(), xlsx.string()})},
+                                 {"documents", json::array({memo.string(), xls.string()})},
                                  {"allowed_paths", json::array({work_.string()})}}));
         ASSERT_TRUE(t.waitDone()) << t.describe();
         auto events = t.events();
@@ -2578,7 +2578,7 @@ TEST_F(GaiacppSidecar, IndexDocumentsReportsErrorPartialAndOkWithPlainSummary) {
         ASSERT_EQ(data["indexed"].size(), 1u) << data.dump();
         ASSERT_EQ(data["failed"].size(), 1u) << data.dump();
         EXPECT_NE(data.value("summary", "").find("memo.txt"), std::string::npos) << data.dump();
-        EXPECT_NE(data.value("summary", "").find("budget_sheet.xlsx"), std::string::npos) << data.dump();
+        EXPECT_NE(data.value("summary", "").find("legacy_budget.xls"), std::string::npos) << data.dump();
     }
 
     // Supported only -> status: "ok", no has_errors.
@@ -2600,6 +2600,99 @@ TEST_F(GaiacppSidecar, IndexDocumentsReportsErrorPartialAndOkWithPlainSummary) {
         EXPECT_TRUE(data["failed"].is_array() && data["failed"].empty()) << data.dump();
         EXPECT_NE(data.value("summary", "").find("memo.txt"), std::string::npos) << data.dump();
     }
+}
+
+TEST_F(GaiacppSidecar, AttachingValidXlsxAndPptxIndexesAndAnswersViaQueryDocuments) {
+    auto crc32 = [](const std::string& data) {
+        std::uint32_t crc = 0xFFFFFFFFu;
+        for (unsigned char b : data) {
+            crc ^= b;
+            for (int i = 0; i < 8; ++i) crc = (crc & 1u) ? (crc >> 1) ^ 0xEDB88320u : (crc >> 1);
+        }
+        return ~crc;
+    };
+    auto storedZip = [&](const std::vector<std::pair<std::string, std::string>>& entries) {
+        auto put16 = [](std::string& o, std::uint16_t v) {
+            o.push_back(static_cast<char>(v & 0xFFu));
+            o.push_back(static_cast<char>((v >> 8) & 0xFFu));
+        };
+        auto put32 = [](std::string& o, std::uint32_t v) {
+            for (int i = 0; i < 4; ++i) o.push_back(static_cast<char>((v >> (i * 8)) & 0xFFu));
+        };
+        std::string body, central;
+        for (const auto& [name, data] : entries) {
+            const std::uint32_t off = static_cast<std::uint32_t>(body.size());
+            const std::uint32_t crc = crc32(data);
+            const std::uint32_t sz = static_cast<std::uint32_t>(data.size());
+            const std::uint16_t nl = static_cast<std::uint16_t>(name.size());
+            put32(body, 0x04034B50u); put16(body, 20); put16(body, 0); put16(body, 0);
+            put16(body, 0); put16(body, 0x5C21); put32(body, crc); put32(body, sz); put32(body, sz);
+            put16(body, nl); put16(body, 0); body += name; body += data;
+            put32(central, 0x02014B50u); put16(central, 20); put16(central, 20); put16(central, 0);
+            put16(central, 0); put16(central, 0); put16(central, 0x5C21); put32(central, crc);
+            put32(central, sz); put32(central, sz); put16(central, nl); put16(central, 0);
+            put16(central, 0); put16(central, 0); put16(central, 0); put32(central, 0);
+            put32(central, off); central += name;
+        }
+        std::string eocd;
+        put32(eocd, 0x06054B50u); put16(eocd, 0); put16(eocd, 0);
+        put16(eocd, static_cast<std::uint16_t>(entries.size()));
+        put16(eocd, static_cast<std::uint16_t>(entries.size()));
+        put32(eocd, static_cast<std::uint32_t>(central.size()));
+        put32(eocd, static_cast<std::uint32_t>(body.size()));
+        put16(eocd, 0);
+        return body + central + eocd;
+    };
+
+    fs::create_directories(root_ / "home" / "chat" / "uploads");
+    const fs::path xlsx = root_ / "home" / "chat" / "uploads" / "budget_sheet.xlsx";
+    const fs::path pptx = root_ / "home" / "chat" / "uploads" / "pitch_deck.pptx";
+    {
+        const std::string xBytes = storedZip({
+            {"xl/workbook.xml",
+             R"(<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="FY26 Budget" sheetId="1" r:id="rId1"/></sheets></workbook>)"},
+            {"xl/_rels/workbook.xml.rels",
+             R"(<?xml version="1.0"?><Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>)"},
+            {"xl/worksheets/sheet1.xml",
+             R"(<?xml version="1.0"?><worksheet><sheetData><row><c t="inlineStr"><is><t>Department</t></is></c><c t="inlineStr"><is><t>Budget</t></is></c></row><row><c t="inlineStr"><is><t>Engineering</t></is></c><c><v>275000</v></c></row></sheetData></worksheet>)"},
+        });
+        const std::string pBytes = storedZip({
+            {"ppt/slides/slide1.xml",
+             R"(<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Series A Target: $12M</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>)"},
+        });
+        std::ofstream(xlsx, std::ios::binary).write(xBytes.data(), static_cast<std::streamsize>(xBytes.size()));
+        std::ofstream(pptx, std::ios::binary).write(pBytes.data(), static_cast<std::streamsize>(pBytes.size()));
+    }
+
+    mock().pushResponse(toolReply("query_documents", {{"query", "Engineering budget Series A target"}}));
+    mock().pushResponse(answerReply("Engineering budget is 275000 and Series A target is $12M on Slide 1."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-office-ok", "What is the Engineering budget and Series A target?",
+                            {{"session_id", "chat-office-ok"},
+                             {"documents", json::array({xlsx.string(), pptx.string()})},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+
+    auto idxRes = std::find_if(events.begin(), events.end(), [](const json& e) {
+        return e.value("type", "") == "tool_result" && e.value("tool", "") == "index_documents";
+    });
+    ASSERT_NE(idxRes, events.end()) << t.describe();
+    const json& data = (*idxRes)["data"];
+    EXPECT_EQ(data.value("status", ""), "ok") << data.dump();
+    EXPECT_FALSE(data.value("has_errors", false)) << data.dump();
+    ASSERT_EQ(data["indexed"].size(), 2u) << data.dump();
+    EXPECT_TRUE(data["failed"].is_array() && data["failed"].empty()) << data.dump();
+
+    auto qRes = std::find_if(events.begin(), events.end(), [](const json& e) {
+        return e.value("type", "") == "tool_result" && e.value("tool", "") == "query_documents";
+    });
+    ASSERT_NE(qRes, events.end()) << t.describe();
+    const std::string qDump = (*qRes)["data"].dump();
+    EXPECT_NE(qDump.find("275000"), std::string::npos) << qDump;
+    EXPECT_NE(qDump.find("Slide 1"), std::string::npos) << qDump;
 }
 
 TEST_F(GaiacppSidecar, DetachingADocumentRemovesItFromTheIndexAndWorkspace) {

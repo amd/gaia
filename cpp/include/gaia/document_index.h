@@ -10,9 +10,9 @@
 // keyword-only, and every result says which mode produced it.
 //
 // PDFs are read with `pdftotext -layout` (poppler), or on a Mac without it by the system's
-// PDFKit; form feeds give page
-// numbers; .docx with the zip's document.xml. Other formats go through
-// gaia::extractFile (plain text, Markdown, source) or registerExtractor().
+// PDFKit; form feeds give page numbers. Office Open XML files (.docx, .xlsx, .pptx) are read
+// directly from their zip XML parts, with slide numbers for .pptx and sheet headers for .xlsx.
+// Other formats go through gaia::extractFile (plain text, Markdown, source) or registerExtractor().
 
 #pragma once
 
