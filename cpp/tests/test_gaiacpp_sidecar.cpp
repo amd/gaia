@@ -2444,6 +2444,114 @@ TEST_F(GaiacppSidecar, IndexDocumentsReportsErrorPartialAndOkWithPlainSummary) {
     }
 }
 
+TEST_F(GaiacppSidecar, DetachingADocumentRemovesItFromTheIndexAndWorkspace) {
+    const fs::path docA = root_ / "outside" / "report_a.txt";
+    const fs::path docB = root_ / "outside" / "report_b.txt";
+    std::ofstream(docA) << "Battery Replacement Cost: $18,200\n";
+    std::ofstream(docB) << "Solar Inverter Efficiency: 97.4%\n";
+
+    // Turn 1: both docs attached (also listed in allowed_paths, as the Agent UI sends) — query finds docA.
+    mock().pushResponse(toolReply("query_documents", {{"query", "Battery Replacement Cost"}}));
+    mock().pushResponse(answerReply("Found A."));
+    // Turn 2: detach docA (keep docB) — docA is gone from index & workspace, docB stays.
+    mock().pushResponse(toolReply("list_indexed_documents", json::object()));
+    mock().pushResponse(toolReply("query_documents", {{"query", "Battery Replacement Cost"}}));
+    mock().pushResponse(toolReply("query_documents", {{"query", "Solar Inverter Efficiency"}}));
+    mock().pushResponse(toolReply("index_document", {{"path", docA.string()}}));
+    mock().pushResponse(toolReply("file_read", {{"path", docA.string()}}));
+    mock().pushResponse(answerReply("Checked after partial detach."));
+    // Turn 3: detach all documents ([]) — index is empty.
+    mock().pushResponse(toolReply("list_indexed_documents", json::object()));
+    mock().pushResponse(toolReply("query_documents", {{"query", "Solar Inverter Efficiency"}}));
+    mock().pushResponse(answerReply("Checked after full detach."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    {
+        Turn t(port_, queryBody("run-det-1", "check A",
+                                {{"session_id", "chat-detach"},
+                                 {"allowed_paths", json::array({work_.string(), docA.string(), docB.string()})},
+                                 {"documents", json::array({docA.string(), docB.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_NE(t.raw().find("18,200"), std::string::npos) << t.describe();
+    }
+
+    {
+        Turn t(port_, queryBody("run-det-2", "check after detaching A",
+                                {{"session_id", "chat-detach"},
+                                 {"allowed_paths", json::array({work_.string(), docB.string()})},
+                                 {"documents", json::array({docB.string()})}}));
+        auto card = t.waitEvent(isFolderCard);
+        ASSERT_TRUE(card) << "detached file must require a new access card: " << t.describe();
+        auto deny = decide("run-det-2", "deny", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(deny);
+        ASSERT_EQ(deny->status, 200) << deny->body;
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+
+        const int listIdx = indexOf(events, "tool_result", 0,
+                                    [](const json& e) { return e.value("tool", "") == "list_indexed_documents"; });
+        ASSERT_GE(listIdx, 0) << t.describe();
+        const json docs = events[listIdx]["data"]["documents"];
+        ASSERT_EQ(docs.size(), 1u) << events[listIdx].dump();
+        EXPECT_NE(docs[0]["file"].get<std::string>().find("report_b.txt"), std::string::npos) << docs.dump();
+        const int reindexIdx = indexOf(events, "tool_result", 0,
+                                       [](const json& e) { return e.value("tool", "") == "index_document"; });
+        ASSERT_GE(reindexIdx, 0) << t.describe();
+        EXPECT_EQ(events[reindexIdx]["data"].value("status", ""), "error") << events[reindexIdx].dump();
+        EXPECT_EQ(t.raw().find("18,200"), std::string::npos) << "detached docA must not leak: " << t.describe();
+        EXPECT_NE(t.raw().find("97.4%"), std::string::npos) << "remaining docB must stay queryable: " << t.describe();
+    }
+
+    {
+        Turn t(port_, queryBody("run-det-3", "check after detaching all",
+                                {{"session_id", "chat-detach"},
+                                 {"allowed_paths", json::array({work_.string()})},
+                                 {"documents", json::array()}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+        const int listIdx = indexOf(events, "tool_result", 0,
+                                    [](const json& e) { return e.value("tool", "") == "list_indexed_documents"; });
+        ASSERT_GE(listIdx, 0) << t.describe();
+        EXPECT_TRUE(events[listIdx]["data"]["documents"].empty()) << events[listIdx].dump();
+        EXPECT_EQ(t.raw().find("97.4%"), std::string::npos) << "detached docB must not leak: " << t.describe();
+    }
+}
+
+TEST_F(GaiacppSidecar, DetachingTheOnlyAttachedFileDoesNotOpenHome) {
+    const fs::path doc = root_ / "outside" / "only.txt";
+    std::ofstream(doc) << "Attached only 5512";
+    const fs::path homeFile = root_ / "home" / "private.txt";
+    std::ofstream(homeFile) << "home private 8830";
+
+    mock().pushResponse(answerReply("Attached."));
+    mock().pushResponse(toolReply("file_read", {{"path", homeFile.string()}}));
+    mock().pushResponse(answerReply("Checked home after detach."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    {
+        Turn t(port_, queryBody("run-only-1", "attach it",
+                                {{"session_id", "chat-only-doc"}, {"documents", json::array({doc.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+    }
+
+    {
+        Turn t(port_, queryBody("run-only-2", "read my home file",
+                                {{"session_id", "chat-only-doc"}, {"documents", json::array()}}));
+        auto card = t.waitEvent(isFolderCard);
+        ASSERT_TRUE(card) << "a chat that lost its only file must not fall back to home: " << t.describe();
+        auto deny = decide("run-only-2", "deny", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(deny);
+        ASSERT_EQ(deny->status, 200) << deny->body;
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_EQ(t.raw().find("8830"), std::string::npos) << "home file must not leak: " << t.describe();
+    }
+}
+
 TEST_F(GaiacppSidecar, AnswerCheckRetractsStreamedDraftWithoutLeakingReviewPrompt) {
     auto sseChunks = [](const std::vector<std::string>& pieces) {
         std::string out;
