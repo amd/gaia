@@ -380,9 +380,9 @@ TEST(NativeToolCallsTest, KnownSamplingFollowsTheModeTheModelRunsIn) {
     const auto qwen36 = knownSampling("user.qwen3.6-35b-a3b-gguf");
     ASSERT_TRUE(qwen36.has_value());
     EXPECT_DOUBLE_EQ((*qwen36)["temperature"].get<double>(), 0.6) << "thinking profile";
-    const auto small = knownSampling("Qwen3.5-2B-GGUF");
-    ASSERT_TRUE(small.has_value());
-    EXPECT_DOUBLE_EQ((*small)["temperature"].get<double>(), 0.7) << "thinking is off: the non-thinking profile";
+    const auto qwen35 = knownSampling("Qwen3.5-2B-GGUF");
+    ASSERT_TRUE(qwen35.has_value());
+    EXPECT_DOUBLE_EQ((*qwen35)["temperature"].get<double>(), 0.7) << "thinking is off: the non-thinking profile";
     EXPECT_FALSE(knownSampling("some-unknown-model").has_value());
 }
 
