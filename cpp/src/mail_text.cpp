@@ -17,13 +17,14 @@ struct CpRange {
     uint32_t lo;
     uint32_t hi;
 };
+// Text is an offset into the table's NUL-separated pool (k<Table>Text).
 struct CpText {
     uint32_t cp;
-    const char* text;
+    uint32_t at;
 };
 struct NameText {
-    const char* name;
-    const char* text;
+    uint32_t name;
+    uint32_t text;
 };
 
 #include "mail_text_tables.inc"
@@ -36,20 +37,20 @@ bool inRanges(const CpRange (&table)[N], char32_t cp) {
     return it != table && cp <= (it - 1)->hi;
 }
 
-template <size_t N>
-const char* lookup(const CpText (&table)[N], char32_t cp) {
+template <size_t N, size_t P>
+const char* lookup(const CpText (&table)[N], const char (&pool)[P], char32_t cp) {
     const auto* end = table + N;
     const auto* it = std::lower_bound(table, end, static_cast<uint32_t>(cp),
                                       [](const CpText& e, uint32_t value) { return e.cp < value; });
-    return it != end && it->cp == cp ? it->text : nullptr;
+    return it != end && it->cp == cp ? pool + it->at : nullptr;
 }
 
 const char* html5Entity(const std::string& name) {
     const auto* end = kHtml5 + sizeof(kHtml5) / sizeof(kHtml5[0]);
     const auto* it = std::lower_bound(kHtml5, end, name, [](const NameText& e, const std::string& value) {
-        return std::strcmp(e.name, value.c_str()) < 0;
+        return std::strcmp(kHtml5Text + e.name, value.c_str()) < 0;
     });
-    return it != end && name == it->name ? it->text : nullptr;
+    return it != end && name == kHtml5Text + it->name ? kHtml5Text + it->text : nullptr;
 }
 
 bool contains(const char* set, char c) { return c != '\0' && std::strchr(set, c) != nullptr; }
@@ -145,7 +146,7 @@ bool sameIgnoreCase(char32_t cp, char pattern) {
     const char p = static_cast<char>(pattern >= 'A' && pattern <= 'Z' ? pattern - 'A' + 'a' : pattern);
     if (cp == static_cast<unsigned char>(p)) return true;
     if (p < 'a' || p > 'z') return false;
-    const char* folded = lookup(kIgnoreCase, cp);
+    const char* folded = lookup(kIgnoreCase, kIgnoreCaseText, cp);
     return folded != nullptr && folded[0] == p;
 }
 
@@ -191,7 +192,7 @@ std::string lower(const std::string& text) {
             out += encode(final ? 0x3C2 : 0x3C3);
             continue;
         }
-        const char* lowered = lookup(kLower, cp);
+        const char* lowered = lookup(kLower, kLowerText, cp);
         out += lowered ? std::string(lowered) : encode(cp);
     }
     return out;
@@ -243,7 +244,7 @@ bool asciiHex(char32_t c) { return asciiDigit(c) || (c >= 'a' && c <= 'f') || (c
 
 std::string numericCharref(uint64_t num, bool huge) {
     if (!huge && num <= 0xFFFF) {
-        if (const char* fixed = lookup(kInvalidCharrefs, static_cast<char32_t>(num))) return fixed;
+        if (const char* fixed = lookup(kInvalidCharrefs, kInvalidCharrefsText, static_cast<char32_t>(num))) return fixed;
     }
     if (huge || (num >= 0xD800 && num <= 0xDFFF) || num > 0x10FFFF) return encode(0xFFFD);
     if (inRanges(kInvalidCodepoints, static_cast<char32_t>(num))) return "";
@@ -685,7 +686,7 @@ Address parseaddr(const std::string& field) {
 // ---- untrusted_text ----
 
 const char* markerLetters(char32_t cp) {
-    const char* letters = lookup(kMarkerLetters, cp);
+    const char* letters = lookup(kMarkerLetters, kMarkerLettersText, cp);
     return letters ? letters : "";
 }
 
