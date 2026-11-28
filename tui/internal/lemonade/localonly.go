@@ -44,7 +44,11 @@ func PolicyPathFromLookup(lookup func(string) (string, bool), homeDir func() (st
 	if lookup != nil {
 		if raw, ok := lookup("GAIA_POLICY_FILE"); ok {
 			if file := strings.TrimSpace(raw); file != "" {
-				return gaiahome.ExpandUser(file, homeDir)
+				// Python wraps this in Path(), which normalizes separators.
+				if expanded := gaiahome.ExpandUser(file, homeDir); expanded != file {
+					return filepath.Clean(expanded)
+				}
+				return file
 			}
 		}
 		for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {

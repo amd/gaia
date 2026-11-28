@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -200,6 +201,27 @@ func TestPolicyPathExpandsTheHomeDirectory(t *testing.T) {
 	got = PolicyPathFrom(func(k string) string { return env[k] }, home)
 	if want := filepath.Join("~", "sub", "policy.json"); got != want {
 		t.Errorf("tilde in var: got %q, want %q", got, want)
+	}
+}
+
+func TestPolicyFileTildeIsCleanedAndUnresolvedHomeKeptVerbatim(t *testing.T) {
+	home := func() (string, error) { return "/home/u", nil }
+	env := map[string]string{"GAIA_POLICY_FILE": "~"}
+	if got, want := PolicyPathFrom(func(k string) string { return env[k] }, home), filepath.Clean("/home/u"); got != want {
+		t.Errorf("bare ~: got %q, want %q", got, want)
+	}
+	env = map[string]string{"GAIA_POLICY_FILE": "~//nested/./policy.json"}
+	if got, want := PolicyPathFrom(func(k string) string { return env[k] }, home), filepath.Join("/home/u", "nested", "policy.json"); got != want {
+		t.Errorf("unclean tilde path: got %q, want %q", got, want)
+	}
+	noHome := func() (string, error) { return "", errors.New("no home") }
+	env = map[string]string{"GAIA_POLICY_FILE": "~/custom/policy.json"}
+	if got := PolicyPathFrom(func(k string) string { return env[k] }, noHome); got != "~/custom/policy.json" {
+		t.Errorf("unresolved home must leave the value as written, got %q", got)
+	}
+	env = map[string]string{"GAIA_POLICY_FILE": "./rel/../policy.json"}
+	if got := PolicyPathFrom(func(k string) string { return env[k] }, home); got != "./rel/../policy.json" {
+		t.Errorf("a path without ~ must pass through untouched, got %q", got)
 	}
 }
 
