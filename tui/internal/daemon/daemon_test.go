@@ -598,6 +598,65 @@ func TestEnsureAgentSendsCallerDevCheckout(t *testing.T) {
 	}
 }
 
+// chooseHarness stands in for the saved flagship_agent and runs the test from
+// a folder outside any git checkout.
+func chooseHarness(t *testing.T, harness string) {
+	t.Helper()
+	prev := SavedFlagshipHarness
+	SavedFlagshipHarness = func() (string, error) { return harness, nil }
+	t.Cleanup(func() { SavedFlagshipHarness = prev })
+	outside := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(outside))
+	t.Chdir(outside)
+}
+
+func TestEnsureAgentDevModeNeedsNoCheckoutForGaiacpp(t *testing.T) {
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "dev")
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	chooseHarness(t, "gaiacpp")
+
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia"); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
+		t.Fatalf("decode ensure request body: %v", err)
+	}
+	if body["mode"] != "dev" {
+		t.Fatalf("ensure request mode = %q, want dev", body["mode"])
+	}
+	if _, ok := body["dev_src_dir"]; ok {
+		t.Fatal("a gaiacpp ensure request must not carry dev_src_dir")
+	}
+}
+
+func TestEnsureAgentDevModeStillNeedsACheckoutForThePythonAgent(t *testing.T) {
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "dev")
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	chooseHarness(t, "gaiapy")
+
+	_, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia")
+	if err == nil || !strings.Contains(err.Error(), "git checkout root") {
+		t.Fatalf("EnsureAgent outside a checkout = %v, want the checkout-root error", err)
+	}
+}
+
+func TestEnsureAgentSurfacesAnUnreadableHarnessChoice(t *testing.T) {
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "dev")
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	prev := SavedFlagshipHarness
+	SavedFlagshipHarness = func() (string, error) { return "", fmt.Errorf("config.json is malformed") }
+	t.Cleanup(func() { SavedFlagshipHarness = prev })
+
+	_, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia")
+	if err == nil || !strings.Contains(err.Error(), "config.json is malformed") {
+		t.Fatalf("EnsureAgent = %v, want the config error", err)
+	}
+}
+
 func TestEnsureAgentSurfacesDaemonRefusal(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.writeInstance(nil)
