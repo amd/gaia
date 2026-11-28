@@ -128,24 +128,6 @@ TEST(GaiaAgentTest, ExistingFileInASubfolderIsAccepted) {
     EXPECT_EQ(mock.receivedBodies().size(), 1u);
 }
 
-TEST(GaiaAgentTest, AStoryIsAnsweredInChatWithoutAFile) {
-    Workdir w;
-    bench::MockLlmServer mock;
-    const std::string story =
-        "The Keeper of Thorn Point\n\nElias had kept the light for thirty-one years. Every evening he climbed "
-        "the one hundred and twelve steps, trimmed the wick and watched the beam sweep 19 miles out to sea.";
-    mock.pushResponse(answer(story));
-    GaiaAgent agent(cfgFor(mock), optionsFor(w));
-    json r = agent.processQuery("Write a 400-word story about a lighthouse keeper.");
-
-    // The story is the answer: it is not sent back for a file or for its figures.
-    EXPECT_EQ(r["result"], story);
-    ASSERT_EQ(mock.receivedBodies().size(), 1u);
-    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
-    EXPECT_NE(system.find("a story, poem, essay, letter or explanation) goes in your reply, not in a file"),
-              std::string::npos);
-}
-
 TEST(GaiaAgentTest, ToolsAreConfinedByDefault) {
     Workdir w;
     bench::MockLlmServer mock;
@@ -2541,4 +2523,112 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
         EXPECT_NE(r.value("error", "").find("internet is off"), std::string::npos) << c << ": " << r.dump();
     }
     EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
+}
+
+namespace {
+std::set<std::string> advertisedToolNames(const std::string& requestBody) {
+    std::set<std::string> names;
+    const json body = json::parse(requestBody);
+    if (!body.contains("tools") || !body["tools"].is_array()) return names;
+    for (const auto& t : body["tools"]) {
+        if (t.contains("function") && t["function"].contains("name")) {
+            names.insert(t["function"]["name"].get<std::string>());
+        }
+    }
+    return names;
+}
+
+std::string systemMessageText(const std::string& requestBody) {
+    const json body = json::parse(requestBody);
+    if (!body.contains("messages") || !body["messages"].is_array()) return "";
+    for (const auto& m : body["messages"]) {
+        if (m.value("role", "") == "system" && m.contains("content") && m["content"].is_string()) {
+            return m["content"].get<std::string>();
+        }
+    }
+    return "";
+}
+}  // namespace
+
+TEST(GaiaAgentTest, MemoryOffDisablesMemoryToolsAndNotesItInPrompt) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Memory is off for this chat."));
+    mock.pushResponse(answer("Memory is back on."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryOff = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Qwen3-30B-A3B-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("Remember that I live in Oslo, and tell me my favorite color.");
+    o.memoryOff->store(false);
+    agent.processQuery("Hello again.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+
+    const auto offTools = advertisedToolNames(bodies[0]);
+    for (const char* name : {"remember", "recall", "update_memory", "forget"}) {
+        EXPECT_EQ(offTools.count(name), 0u) << name << " should be disabled while memory is off";
+    }
+    EXPECT_NE(systemMessageText(bodies[0]).find("Memory is off for this chat"), std::string::npos);
+
+    const auto onTools = advertisedToolNames(bodies[1]);
+    for (const char* name : {"remember", "recall", "update_memory", "forget"}) {
+        EXPECT_EQ(onTools.count(name), 1u) << name << " should re-enable once memory turns back on";
+    }
+    EXPECT_EQ(systemMessageText(bodies[1]).find("Memory is off for this chat"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, PrivateChatDisablesMemoryWriteToolsWhileKeepingRecall) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("This chat is private."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryPrivate = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("Remember that I live in Oslo.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 1u);
+
+    const auto tools = advertisedToolNames(bodies[0]);
+    EXPECT_EQ(tools.count("recall"), 1u) << "private chat still allows recall";
+    for (const char* name : {"remember", "update_memory", "forget"}) {
+        EXPECT_EQ(tools.count(name), 0u) << name << " should be disabled in a private chat";
+    }
+    EXPECT_NE(systemMessageText(bodies[0]).find("This chat is private"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, ReenablingMemoryOnCompactModelKeepsCompactWithheldMemoryToolsOff) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Off."));
+    mock.pushResponse(answer("On."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryOff = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Gemma-4-E2B-it-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("First turn.");
+    o.memoryOff->store(false);
+    agent.processQuery("Second turn.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const auto onTools = advertisedToolNames(bodies[1]);
+    EXPECT_EQ(onTools.count("remember"), 1u);
+    EXPECT_EQ(onTools.count("recall"), 1u);
+    EXPECT_EQ(onTools.count("update_memory"), 0u);
+    EXPECT_EQ(onTools.count("forget"), 0u);
 }

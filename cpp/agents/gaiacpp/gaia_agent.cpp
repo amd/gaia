@@ -375,7 +375,7 @@ std::string GaiaAgent::getSystemPrompt() const {
 
 ## How to work
 1. Look before you answer. If the request names files or a folder, list and read them first. Never say a file or fact does not exist without checking.
-2. Use tools to do the work, not to describe it. A request to create, fix, convert or save a file is done only when the file exists on disk; write it with file_write or a program, then confirm it is there. Writing for the user to read (a story, poem, essay, letter or explanation) goes in your reply, not in a file, unless they ask for a file or name a place to save it.
+2. Use tools to do the work, not to describe it. A request to create, fix, convert or save something is done only when the file exists on disk; write it with file_write or a program, then confirm it is there.
 3. For formats you cannot read as text (PDF, Word, Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with pypdf/pdfplumber, python-docx, openpyxl/pandas or python-pptx, or pdftotext. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
 4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source. A sum the user states outright, with no file or data behind it (17 times 23), is not data work: answer it yourself, with no tool.
 5. Verify. After a change, re-read the file, run the test or the program, and look at the output.
@@ -440,7 +440,7 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
     if (memoryOff() && (reads.count(tool.name) || writes.count(tool.name))) {
         return refuse("Memory is off for this chat: nothing is read from or saved to it.");
     }
-    if (options_.memoryPrivate && options_.memoryPrivate->load() && writes.count(tool.name)) {
+    if (memoryPrivate() && writes.count(tool.name)) {
         return refuse("This chat is private: nothing from it is saved to memory.");
     }
     return std::nullopt;
@@ -642,6 +642,18 @@ void GaiaAgent::onTurnStart() {
         const bool offer = !compact || options_.maxHelpers > 0;
         if (toolRegistry().isEnabled("delegate_task") != offer) toolRegistry().setEnabled("delegate_task", offer);
     }
+    // Hide memory tools when the chat switch forbids them so the model does not call and fail them.
+    const bool memOff = memoryOff();
+    const bool memPrivate = memoryPrivate();
+    auto setToolEnabled = [this](const char* name, bool on) {
+        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != on) {
+            toolRegistry().setEnabled(name, on);
+        }
+    };
+    setToolEnabled("recall", !memOff);
+    setToolEnabled("remember", !memOff && !memPrivate);
+    setToolEnabled("update_memory", !compact && !memOff && !memPrivate);
+    setToolEnabled("forget", !compact && !memOff && !memPrivate);
     {
         std::lock_guard<std::mutex> lock(helperMu_);
         helperTotals_ = HelperTotals{};
@@ -706,6 +718,13 @@ std::string GaiaAgent::systemContext() const {
     if (options_.webOff) {
         out << "- Web access is off for this run. Do not search the web or fetch pages, repositories or "
                "answers through the shell or a script either. Installing a package the task needs is fine.\n";
+    }
+    if (memoryOff()) {
+        out << "- Memory is off for this chat: nothing is read from or saved to memory. Do not search "
+               "local files to substitute for memory; tell the user memory is off.\n";
+    } else if (memoryPrivate()) {
+        out << "- This chat is private: you may recall earlier memories, but nothing from this chat is "
+               "saved to memory.\n";
     }
     if (pythonCommand().empty()) {
         out << "- Python: none found on PATH. Don't plan around it; say so if a task needs it.\n";
