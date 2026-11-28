@@ -1840,6 +1840,13 @@ func (m *ChatModel) restoreToComposer(text string) {
 // "/clear" typed mid-turn still clears when it finally lands instead of being
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
+	query = normalizeCommand(query)
+	if why := m.nativeUnavailable(query); why != "" {
+		return m.refuseCommand(why)
+	}
+	if isQuitCommand(query) {
+		return m, tea.Quit
+	}
 	// `/update` takes a free-form version argument, so like /model it is
 	// dispatched before the exact-match switch.
 	if isUpdateCommand(query) {
@@ -2083,6 +2090,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		return m.handleAutomationsCommand(query)
 	}
 
+	if why := m.unrunnableCommand(query); why != "" {
+		return m.refuseCommand(why)
+	}
 	return m.sendQuery(m.withResearch(query))
 }
 
@@ -3692,7 +3702,7 @@ func (m ChatModel) agentIdentity() string {
 	}
 	if m.nativeAgent() {
 		// Two programs can answer as this agent; say which one is.
-		identity += " (" + catalog.NativeAgentBinary + " · Beta)"
+		identity += " (" + catalog.HarnessLabel(catalog.NativeAgentBinary) + " · Beta)"
 	}
 	return identity
 }

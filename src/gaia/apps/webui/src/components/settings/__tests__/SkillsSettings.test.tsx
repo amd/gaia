@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SkillsSettings } from '../SkillsSettings';
 import * as api from '../../../services/api';
@@ -72,7 +72,7 @@ describe('SkillsSettings', () => {
         const onUseSkill = vi.fn();
         mockedApi.listSkills.mockResolvedValue({
             skills: [
-                { ...skill('gaia-voice', 'Honesty floor'), always_on: true },
+                { ...skill('gaia-voice', 'Honesty floor', null, 'agent-bundled'), always_on: true },
                 { ...skill('gh-cli', 'Work with GitHub'), always_on: false },
             ],
             invalid: {},
@@ -262,5 +262,57 @@ describe('SkillsSettings', () => {
         const isolated = text.split('\u2068.claude/skills\u2069').length - 1;
         expect(raw).toBe(2);
         expect(isolated).toBe(raw);
+    });
+
+    describe('removing a skill you added', () => {
+        beforeEach(() => {
+            mockedApi.listSkills.mockResolvedValue({
+                skills: [
+                    skill('meal-planner', 'Plan dinners', null, 'user'),
+                    skill('web-research', 'Research', null, 'agent-bundled'),
+                    skill('old-helper', 'Imported', null, 'claude-import'),
+                ],
+                invalid: {},
+            });
+        });
+
+        it('offers Remove only on skills you added', async () => {
+            render(<SkillsSettings onUseSkill={vi.fn()} />);
+            await screen.findByText('meal-planner');
+            expect(screen.getAllByRole('button', { name: /^Remove / })).toHaveLength(1);
+            expect(screen.getByRole('button', { name: 'Remove meal-planner' })).toBeInTheDocument();
+        });
+
+        it('asks first, then removes it and refreshes the list', async () => {
+            mockedApi.removeSkill.mockResolvedValue({ removed: 'meal-planner' });
+            render(<SkillsSettings onUseSkill={vi.fn()} />);
+            fireEvent.click(await screen.findByRole('button', { name: 'Remove meal-planner' }));
+            const dialog = screen.getByRole('alertdialog');
+            expect(dialog).toHaveTextContent('Remove “meal-planner”?');
+            expect(mockedApi.removeSkill).not.toHaveBeenCalled();
+            mockedApi.listSkills.mockResolvedValue({ skills: [skill('web-research', 'Research', null, 'agent-bundled')], invalid: {} });
+            fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+            await waitFor(() => expect(screen.queryByText('meal-planner')).not.toBeInTheDocument());
+            expect(mockedApi.removeSkill).toHaveBeenCalledExactlyOnceWith('meal-planner');
+            expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        });
+
+        it('keeps the skill when you cancel', async () => {
+            render(<SkillsSettings onUseSkill={vi.fn()} />);
+            fireEvent.click(await screen.findByRole('button', { name: 'Remove meal-planner' }));
+            fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Keep' }));
+            expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+            expect(mockedApi.removeSkill).not.toHaveBeenCalled();
+            expect(screen.getByText('meal-planner')).toBeInTheDocument();
+        });
+
+        it("shows the server's reason when the removal fails", async () => {
+            mockedApi.removeSkill.mockRejectedValue(new Error('Skill is read-only'));
+            render(<SkillsSettings onUseSkill={vi.fn()} />);
+            fireEvent.click(await screen.findByRole('button', { name: 'Remove meal-planner' }));
+            fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }));
+            expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t remove meal-planner: Skill is read-only');
+            expect(screen.getByText('meal-planner')).toBeInTheDocument();
+        });
     });
 });

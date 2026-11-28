@@ -373,6 +373,7 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	// literal there (see modelcmd.go) — assert it directly, mirroring how
 	// TestChatHelpNamesEveryChatBinding checks it against chatHelpText.
 	seen["/skills"] = true   // dispatched by isSkillsCommand, like /model
+	seen[quitCommand] = true // dispatched by isQuitCommand (commandgate.go)
 	seen["/research"] = true // dispatched by isResearchCommand (research.go)
 	seen["/model"] = true
 	seen["/mode"] = true // dispatched by isModeCommand (runmode.go)

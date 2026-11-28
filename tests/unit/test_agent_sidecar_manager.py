@@ -1021,3 +1021,58 @@ def test_every_builtin_sidecar_launch_carries_the_token_file(
         assert spec.token_env_var not in env
     finally:
         m._cleanup_secret_file()
+
+
+# ---------------------------------------------------------------------------
+# Re-ensuring a running sidecar: gaiacpp has no dev variant, the Python agent does.
+# ---------------------------------------------------------------------------
+
+
+def _registry_around(m):
+    from gaia.daemon.sidecars.registry import SidecarRegistry
+
+    reg = SidecarRegistry({"gaia": m.spec})
+    reg._manager_factory = lambda spec, **kwargs: m
+    return reg
+
+
+def test_a_dev_caller_reattaches_to_a_running_gaiacpp(monkeypatch, tmp_path):
+    from gaia.daemon.sidecars import fetch
+
+    binary = tmp_path / fetch.native_flagship_executable_name()
+    binary.write_bytes(b"not a real program")
+    monkeypatch.setattr(fetch, "chosen_flagship", lambda: fetch.NATIVE_FLAGSHIP)
+    monkeypatch.setattr(fetch, "verified_native_flagship", lambda: binary)
+    monkeypatch.setattr(fetch, "native_flagship_version", lambda b: "0.1.0")
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)  # caller env is "dev"
+    reg = _registry_around(m)
+    checkout = str(m.spec.dev_src_dir)
+
+    first = reg.ensure("gaia", mode="dev", dev_src_dir=checkout)
+    assert captured["argv"][0] == str(binary)
+    assert first["mode"] == "user"
+
+    second = reg.ensure("gaia", mode="dev", dev_src_dir=checkout)
+    assert second["state"] == "running"
+    assert second["pid"] == first["pid"]
+    assert reg.ensure("gaia", mode="user")["pid"] == first["pid"]
+
+
+def test_a_python_dev_sidecar_still_refuses_another_mode_or_checkout(
+    monkeypatch, tmp_path
+):
+    from gaia.daemon.sidecars.errors import ModeConflictError
+
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    reg = _registry_around(m)
+    checkout = str(m.spec.dev_src_dir)
+
+    first = reg.ensure("gaia", mode="dev", dev_src_dir=checkout)
+    assert "uvicorn" in captured["argv"]
+    assert reg.ensure("gaia", mode="dev", dev_src_dir=checkout)["pid"] == first["pid"]
+
+    with pytest.raises(ModeConflictError, match="'dev' mode but 'user'"):
+        reg.ensure("gaia", mode="user")
+    elsewhere = tmp_path / "other" / "hub" / "agents" / "gaia" / "python"
+    with pytest.raises(ModeConflictError, match="not the caller's checkout"):
+        reg.ensure("gaia", mode="dev", dev_src_dir=str(elsewhere))

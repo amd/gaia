@@ -165,15 +165,20 @@ new size, GAIA changes nothing. **Agent** picks the program that runs GAIA,
 each shown with its download size: **Full-featured** (`gaiapy`, recommended and
 the default) has every tool and feature and is the most tested, but uses more
 memory and starts more slowly; **Fast and light** (`gaiacpp`, beta) starts in a
-fraction of a second and uses a few megabytes of memory, but has fewer tools
-and features so far and is less tested. **Compare the two** under the choice
-says the same. Your pick is saved when you press **Continue**, before
+fraction of a second and uses a few megabytes of memory, but is less tested.
+**Compare the two** under the choice lists what changes on Fast and light: its
+memory is separate from Full-featured's, file changes can't be undone from the
+chat, document search matches words and not meaning, it can't create images,
+transcribe audio or turn a document into speech, and the context meter doesn't
+show how full the conversation is. Your pick is saved when you press **Continue**, before
 setup's test chat, so that chat talks to the agent you chose. If gaiacpp isn't
 on the PC, the **Download** step gets it first, with its own progress bar,
 while the models wait; then it becomes the agent and the models download. If
 that download fails, or GAIA can't switch to it, setup stops there and offers
 to try again or carry on with gaiapy. Where this release offers no gaiacpp, its row says
-**Not installed** and the reason is shown under it. You can switch later in Settings › Agent & model. The models are grouped by job, and picking
+**Not installed** and the reason is shown under it. A gaiacpp left by another
+GAIA release is tagged **Out of date**, with an **Update** button that
+downloads this release's copy. You can switch later in Settings › Agent & model. The models are grouped by job, and picking
 a chat model updates the jobs that depend on it:
 
 | Job | What you choose |
@@ -219,6 +224,13 @@ any other reason, such as too little free memory or an empty answer,
 keeps its file: its **Retry** tests it again without downloading it. A
 test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
 yourself beforehand also works.
+
+The real message is answered by the agent you chose. If you chose **Fast and
+light** and that message fails after the model passed its own test, the failure
+names Fast and light instead of the model, shows what the agent said went wrong,
+and offers **Finish setup on Full-featured** beside **Test again**. That button saves
+gaiapy as your agent and runs the tests again on it; setup is ready only when
+they pass. You can switch back in Settings › Agent & model.
 
 ### If setup has trouble
 

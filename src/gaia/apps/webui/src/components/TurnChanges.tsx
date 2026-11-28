@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import { AlertTriangle, FileDiff as FileDiffIcon, Undo2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useTurnChanges } from '../hooks/useTurnChanges';
+import { useSessionProgram } from '../hooks/useSessionProgram';
 import { pluralKey, type PluralKey, type Say } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { announceUndo } from '../utils/undoEvents';
@@ -16,10 +17,20 @@ const sayCount = (say: Say, base: PluralKey, n: number) => say(pluralKey(base, n
 
 type Phase = 'idle' | 'confirm' | 'working' | 'conflict' | 'done';
 
+interface TurnChangesProps {
+    sessionId: string;
+    messageId: number;
+    /** The turn ran a tool that writes files or runs commands. */
+    ranChangingTool?: boolean;
+}
+
 /** "Undo this turn" and "Review changes" under an answer whose turn changed files. */
-export function TurnChanges({ sessionId, messageId }: { sessionId: string; messageId: number }) {
+export function TurnChanges({ sessionId, messageId, ranChangingTool = false }: TurnChangesProps) {
     const t = useT();
-    const { turn, error: loadError, refresh } = useTurnChanges(sessionId, messageId);
+    const { turn, error: loadError, checked, refresh } = useTurnChanges(sessionId, messageId);
+    const unrecorded = !turn || (turn.files.length === 0 && !turn.incomplete);
+    // gaiacpp keeps no record of a turn's file changes, so Undo has nothing to work from.
+    const program = useSessionProgram(sessionId, checked && !loadError && unrecorded && ranChangingTool);
     const [phase, setPhase] = useState<Phase>('idle');
     const [message, setMessage] = useState<string | null>(null);
     const [reviewing, setReviewing] = useState(false);
@@ -58,7 +69,15 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
             </div>
         );
     }
-    if (!turn || (turn.files.length === 0 && !turn.incomplete)) return null;
+    if (!turn || unrecorded) {
+        if (!ranChangingTool || program !== 'gaiacpp') return null;
+        return (
+            <div className="turn-changes is-unavailable" role="note">
+                <Undo2 size={12} aria-hidden="true" />
+                <span>{t('turnChanges.nativeNoUndo', { name: 'gaiacpp' })}</span>
+            </div>
+        );
+    }
 
     const count = turn.files.length;
     const undone = Boolean(turn.restored_at);

@@ -498,3 +498,22 @@ TEST_F(ChunkingTest, ChunkBoundariesMatchPythonRagSdk) {
         }
     }
 }
+
+// A table page has no blank lines and no sentence ends; it still splits into
+// chunk-sized pieces at its rows, instead of one chunk of the whole table.
+TEST(ChunkingTableTest, ATableWithoutSentenceEndsSplitsAtItsRows) {
+    std::string table = "Table B-42. Bond yields and interest rates, 1953-2023\nYear Aaa Baa\n";
+    for (int year = 1953; year <= 2023; ++year) {
+        table += std::to_string(year) + " 1.931 2.47 2.85 3.20 3.74 2.72 3.17 1.99 4.81 5.86 4.31 6.81 8.20\n";
+    }
+    const auto chunks = splitTextIntoChunks(table);
+    ASSERT_GT(chunks.size(), 1u);
+    bool lastRow = false;
+    for (const auto& c : chunks) {
+        EXPECT_LE(tokens(c), 520u) << c.substr(0, 120);
+        if (c.find("2023 1.931 2.47 2.85 3.20 3.74 2.72 3.17 1.99 4.81 5.86 4.31 6.81 8.20") != std::string::npos) {
+            lastRow = true;
+        }
+    }
+    EXPECT_TRUE(lastRow) << "the last row is kept whole";
+}

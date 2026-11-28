@@ -593,6 +593,91 @@ class TestDoneEvent:
         assert event["content"] == "Deleted 3 files."
         assert event["stats"] == {"tokens": 5}
 
+    def test_a_failed_turn_names_the_agent_program_it_ran_on(self):
+        event = _done_event(
+            7, "The model call failed.", False, failed=True, agent_program="gaiacpp"
+        )
+        assert event["failed"] is True
+        assert event["agent_program"] == "gaiacpp"
+
+    @pytest.mark.parametrize(
+        "kwargs", [{"failed": False}, {"turn_cancelled": True, "failed": True}]
+    )
+    def test_only_a_failed_turn_names_its_agent_program(self, kwargs):
+        kwargs.setdefault("turn_cancelled", False)
+        event = _done_event(7, "text", agent_program="gaiacpp", **kwargs)
+        assert "agent_program" not in event
+
+
+class TestFailedTurnProgram:
+    """Only a flagship turn on gaiacpp is named, so the UI never blames it for gaiapy's failures."""
+
+    @pytest.mark.parametrize(
+        "agent_type, saved, expected",
+        [
+            ("gaia", "gaiacpp", "gaiacpp"),
+            ("gaia", "gaiapy", None),
+            ("hello-world", "gaiacpp", None),
+        ],
+    )
+    def test_names_gaiacpp_only_for_the_flagship_on_it(
+        self, monkeypatch, agent_type, saved, expected
+    ):
+        from gaia.daemon.sidecars import fetch
+        from gaia.ui._chat_helpers import _failed_turn_program
+
+        monkeypatch.setattr(fetch, "saved_flagship", lambda: saved)
+        assert _failed_turn_program(agent_type) == expected
+
+    @pytest.mark.parametrize("failure", [None, "the model call failed"])
+    def test_a_model_server_outage_is_not_blamed_on_gaiacpp(self, monkeypatch, failure):
+        from gaia.daemon.sidecars import fetch
+        from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN
+        from gaia.ui._chat_helpers import _failed_turn_program
+
+        monkeypatch.setattr(fetch, "saved_flagship", lambda: "gaiacpp")
+        assert _failed_turn_program("gaia", MODEL_SERVER_DOWN) is None
+        assert _failed_turn_program("gaia", failure) == "gaiacpp"
+
+
+class TestRelayOnePromptFailures:
+    """A relayed run's failure keeps its cause, so setup can tell a server outage apart."""
+
+    def _relay(self, monkeypatch, answer):
+        from gaia.ui import _chat_helpers as helpers
+        from gaia.ui.sse_handler import SSEOutputHandler
+
+        handler = SSEOutputHandler(background_mode=True)
+        monkeypatch.setattr(
+            helpers,
+            "_dispatch_sidecar_query",
+            lambda h, *_a, **_k: h.event_queue.put(answer),
+        )
+        return helpers.relay_one_prompt(
+            handler, "hi", agent_type="gaia", model_id=None, memory="off", max_steps=1
+        )
+
+    def test_a_server_outage_raises_its_own_error(self, monkeypatch):
+        from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN
+        from gaia.ui._chat_helpers import ModelServerDownError
+
+        answer = {
+            "type": "answer",
+            "content": "GAIA's model server isn't running.",
+            "failed": True,
+            "failure": MODEL_SERVER_DOWN,
+        }
+        with pytest.raises(ModelServerDownError, match="isn't running"):
+            self._relay(monkeypatch, answer)
+
+    def test_another_failure_is_a_plain_runtime_error(self, monkeypatch):
+        from gaia.ui._chat_helpers import ModelServerDownError
+
+        answer = {"type": "answer", "content": "tool crashed", "failed": True}
+        with pytest.raises(RuntimeError, match="tool crashed") as caught:
+            self._relay(monkeypatch, answer)
+        assert not isinstance(caught.value, ModelServerDownError)
+
 
 # ── _canonical_agent_type ─────────────────────────────────────────────────
 

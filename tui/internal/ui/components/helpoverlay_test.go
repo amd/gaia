@@ -386,6 +386,21 @@ func TestRenderHelpOverlayForCommandsNarrowsTheCommandsLine(t *testing.T) {
 	}
 }
 
+// The /cost row points at /context only for a session that can run it.
+func TestHelpNamesContextOnlyWhereItRuns(t *testing.T) {
+	without := ansi.Strip(RenderHelpOverlayForCommands(HelpContextChat, "", 100, 60, 0, []string{"/help", "/cost"}))
+	if strings.Contains(without, "/context") {
+		t.Errorf("the panel names /context for a session without it:\n%s", without)
+	}
+	if !strings.Contains(without, "/cost help rates") {
+		t.Errorf("the /cost row lost its own text:\n%s", without)
+	}
+	with := ansi.Strip(RenderHelpOverlayForCommands(HelpContextChat, "", 100, 60, 0, []string{"/help", "/cost", "/context"}))
+	if !strings.Contains(with, "/context fill") {
+		t.Errorf("the panel dropped /context for a session that has it:\n%s", with)
+	}
+}
+
 // A window with no room for a panel gets the view it already had, not a box
 // with one column of border in it.
 func TestATinyWindowKeepsTheViewItHas(t *testing.T) {

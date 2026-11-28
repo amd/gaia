@@ -67,9 +67,18 @@ export function useFollowScroll(
     }, [scrollRef, followRef, onDistance, userScrolling]);
 
     const onWheel = useCallback((e: ReactWheelEvent) => {
-        if (e.deltaY < 0) markUserScroll();
-        else if (e.deltaY > 0) clearUserScroll();
-    }, [markUserScroll, clearUserScroll]);
+        if (e.deltaY > 0) { clearUserScroll(); return; }
+        if (e.deltaY === 0) return;
+        markUserScroll();
+        // A wheel-up at the top fires no scroll event, so a chat opened there showed no jump button.
+        // Only at the top: one inside a nested scroller (tool activity) mustn't stop following.
+        const el = scrollRef.current;
+        if (!el || el.scrollTop > 0) return;
+        const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (dist <= AT_BOTTOM_PX) return;
+        followRef.current = false;
+        onDistance(dist);
+    }, [scrollRef, followRef, onDistance, markUserScroll, clearUserScroll]);
 
     // A press on the list itself is its scrollbar (either side, or an overlay one) or bare
     // padding; a press on content, like a card toggle, is not a scroll.
