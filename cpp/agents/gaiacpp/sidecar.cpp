@@ -178,7 +178,7 @@ public:
     }
     void printReasoningProgress(size_t words) override {
         emit({{"type", "status"}, {"phase", "reasoning"}, {"words", words},
-              {"message", "Reasoning - " + std::to_string(words) + " words so far"}});
+              {"message", "Reasoning - " + std::to_string(words) + (words == 1 ? " word so far" : " words so far")}});
     }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}

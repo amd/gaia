@@ -682,9 +682,30 @@ TEST_F(GaiacppSidecar, AReplyThatRunsOutWhileReasoningNamesSomethingAnAppUserCan
     bool progress = false;
     for (const auto& e : events) {
         progress = progress || (e.value("type", "") == "status" && e.value("phase", "") == "reasoning" &&
-                                e.value("words", 0) == 5);
+                                e.value("words", 0) == 5 && e.value("message", "") == "Reasoning - 5 words so far");
     }
     EXPECT_TRUE(progress) << "no reasoning progress was reported: " << t.describe();
+}
+
+TEST_F(GaiacppSidecar, ReasoningProgressUsesSingularWordForOneWord) {
+    mock().enableSseStreaming(true);
+    mock().pushSseStream("data: " + json{{"choices", json::array({{{"index", 0},
+                                                                  {"delta", {{"reasoning_content", "Hmm"}}},
+                                                                  {"finish_reason", "length"}}})}}
+                                           .dump() +
+                              "\n\ndata: [DONE]\n\n");
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-one-word", "think", {{"session_id", "chat-one-word"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    bool found = false;
+    for (const auto& e : events) {
+        if (e.value("type", "") == "status" && e.value("phase", "") == "reasoning" && e.value("words", 0) == 1) {
+            EXPECT_EQ(e.value("message", ""), "Reasoning - 1 word so far");
+            found = true;
+        }
+    }
+    EXPECT_TRUE(found) << "no 1-word reasoning status was reported: " << t.describe();
 }
 
 TEST_F(GaiacppSidecar, TheHelperSettingReachesAChatsAgent) {

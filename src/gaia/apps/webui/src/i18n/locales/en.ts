@@ -1729,6 +1729,8 @@ export const enMessages = {
     'settings.close': 'Close settings',
     'settings.backTo': 'Back to {section}',
     'chat.loadingTools': 'Loading more tools',
+    'chat.reasoningWords.one': 'Reasoning — {n} word so far',
+    'chat.reasoningWords.other': 'Reasoning — {n} words so far',
     'chat.loadingMessages': 'Loading messages',
     'chat.empty.title': 'This chat is empty',
     'chat.empty.hint': 'Send a message below to start it.',
