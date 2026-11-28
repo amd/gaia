@@ -248,7 +248,7 @@ func (m ChatModel) handleSlackConnected(msg slackConnectedMsg) (tea.Model, tea.C
 			msg.err)), nil
 	}
 	return m.statusNote(strings.Join([]string{
-		"Connected to " + msg.team + ". Tokens are in your OS keyring.",
+		"Connected to " + msg.team + ". Tokens are encrypted in your vault (key in OS keyring).",
 		"",
 		"Before starting it, decide who may message it — everyone in a",
 		"workspace can DM a bot, and this bridge can read your files and ask",
