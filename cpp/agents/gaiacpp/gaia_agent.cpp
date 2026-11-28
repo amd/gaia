@@ -2796,7 +2796,7 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         for (const auto& root : roots) {
             // A file the user allowed by itself is its own root.
             if (root.filename() == path.filename() && fs::is_regular_file(root, ec) &&
-                (!path.has_parent_path() || fs::equivalent(root.parent_path() / path.filename(), root, ec))) {
+                (!path.has_parent_path() || fs::equivalent(fs::current_path(ec) / path, root, ec))) {
                 return root;
             }
             if (fs::exists(root / path, ec)) return root / path;

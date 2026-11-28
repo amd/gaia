@@ -423,7 +423,7 @@ TEST(WorkspaceTest, ARelativeCdOutOfTheFolderIsRefused) {
         EXPECT_EQ(ws.checkCommand("cd sub && cd ..", posix), "") << posix;
         EXPECT_EQ(ws.checkCommand("cd sub", posix), "") << posix;
     }
-    EXPECT_NE(ws.checkCommand("cd /d .. && type other\secret.txt", false), "");
+    EXPECT_NE(ws.checkCommand("cd /d .. && type other\\secret.txt", false), "");
     // From a subfolder the shell stands in, one step up is still inside.
     EXPECT_EQ(ws.judgeCommand("cd ..", true, (d.work / "sub").string()).refusal, "");
     EXPECT_NE(ws.judgeCommand("cd ../..", true, (d.work / "sub").string()).refusal, "");

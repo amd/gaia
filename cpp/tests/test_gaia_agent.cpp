@@ -101,6 +101,22 @@ TEST(GaiaAgentTest, AFileTheUserAllowedByItselfIsAccepted) {
     EXPECT_EQ(mock.receivedBodies().size(), 1u) << "a file that is itself an allowed location was reported missing";
 }
 
+TEST(GaiaAgentTest, AnAllowedFileDoesNotStandInForOneInAnotherFolder) {
+    Workdir w, elsewhere;
+    const fs::path file = elsewhere.path / "report.md";
+    std::ofstream(file) << "# Report\n";
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("All done: I saved the summary to out/report.md."));
+    mock.pushResponse(answer("Correction: I could not write out/report.md; here is the summary inline."));
+    GaiaAgent::Options o = optionsFor(w);
+    o.workspaceRoots.push_back(file.u8string());
+    GaiaAgent agent(cfgFor(mock), o);
+    agent.processQuery("summarize");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u) << "out/report.md does not exist, yet an allowed report.md elsewhere vouched for it";
+    EXPECT_NE(bodies[1].find("no such file exists"), std::string::npos);
+}
+
 TEST(GaiaAgentTest, ExistingFileInASubfolderIsAccepted) {
     Workdir w;
     std::ofstream(w.path / "out" / "report.md") << "# Report\n";
