@@ -1539,6 +1539,8 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     const json fullBody = json::parse(mock.receivedBodies().back());
     EXPECT_TRUE(has(toolNamesIn(fullBody), "git_status")) << "the tier follows the config each turn";
     EXPECT_TRUE(has(toolNamesIn(fullBody), "list_inbox"));
+    EXPECT_FALSE(has(toolNamesIn(fullBody), "send-email/send_now")) << "a skill's tools wait for the skill to load";
+    EXPECT_FALSE(has(compactTools, "send-email/send_now"));
     EXPECT_NE(fullBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
     EXPECT_GT(fullBody.dump().size(), compactBody.dump().size() + 4000);
 }

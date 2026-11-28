@@ -148,6 +148,8 @@ void GaiaAgent::registerTools() {
         email_ = std::make_unique<EmailTools>(
             EmailTools::Options{options_.surface, [this] { return config().toolResultCharLimit(); }, {}});
         email_->registerAll(toolRegistry());
+        sendEmail_ = std::make_unique<SendEmailTools>(*email_);
+        sendEmail_->registerAll(toolRegistry());
     }
     if (docs_) {
         docs_->registerTools(toolRegistry(), ws ? std::function<std::string(const std::string&)>(
@@ -638,9 +640,13 @@ void GaiaAgent::onTurnStart() {
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
     for (const auto& name : compactWithheldTools()) {
-        // Written only on a change, so a turn doesn't race readers on other threads for nothing.
-        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) == compact) {
-            toolRegistry().setEnabled(name, !compact);
+        if (!toolRegistry().hasTool(name)) continue;
+        // Only what this withheld comes back: a skill's tools stay off until the skill loads.
+        if (compact && toolRegistry().isEnabled(name)) {
+            toolRegistry().setEnabled(name, false);
+            compactWithheld_.insert(name);
+        } else if (!compact && compactWithheld_.erase(name)) {
+            toolRegistry().setEnabled(name, true);
         }
     }
     // A compact model gets helpers only when asked for by number: its evals have not earned them.

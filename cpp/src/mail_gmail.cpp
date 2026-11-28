@@ -1,8 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// Read half of src/gaia/agents/tools/_email/gmail.py. Gmail API v1 resources
-// are flattened here into the same summary shape the Graph backend emits.
+// src/gaia/agents/tools/_email/gmail.py. Gmail API v1 resources are flattened
+// here into the same summary shape the Graph backend emits.
 
 #include "mail_internal.h"
 
@@ -18,6 +18,7 @@
 #include <thread>
 
 #include "lower_ascii.h"
+#include "mail_outgoing.h"
 
 namespace gaia::mail {
 
@@ -993,11 +994,88 @@ json messageSummary(const json& msg, const std::map<std::string, json>& labelNam
     return summary;
 }
 
+// ---- drafts and sources ----
+
+Recipients recipients(const std::string& raw) {
+    Recipients out;
+    for (const auto& [name, addr] : getAddresses(raw)) {
+        const std::string address = pyStrip(addr);
+        if (!address.empty()) out.push_back({pyStrip(decodeWords(name)), address});
+    }
+    return out;
+}
+
+void attachmentNames(const json& part, std::vector<std::string>& names) {
+    if (truthy(field(part, "filename"))) names.push_back(pyStr(field(part, "filename")));
+    const json& parts = field(part, "parts");
+    if (!parts.is_array()) return;
+    for (const json& child : parts) attachmentNames(child, names);
+}
+
+std::vector<std::string> attachmentNames(const json& part) {
+    std::vector<std::string> names;
+    attachmentNames(part, names);
+    return names;
+}
+
+// MIME's CRLFs and closing newline are not content.
+std::string normalizedBody(std::string body) {
+    std::string out;
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        if (body[i] == '\r' && i + 1 < body.size() && body[i + 1] == '\n') continue;
+        out += body[i];
+    }
+    if (!out.empty() && out.back() == '\n') out.pop_back();
+    return out;
+}
+
+std::optional<std::string> optionalText(const std::string& s) {
+    return s.empty() ? std::nullopt : std::optional<std::string>(s);
+}
+
+std::optional<std::string> optionalField(const json& obj, const char* key) {
+    const json& value = field(obj, key);
+    return value.is_null() ? std::nullopt : std::optional<std::string>(pyStr(value));
+}
+
+std::string validatedId(const std::string& value, const std::string& kind, const std::string& source) {
+    if (!isGmailId(value)) throw std::invalid_argument(kind + " " + pyRepr(value) + " is not a Gmail id. Use one from " + source + ".");
+    return value;
+}
+
+OutgoingMessage draftMessage(const json& draft) {
+    const json& message = truthy(field(draft, "message")) ? field(draft, "message") : json::object();
+    const json& payload = truthy(field(message, "payload")) ? field(message, "payload") : json::object();
+    const HeaderMap headers = headerMap(payload);
+    const auto [body, bodyType] = selectBody(payload);
+    OutgoingMessage out;
+    out.to = recipients(headerOf(headers, "to"));
+    out.cc = recipients(headerOf(headers, "cc"));
+    out.bcc = recipients(headerOf(headers, "bcc"));
+    out.subject = decodeWords(headerOf(headers, "subject"));
+    out.body = normalizedBody(body);
+    out.bodyType = bodyType;
+    out.threadId = optionalField(message, "threadId");
+    out.inReplyTo = optionalText(headerOf(headers, "in-reply-to"));
+    out.references = optionalText(headerOf(headers, "references"));
+    out.attachments = attachmentNames(payload);
+    if (bodyType == "text") {
+        if (const json* html = findPart(payload, "text/html")) out.htmlAlternative = normalizedBody(decodePart(*html));
+    }
+    return out;
+}
+
+json messageResource(const OutgoingMessage& message) {
+    json resource = {{"raw", outgoing::rawMime(message)}};
+    if (message.threadId && !message.threadId->empty()) resource["threadId"] = *message.threadId;
+    return resource;
+}
+
 // ---- backend ----
 
-class GmailReadBackend : public ReadBackend {
+class GmailBackend : public ReadBackend, public WriteBackend {
 public:
-    GmailReadBackend(TokenSource token, Transport transport)
+    GmailBackend(TokenSource token, Transport transport)
         : token_(std::move(token)), transport_(std::move(transport)) {}
 
     std::string getUserEmail() override {
@@ -1111,7 +1189,144 @@ public:
                 {"truncated", truthy(field(data, "nextPageToken")) || static_cast<int>(stubs.size()) >= wanted}};
     }
 
+
+    json listDrafts(int limit) override {
+        const json data = get("/users/me/drafts", {{"maxResults", std::to_string(clamp(limit))}});
+        std::vector<std::string> paths;
+        const json& listed = field(data, "drafts");
+        if (listed.is_array()) {
+            for (const json& d : listed) {
+                if (truthy(field(d, "id"))) paths.push_back("/users/me/drafts/" + pyStr(d["id"]));
+            }
+        }
+        json rows = json::array();
+        if (paths.empty()) return rows;
+        for (const json& draft : fanOut(paths, {{"format", "metadata"}})) {
+            const json& message = truthy(field(draft, "message")) ? field(draft, "message") : json::object();
+            const HeaderMap headers =
+                headerMap(truthy(field(message, "payload")) ? field(message, "payload") : json::object());
+            const std::string subject = decodeWords(headerOf(headers, "subject"));
+            rows.push_back({{"draft_id", field(draft, "id")},
+                            {"thread_id", field(message, "threadId")},
+                            {"to", addressList(headerOf(headers, "to"))},
+                            {"subject", subject.empty() ? "(no subject)" : subject},
+                            {"preview", pyStrip(htmlUnescape(text(field(message, "snippet"))))}});
+        }
+        return rows;
+    }
+
+    // Gmail replaces a whole draft, and this rewrite carries no files.
+    bool editKeepsAttachments() const override { return false; }
+
+    OutgoingMessage getDraft(const std::string& draftId) override {
+        validatedId(draftId, "draft_id", "create_draft or list_drafts");
+        return draftMessage(get("/users/me/drafts/" + draftId, {{"format", "full"}}));
+    }
+
+    SourceMessage getSourceMessage(const std::string& messageId) override {
+        validatedId(messageId, "message_id", "list_inbox or search_email");
+        const json data = get("/users/me/messages/" + messageId, {{"format", "full"}});
+        const json& payload = truthy(field(data, "payload")) ? field(data, "payload") : json::object();
+        const HeaderMap headers = headerMap(payload);
+        const Recipients senders = recipients(headerOf(headers, "from"));
+        const auto [body, bodyType] = selectBody(payload);
+        SourceMessage out;
+        out.id = messageId;
+        if (!senders.empty()) out.sender = senders[0];
+        out.replyTo = recipients(headerOf(headers, "reply-to"));
+        out.to = recipients(headerOf(headers, "to"));
+        out.cc = recipients(headerOf(headers, "cc"));
+        out.subject = decodeWords(headerOf(headers, "subject"));
+        out.body = normalizedBody(body);
+        out.bodyType = bodyType;
+        out.threadId = optionalField(data, "threadId");
+        out.internetMessageId = optionalText(headerOf(headers, "message-id"));
+        out.references = optionalText(headerOf(headers, "references"));
+        out.received = received(field(data, "internalDate"));
+        out.attachments = attachmentNames(payload);
+        return out;
+    }
+
+    std::string createDraft(const OutgoingMessage& message) override {
+        const json created = write("POST", "/users/me/drafts", json{{"message", messageResource(message)}});
+        return idOf(created);
+    }
+
+    void updateDraft(const std::string& draftId, const OutgoingMessage& message) override {
+        validatedId(draftId, "draft_id", "create_draft or list_drafts");
+        write("PUT", "/users/me/drafts/" + draftId, json{{"message", messageResource(message)}});
+    }
+
+    void discardDraft(const std::string& draftId) override {
+        validatedId(draftId, "draft_id", "create_draft or list_drafts");
+        write("DELETE", "/users/me/drafts/" + draftId, std::nullopt);
+    }
+
+    json sendDraft(const std::string& draftId) override {
+        validatedId(draftId, "draft_id", "create_draft or list_drafts");
+        const json sent = write("POST", "/users/me/drafts/send", json{{"id", draftId}});
+        return {{"message_id", field(sent, "id")}, {"thread_id", field(sent, "threadId")}};
+    }
+
+    json send(const OutgoingMessage& message) override {
+        const json sent = write("POST", "/users/me/messages/send", messageResource(message));
+        return {{"message_id", field(sent, "id")}, {"thread_id", field(sent, "threadId")}};
+    }
+
 private:
+    // Python's `created["id"]`.
+    static std::string idOf(const json& created) {
+        if (!created.is_object() || !created.contains("id")) throw std::out_of_range("'id'");
+        return pyStr(created["id"]);
+    }
+
+    json write(const std::string& method, const std::string& path, const std::optional<json>& payload) {
+        const std::string where = method + " " + path;
+        HttpCall call{method, kGmailApiBase + path, {{"Authorization", "Bearer " + token_()}},
+                      payload ? payload->dump() : ""};
+        if (payload) call.headers.emplace("Content-Type", "application/json");
+        HttpResponse response;
+        try {
+            response = transport_(call);
+        } catch (const TransportError& e) {
+            if (e.neverSent) {
+                throw MailboxError("Could not reach Gmail for " + where + " (" + e.kind +
+                                   "), so the request never went out. Check network connectivity, then retry.");
+            }
+            throw MailboxOutcomeUnknown("The connection to Gmail failed during " + where + " (" + e.kind +
+                                        "), so GAIA can't tell whether it took effect. Check Sent and Drafts in "
+                                        "Gmail before trying again.");
+        } catch (const std::exception&) {
+            throw MailboxOutcomeUnknown("The connection to Gmail failed during " + where +
+                                        " (TransportError), so GAIA can't tell whether it took effect. Check Sent "
+                                        "and Drafts in Gmail before trying again.");
+        }
+        const int code = response.status;
+        if (code == 403) {
+            const std::string reason = errorDetail(response).reason;
+            if (reason == "insufficientPermissions" || reason == "PERMISSION_DENIED") {
+                throw MailboxAuthError("Gmail refused this because the connection can't write mail (403). Reconnect "
+                                       "Google in Settings -> Connectors and approve reading, composing and sending. "
+                                       "(request: " +
+                                       where + ")");
+            }
+        }
+        if (code >= 500) {
+            throw MailboxOutcomeUnknown("Gmail answered " + std::to_string(code) + " during " + where +
+                                        ", so GAIA can't tell whether it took effect. Check Sent and Drafts in "
+                                        "Gmail before trying again.");
+        }
+        if (code != 200 && code != 204) raise(response, where);
+        if (response.body.empty()) return json::object();
+        const json parsed = json::parse(response.body, nullptr, false);
+        if (parsed.is_discarded()) {
+            throw MailboxOutcomeUnknown("Gmail accepted " + where +
+                                        " but its answer was unreadable, so GAIA can't confirm the result. Check "
+                                        "Sent and Drafts in Gmail before trying again.");
+        }
+        return parsed;
+    }
+
     static json valueOr(const json& obj, const char* key, int fallback) {
         return obj.is_object() && obj.contains(key) ? obj.at(key) : json(fallback);
     }
@@ -1260,7 +1475,11 @@ private:
 }  // namespace
 
 std::unique_ptr<ReadBackend> makeGmailReadBackend(TokenSource token, Transport transport) {
-    return std::make_unique<GmailReadBackend>(std::move(token), std::move(transport));
+    return std::make_unique<GmailBackend>(std::move(token), std::move(transport));
+}
+
+std::unique_ptr<WriteBackend> makeGmailWriteBackend(TokenSource token, Transport transport) {
+    return std::make_unique<GmailBackend>(std::move(token), std::move(transport));
 }
 
 }  // namespace gaia::mail

@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
 #include <gaia/email_tools.h>
+#include <gaia/send_email_tools.h>
 #include <gaia/process.h>
 #include <gaia/shell_guard.h>
 #include <gaia/skill_library.h>
@@ -272,6 +274,8 @@ private:
     std::shared_ptr<Workspace> workspace_;  // null with full access
     std::shared_ptr<WebPageCache> webPages_ = std::make_shared<WebPageCache>();  // cleared each turn
     std::unique_ptr<EmailTools> email_;
+    std::unique_ptr<SendEmailTools> sendEmail_;
+    std::set<std::string> compactWithheld_;
     std::function<bool(const std::string& path)> askPathAccess_;
     std::vector<std::string> openedFolders_;  // opened by the user since the start; guarded by turnListingMu_
     /// The folders the agent started with, then those the user opened since.

@@ -144,6 +144,16 @@ var toolPhrases = map[string]toolPhrase{
 	"list_connected_mailboxes": {Without: "Checking connected mailboxes"},
 	"list_waiting_on_you":      {Without: "Finding mail waiting on you"},
 
+	// The send-email skill, under its namespaced names.
+	"send-email/list_drafts":      {Without: "Reading your drafts"},
+	"send-email/create_draft":     {Without: "Saving a draft"},
+	"send-email/update_draft":     {Without: "Changing a draft"},
+	"send-email/discard_draft":    {Without: "Deleting a draft"},
+	"send-email/send_draft":       {Without: "Sending a draft"},
+	"send-email/send_now":         {Without: "Sending an email"},
+	"send-email/reply_to_message": {Without: "Sending a reply"},
+	"send-email/forward_message":  {Without: "Forwarding an email"},
+
 	// Not tools: the agent checking in on a long turn, and asking to reach a
 	// path outside the session.
 	"continue_long_turn": {Without: "Asking whether to keep going"},

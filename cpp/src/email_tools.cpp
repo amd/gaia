@@ -387,6 +387,7 @@ struct EmailTools::State {
     Options options;
     std::mutex mu;
     std::unique_ptr<mail::ReadBackend> backend;
+    mail::Transport transport;
     std::string provider;
     std::string providerSource;
     std::vector<std::string> alternatives;
@@ -433,9 +434,9 @@ struct EmailTools::State {
         others.assign(usable.begin() + 1, usable.end());
     }
 
-    std::string mintToken(const std::string& forProvider, const std::string& scope) {
+    std::string mintToken(const std::string& forProvider, const std::vector<std::string>& scopes) {
         try {
-            return connectors::getAccessToken(forProvider, {scope}, kAgentId);
+            return connectors::getAccessToken(forProvider, scopes, kAgentId);
         } catch (const connectors::ConnectorsError& e) {
             if (!app()) throw;
             const auto [message, reconnect] = connect::tokenFault(providerName(forProvider), e);
@@ -445,13 +446,30 @@ struct EmailTools::State {
         }
     }
 
+    mail::Transport sharedTransport() {
+        if (!transport) transport = options.transport ? options.transport : mail::httpsTransport();
+        return transport;
+    }
+
+    std::string accountLabel() {
+        std::string chosen, scope, source;
+        std::vector<std::string> others;
+        resolveMailbox(chosen, scope, source, others);
+        const auto conn = connectors::getConnection(chosen);
+        const std::string name = providerName(chosen);
+        if (!conn || conn->accountEmail.empty() || conn->accountEmail == "default") {
+            return "your " + name + " account (its address was not recorded)";
+        }
+        return conn->accountEmail + " (" + name + ")";
+    }
+
     mail::ReadBackend& mailbox() {
         if (backend) return *backend;
         std::string chosen, scope, source;
         std::vector<std::string> others;
         resolveMailbox(chosen, scope, source, others);
-        mail::TokenSource token = [this, chosen, scope] { return mintToken(chosen, scope); };
-        mail::Transport transport = options.transport ? options.transport : mail::httpsTransport();
+        mail::TokenSource token = [this, chosen, scope] { return mintToken(chosen, {scope}); };
+        mail::Transport transport = sharedTransport();
         backend = chosen == kGoogle ? mail::makeGmailReadBackend(token, transport)
                                     : mail::makeOutlookReadBackend(token, transport);
         provider = chosen;
@@ -857,6 +875,35 @@ void EmailTools::startTurn() {
     std::lock_guard<std::mutex> lock(state_->mu);
     state_->turnBodyChars = 0;
     state_->turnReads = 0;
+}
+
+std::string EmailTools::activeProvider() {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    std::string chosen, scope, source;
+    std::vector<std::string> others;
+    state_->resolveMailbox(chosen, scope, source, others);
+    return chosen;
+}
+
+std::string EmailTools::accountLabel() {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    return state_->accountLabel();
+}
+
+std::string EmailTools::accessToken(const std::string& provider, const std::vector<std::string>& scopes) {
+    return state_->mintToken(provider, scopes);
+}
+
+mail::Transport EmailTools::transport() {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    return state_->sharedTransport();
+}
+
+std::string EmailTools::surface() const { return state_->surface(); }
+
+json EmailTools::listDrafts(int limit) {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    return state_->run([limit](mail::ReadBackend& b) { return b.listDrafts(limit); });
 }
 
 const std::vector<std::string>& EmailTools::toolNames() {

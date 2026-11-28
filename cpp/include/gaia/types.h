@@ -310,6 +310,16 @@ struct ToolInfo {
     /// True for a tool that always calls an online service (a mailbox, a
     /// calendar), so it is refused while the internet is off.
     bool onlineService = false;
+
+    /// Runs before the approval card. A returned object is the call's result and the
+    /// tool doesn't run (an argument a person should never be asked about).
+    std::function<std::optional<json>(const json& args)> preflight;
+
+    /// What the approval card shows for this call. Unset = the arguments.
+    std::function<json(const json& args)> promptArgs;
+
+    /// Every call needs a person: no "always allow", and full access still asks.
+    bool personMustApprove = false;
 };
 
 // ---- LLM Usage Statistics ----

@@ -13,6 +13,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -46,6 +47,76 @@ public:
 class GAIA_API MailboxAuthError : public MailboxError {
 public:
     using MailboxError::MailboxError;
+};
+
+/// A write went out and no clear answer came back, so it may have taken effect.
+class GAIA_API MailboxOutcomeUnknown : public MailboxError {
+public:
+    using MailboxError::MailboxError;
+};
+
+/// What a Transport throws when no answer arrived. `kind` names the failure as
+/// httpx does (ConnectError, ReadTimeout, ...); `neverSent` means the request
+/// never left this PC, so a write certainly did not happen.
+class GAIA_API TransportError : public std::runtime_error {
+public:
+    TransportError(std::string kind, bool neverSent, const std::string& message)
+        : std::runtime_error(message), kind(std::move(kind)), neverSent(neverSent) {}
+    std::string kind;
+    bool neverSent;
+};
+
+// ---- a message on its way out (_email/outgoing.py) ----
+
+struct GAIA_API Recipient {
+    std::string name;
+    std::string address;
+    /// `"name" <address>`, or the bare address when the name adds nothing.
+    std::string str() const;
+    bool operator==(const Recipient& o) const { return name == o.name && address == o.address; }
+};
+
+using Recipients = std::vector<Recipient>;
+
+/// What both backends send and the approval card shows, so the two can't differ.
+struct GAIA_API OutgoingMessage {
+    Recipients to, cc, bcc;
+    std::string subject;
+    std::string body;
+    std::string bodyType = "text";  // "text" or "html"
+    std::optional<std::string> threadId;
+    std::optional<std::string> inReplyTo;
+    std::optional<std::string> references;
+    /// Graph threads a reply through its source message, not through headers.
+    std::optional<std::string> replyToId;
+    /// Files a saved draft already carries.
+    std::vector<std::string> attachments;
+    /// A forward carries text only; these files on the original stay behind.
+    std::vector<std::string> attachmentsLeftOut;
+    /// The HTML half of a multipart draft, which most mail apps show first.
+    std::optional<std::string> htmlAlternative;
+    /// The saved draft an edit overwrites. Shown on its card, never sent.
+    std::shared_ptr<const OutgoingMessage> replaces;
+    /// The account it goes out from. Not part of equality: a fetched draft doesn't carry it.
+    std::optional<std::string> sender;
+
+    bool operator==(const OutgoingMessage& o) const;
+    bool operator!=(const OutgoingMessage& o) const { return !(*this == o); }
+};
+
+/// What a reply or forward is built from, read once from the mailbox.
+struct GAIA_API SourceMessage {
+    std::string id;
+    std::optional<Recipient> sender;
+    Recipients replyTo, to, cc;
+    std::string subject;
+    std::string body;
+    std::string bodyType = "text";
+    std::optional<std::string> threadId;
+    std::optional<std::string> internetMessageId;
+    std::optional<std::string> references;
+    std::string received;
+    std::vector<std::string> attachments;
 };
 
 // ---- HTTP ----
@@ -90,10 +161,34 @@ public:
     virtual json getThread(const std::string& threadId) = 0;
     /// {thread_ids: [...], messages_listed: int, truncated: bool}; folder is "inbox" or "sent".
     virtual json listThreadIds(const std::string& folder, int limit) = 0;
+    /// [{draft_id, thread_id, to, subject, preview}], bodies left out.
+    virtual json listDrafts(int limit) = 0;
+};
+
+/// Drafting and sending. Each call is made once; a failure is reported, not
+/// retried, and MailboxOutcomeUnknown means it may have happened.
+class GAIA_API WriteBackend {
+public:
+    virtual ~WriteBackend() = default;
+    virtual std::string getUserEmail() = 0;
+    /// Whether rewriting a draft keeps the files it carries.
+    virtual bool editKeepsAttachments() const = 0;
+    /// One draft, exactly as the mailbox would send it now.
+    virtual OutgoingMessage getDraft(const std::string& draftId) = 0;
+    virtual SourceMessage getSourceMessage(const std::string& messageId) = 0;
+    /// The new draft's id.
+    virtual std::string createDraft(const OutgoingMessage& message) = 0;
+    virtual void updateDraft(const std::string& draftId, const OutgoingMessage& message) = 0;
+    virtual void discardDraft(const std::string& draftId) = 0;
+    /// {message_id, thread_id}, null where the provider names none.
+    virtual json sendDraft(const std::string& draftId) = 0;
+    virtual json send(const OutgoingMessage& message) = 0;
 };
 
 GAIA_API std::unique_ptr<ReadBackend> makeGmailReadBackend(TokenSource token, Transport transport);
 GAIA_API std::unique_ptr<ReadBackend> makeOutlookReadBackend(TokenSource token, Transport transport);
+GAIA_API std::unique_ptr<WriteBackend> makeGmailWriteBackend(TokenSource token, Transport transport);
+GAIA_API std::unique_ptr<WriteBackend> makeOutlookWriteBackend(TokenSource token, Transport transport);
 
 // ---- phishing screen (_email/phishing.py) ----
 

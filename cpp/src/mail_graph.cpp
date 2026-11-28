@@ -1,13 +1,14 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// Read half of src/gaia/agents/tools/_email/graph.py: lists, searches and
-// reads one Outlook mailbox through Microsoft Graph.
+// src/gaia/agents/tools/_email/graph.py: reads, drafts and sends for one
+// Outlook mailbox through Microsoft Graph.
 
 #include "mail_internal.h"
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <stdexcept>
 
 #include "lower_ascii.h"
@@ -151,9 +152,78 @@ json messageSummary(const json& msg, bool includeBody) {
     return summary;
 }
 
-class OutlookReadBackend : public ReadBackend {
+const std::string kDraftSelect =
+    "id,conversationId,subject,toRecipients,ccRecipients,bccRecipients,body,"
+    "isDraft,internetMessageId,bodyPreview";
+const std::string kSourceSelect =
+    "id,conversationId,subject,from,replyTo,toRecipients,ccRecipients,body,"
+    "internetMessageId,receivedDateTime";
+
+std::string orEmpty(const json& value) { return truthy(value) ? pyStr(value) : ""; }
+
+Recipient recipient(const json& entity) {
+    const json& email = field(entity, "emailAddress");
+    return {pyStrip(orEmpty(field(email, "name"))), pyStrip(orEmpty(field(email, "address")))};
+}
+
+Recipients recipients(const json& entities) {
+    Recipients out;
+    if (!entities.is_array()) return out;
+    for (const json& e : entities) {
+        Recipient r = recipient(e);
+        if (!r.address.empty()) out.push_back(std::move(r));
+    }
+    return out;
+}
+
+json graphRecipients(const Recipients& list) {
+    json out = json::array();
+    for (const auto& r : list) {
+        json email = {{"address", r.address}};
+        if (!r.name.empty()) email = {{"name", r.name}, {"address", r.address}};
+        out.push_back({{"emailAddress", email}});
+    }
+    return out;
+}
+
+// Threading headers are absent on purpose: Graph answers 400 to a standard one.
+json graphMessage(const OutgoingMessage& message) {
+    return {{"subject", message.subject},
+            {"body", {{"contentType", message.bodyType == "html" ? "HTML" : "Text"}, {"content", message.body}}},
+            {"toRecipients", graphRecipients(message.to)},
+            {"ccRecipients", graphRecipients(message.cc)},
+            {"bccRecipients", graphRecipients(message.bcc)}};
+}
+
+std::string graphId(const std::string& value, const std::string& kind, const std::string& source) {
+    if (!isGraphId(value)) {
+        throw std::invalid_argument(kind + " " + pyRepr(value) + " is not a Microsoft Graph id. Use one from " +
+                                    source + ".");
+    }
+    return percentEncode(value);
+}
+
+std::vector<std::string> attachmentNames(const json& data) {
+    std::vector<std::string> names;
+    const json& listed = field(data, "attachments");
+    if (!truthy(listed) || !listed.is_array()) return names;
+    for (const json& a : listed) names.push_back(orEmpty(field(a, "name")));
+    return names;
+}
+
+std::optional<std::string> optionalField(const json& obj, const char* key) {
+    const json& value = field(obj, key);
+    return value.is_null() ? std::nullopt : std::optional<std::string>(pyStr(value));
+}
+
+std::string bodyType(const json& body) {
+    const std::string kind = orEmpty(field(body, "contentType"));
+    return kind.empty() ? "text" : lowerAscii(kind);
+}
+
+class OutlookBackend : public ReadBackend, public WriteBackend {
 public:
-    OutlookReadBackend(TokenSource token, Transport transport)
+    OutlookBackend(TokenSource token, Transport transport)
         : token_(std::move(token)), transport_(std::move(transport)) {}
 
     std::string getUserEmail() override {
@@ -271,7 +341,163 @@ public:
                 {"truncated", truthy(field(data, "@odata.nextLink")) || static_cast<int>(rows.size()) >= top}};
     }
 
+    json listDrafts(int limit) override {
+        const json data = get("/me/mailFolders/drafts/messages",
+                              {{"$top", std::to_string(clamp(limit))},
+                               {"$select", "id,conversationId,subject,toRecipients,bodyPreview"}});
+        json rows = json::array();
+        for (const json& m : values(data)) {
+            const json& subject = field(m, "subject");
+            rows.push_back({{"draft_id", field(m, "id")},
+                            {"thread_id", field(m, "conversationId")},
+                            {"to", addressList(field(m, "toRecipients"))},
+                            {"subject", truthy(subject) ? subject : json("(no subject)")},
+                            {"preview", pyStrip(orEmpty(field(m, "bodyPreview")))}});
+        }
+        return rows;
+    }
+
+    // A PATCH touches only the fields it names, so a draft's files stay.
+    bool editKeepsAttachments() const override { return true; }
+
+    OutgoingMessage getDraft(const std::string& draftId) override {
+        const std::string path = graphId(draftId, "draft_id", "create_draft or list_drafts");
+        const json data =
+            get("/me/messages/" + path, {{"$select", kDraftSelect}, {"$expand", "attachments($select=name)"}});
+        if (!truthy(field(data, "isDraft"))) {
+            throw std::invalid_argument("Message " + pyRepr(draftId) +
+                                        " is not a draft. Use an id from create_draft or list_drafts.");
+        }
+        const json& body = field(data, "body");
+        OutgoingMessage out;
+        out.to = recipients(field(data, "toRecipients"));
+        out.cc = recipients(field(data, "ccRecipients"));
+        out.bcc = recipients(field(data, "bccRecipients"));
+        out.subject = orEmpty(field(data, "subject"));
+        out.body = orEmpty(field(body, "content"));
+        out.bodyType = bodyType(body);
+        out.threadId = optionalField(data, "conversationId");
+        out.attachments = attachmentNames(data);
+        return out;
+    }
+
+    SourceMessage getSourceMessage(const std::string& messageId) override {
+        const std::string path = graphId(messageId, "message_id", "list_inbox or search_email");
+        const json data =
+            get("/me/messages/" + path, {{"$select", kSourceSelect}, {"$expand", "attachments($select=name)"}});
+        const json& body = field(data, "body");
+        SourceMessage out;
+        out.id = messageId;
+        if (truthy(field(data, "from"))) {
+            Recipient sender = recipient(field(data, "from"));
+            if (!sender.address.empty()) out.sender = sender;
+        }
+        out.replyTo = recipients(field(data, "replyTo"));
+        out.to = recipients(field(data, "toRecipients"));
+        out.cc = recipients(field(data, "ccRecipients"));
+        out.subject = orEmpty(field(data, "subject"));
+        out.body = orEmpty(field(body, "content"));
+        out.bodyType = bodyType(body);
+        out.threadId = optionalField(data, "conversationId");
+        out.internetMessageId = optionalField(data, "internetMessageId");
+        out.received = orEmpty(field(data, "receivedDateTime"));
+        out.attachments = attachmentNames(data);
+        return out;
+    }
+
+    std::string createDraft(const OutgoingMessage& message) override {
+        if (message.replyToId) return newReplyDraft(message);
+        return idOf(write("POST", "/me/messages", graphMessage(message)));
+    }
+
+    void updateDraft(const std::string& draftId, const OutgoingMessage& message) override {
+        const std::string path = graphId(draftId, "draft_id", "create_draft or list_drafts");
+        write("PATCH", "/me/messages/" + path, graphMessage(message));
+    }
+
+    void discardDraft(const std::string& draftId) override {
+        const std::string path = graphId(draftId, "draft_id", "create_draft or list_drafts");
+        write("DELETE", "/me/messages/" + path, std::nullopt);
+    }
+
+    json sendDraft(const std::string& draftId) override {
+        const std::string path = graphId(draftId, "draft_id", "create_draft or list_drafts");
+        write("POST", "/me/messages/" + path + "/send", std::nullopt);
+        // Graph answers 202 with no body, so no sent id exists to report.
+        return {{"message_id", nullptr}, {"thread_id", nullptr}};
+    }
+
+    json send(const OutgoingMessage& message) override {
+        if (message.replyToId) return sendDraft(newReplyDraft(message));
+        write("POST", "/me/sendMail", json{{"message", graphMessage(message)}, {"saveToSentItems", true}});
+        return {{"message_id", nullptr}, {"thread_id", nullptr}};
+    }
+
 private:
+    static std::string idOf(const json& created) {
+        if (!created.is_object() || !created.contains("id")) throw std::out_of_range("'id'");
+        return pyStr(created["id"]);
+    }
+
+    // A threaded draft whose every field is the message's, not Graph's defaults.
+    std::string newReplyDraft(const OutgoingMessage& message) {
+        const std::string draftId =
+            idOf(write("POST", "/me/messages/" + percentEncode(*message.replyToId) + "/createReply", std::nullopt));
+        try {
+            updateDraft(draftId, message);
+        } catch (const MailboxError& e) {
+            throw MailboxError("Graph started a reply draft (" + draftId +
+                               ") but could not fill it in, so nothing was sent. Discard that draft in Outlook. " +
+                               e.what());
+        }
+        return draftId;
+    }
+
+    json write(const std::string& method, const std::string& path, const std::optional<json>& payload) {
+        const std::string where = method + " " + path;
+        HttpCall call{method, kGraphApiBase + path, {{"Authorization", "Bearer " + token_()}},
+                      payload ? payload->dump() : ""};
+        if (payload) call.headers.emplace("Content-Type", "application/json");
+        HttpResponse response;
+        try {
+            response = transport_(call);
+        } catch (const TransportError& e) {
+            if (e.neverSent) {
+                throw MailboxError("Could not reach Microsoft Graph for " + where + " (" + e.kind +
+                                   "), so the request never went out. Check network connectivity, then retry.");
+            }
+            throw MailboxOutcomeUnknown("The connection to Microsoft Graph failed during " + where + " (" + e.kind +
+                                        "), so GAIA can't tell whether it took effect. Check Sent Items and Drafts "
+                                        "before trying again.");
+        } catch (const std::exception&) {
+            throw MailboxOutcomeUnknown("The connection to Microsoft Graph failed during " + where +
+                                        " (TransportError), so GAIA can't tell whether it took effect. Check Sent "
+                                        "Items and Drafts before trying again.");
+        }
+        const int status = response.status;
+        if (status == 403) {
+            const std::string code = errorCode(response);
+            throw MailboxAuthError("Microsoft Graph refused this because the connection can't write mail (403). "
+                                   "Reconnect Microsoft in Settings -> Connectors and approve reading and sending "
+                                   "mail. (request: " +
+                                   where + "; code: " + (code.empty() ? "forbidden" : code) + ")");
+        }
+        if (status >= 500) {
+            throw MailboxOutcomeUnknown("Microsoft Graph answered " + std::to_string(status) + " during " + where +
+                                        ", so GAIA can't tell whether it took effect. Check Sent Items and Drafts "
+                                        "before trying again.");
+        }
+        if (status != 200 && status != 201 && status != 202 && status != 204) raise(response, where);
+        if (response.body.empty()) return json::object();
+        const json parsed = json::parse(response.body, nullptr, false);
+        if (parsed.is_discarded()) {
+            throw MailboxOutcomeUnknown("Microsoft Graph accepted " + where +
+                                        " but its answer was unreadable, so GAIA can't confirm the result. Check "
+                                        "Sent Items and Drafts before trying again.");
+        }
+        return parsed;
+    }
+
     static json valueOr(const json& obj, const char* key, int fallback) {
         return obj.is_object() && obj.contains(key) ? obj.at(key) : json(fallback);
     }
@@ -348,7 +574,11 @@ private:
 }  // namespace
 
 std::unique_ptr<ReadBackend> makeOutlookReadBackend(TokenSource token, Transport transport) {
-    return std::make_unique<OutlookReadBackend>(std::move(token), std::move(transport));
+    return std::make_unique<OutlookBackend>(std::move(token), std::move(transport));
+}
+
+std::unique_ptr<WriteBackend> makeOutlookWriteBackend(TokenSource token, Transport transport) {
+    return std::make_unique<OutlookBackend>(std::move(token), std::move(transport));
 }
 
 }  // namespace gaia::mail

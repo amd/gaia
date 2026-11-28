@@ -157,6 +157,7 @@ public:
     json listInbox(int, bool) override { throw std::logic_error("not used by the scan"); }
     json search(const std::string&, int) override { throw std::logic_error("not used by the scan"); }
     json getMessage(const std::string&) override { throw std::logic_error("not used by the scan"); }
+    json listDrafts(int) override { throw std::logic_error("not used by the scan"); }
 
     json listThreadIds(const std::string& folder, int limit) override {
         const std::string label = folder == "inbox" ? "INBOX" : "SENT";

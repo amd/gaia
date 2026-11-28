@@ -46,6 +46,19 @@ public:
 
     static const std::vector<std::string>& toolNames();
 
+    // ---- for the send-email tools, which write through the mailbox these read ----
+
+    /// The provider the reads use, resolved now. Throws the reads' MailboxError when none can be.
+    std::string activeProvider();
+    /// The account a write goes through, as its approval card names it.
+    std::string accountLabel();
+    /// A token for `scopes` on `provider`. In an app a refusal is a MailboxError naming no command.
+    std::string accessToken(const std::string& provider, const std::vector<std::string>& scopes);
+    mail::Transport transport();
+    std::string surface() const;
+    /// The saved drafts, read with the reads' one re-resolve after an auth failure.
+    json listDrafts(int limit);
+
 private:
     struct State;
     std::shared_ptr<State> state_;
