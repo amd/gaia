@@ -3928,7 +3928,10 @@ def _turn_program(agent_type: str) -> Optional[str]:
 
     if agent_type != FLAGSHIP_AGENT_ID:
         return None
-    return fetch.chosen_flagship()
+    program = fetch.saved_flagship()
+    return (
+        program if program in (fetch.PYTHON_FLAGSHIP, fetch.NATIVE_FLAGSHIP) else None
+    )
 
 
 def _failed_turn_program(

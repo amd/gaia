@@ -373,6 +373,9 @@ describe('TurnChanges on gaiacpp', () => {
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: touch a.txt', success: true })])).toBe(true);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: echo hi > a.txt', success: true })])).toBe(true);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: find . -delete', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: env rm -rf build', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: tree -o out.txt', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: uniq in.txt out.txt', success: true })])).toBe(true);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: ls -la', success: true })])).toBe(false);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: pwd', success: true })])).toBe(false);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: git status', success: true })])).toBe(false);

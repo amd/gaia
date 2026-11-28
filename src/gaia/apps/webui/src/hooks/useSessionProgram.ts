@@ -49,9 +49,9 @@ const CHANGING_TOOLS = new Set(['write_file', 'edit_file', 'run_shell_command'])
 const READ_ONLY_COMMANDS = new Set([
     'ls', 'dir', 'pwd', 'whoami', 'hostname', 'uname', 'date', 'id', 'echo', 'printf',
     'cat', 'head', 'tail', 'wc', 'stat', 'file', 'which', 'where', 'type', 'readlink',
-    'realpath', 'basename', 'dirname', 'du', 'df', 'uptime', 'env', 'printenv', 'ps',
-    'grep', 'egrep', 'fgrep', 'rg', 'ag', 'tree', 'diff', 'cmp', 'md5sum', 'sha256sum',
-    'shasum', 'tr', 'cut', 'uniq', 'nl', 'less', 'more', 'true', 'false',
+    'realpath', 'basename', 'dirname', 'du', 'df', 'uptime', 'printenv', 'ps',
+    'grep', 'egrep', 'fgrep', 'rg', 'ag', 'diff', 'cmp', 'md5sum', 'sha256sum',
+    'shasum', 'tr', 'cut', 'nl', 'less', 'more', 'true', 'false',
 ]);
 
 const GIT_READ_ONLY = new Set([
