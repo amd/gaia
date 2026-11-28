@@ -109,7 +109,10 @@ def user_skills_dir() -> Path:
 def _parse(entry: Path, root: SkillRoot, *, body: bool = False) -> Skill:
     """Parse *entry*, named as its root names it; *body* also reads instructions."""
     if root.plugin is not None:
-        skill = parse_project_skill_file(entry, root=root.label, read_only=True)
+        # A one-skill plugin's folder is its version (humanizer/3.1.0), not its name.
+        skill = parse_project_skill_file(
+            entry, root=root.label, read_only=True, check_directory_name=False
+        )
         skill.name = f"{root.plugin}:{skill.name}"
         return skill
     if root.label == ROOT_CLAUDE_PROJECT:

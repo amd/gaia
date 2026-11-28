@@ -313,6 +313,16 @@ def test_enabled_plugins_skills_are_named_as_claude_code_names_them(
     assert "PLANT-CARE-BODY" in loaded.body
 
 
+def test_a_one_skill_plugin_in_its_version_folder_logs_no_warning(
+    claude_home, tmp_path
+):
+    with patch("gaia.skills.format.log") as log:
+        skills = {s.name: s for s in default_manager(tmp_path).list_skills()}
+
+    assert skills["solo:solo"].description == "One skill."
+    log.warning.assert_not_called()
+
+
 def test_no_plugin_registry_means_no_plugin_skills(claude_home, tmp_path):
     (claude_home / ".claude" / "plugins" / "installed_plugins.json").unlink()
 
