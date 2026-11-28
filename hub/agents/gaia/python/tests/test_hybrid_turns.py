@@ -12,6 +12,7 @@ from gaiapy import stdio
 from gaiapy.agent import GaiaAgent
 from gaiapy.chat_agent import ChatAgent
 
+from gaia.agents.base import model_switch  # noqa: E402
 from gaia.llm import hybrid
 from gaia.llm.hybrid import HybridRouter, HybridSettings, RouteDecision
 
@@ -135,7 +136,7 @@ def test_two_sessions_keep_their_own_sticky_state(monkeypatch):
 def test_picking_a_model_by_name_ends_routing(monkeypatch):
     agent = GaiaAgent.__new__(GaiaAgent)
     agent.hybrid_router = object()
-    monkeypatch.setattr(stdio, "_apply_local_switch", lambda a, t, s=None: t)
+    monkeypatch.setattr(model_switch, "_apply_local_switch", lambda a, t, s=None: t)
     monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
     assert stdio.switch_model(agent, "amd.Other") == "amd.Other"
     assert agent.hybrid_router is None
@@ -149,7 +150,7 @@ def test_a_failed_named_switch_keeps_routing(monkeypatch):
     def refuse(a, t, s=None):
         raise RuntimeError("Unknown Lemonade model")
 
-    monkeypatch.setattr(stdio, "_apply_local_switch", refuse)
+    monkeypatch.setattr(model_switch, "_apply_local_switch", refuse)
     monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
     with pytest.raises(RuntimeError):
         stdio.switch_model(agent, "amd.Missing")
