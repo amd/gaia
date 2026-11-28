@@ -1528,6 +1528,8 @@ const messages: Messages = {
     'prompt.always.file': '{action} {name}',
     'prompt.always.folder': '{action} في {folder}',
     'prompt.always.changes': 'تغيير الملفات في {folder}',
+    'prompt.always.command': 'تشغيل {command}',
+    'prompt.always.commands': 'تشغيل أوامر {command}',
     'prompt.deny': 'رفض',
     'prompt.details': 'التفاصيل',
     'prompt.technicalDetails': 'التفاصيل التقنية',

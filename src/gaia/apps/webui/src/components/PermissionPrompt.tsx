@@ -11,6 +11,7 @@ import {
     PATH_ACCESS_TOOL,
     PROJECT_TRUST_TOOL,
     permissionPromptText,
+    alwaysCommandScopeRef,
     alwaysScopeText,
     type PermissionDecision,
 } from '../stores/notificationStore';
@@ -215,6 +216,11 @@ export function shownScript(tool: string | undefined, args: Record<string, unkno
 /** Longest command a button shows whole; a longer one keeps both ends around a visible "…". */
 const SCOPE_COMMAND_CHARS = 64;
 
+function shortCommand(cmd: string): string {
+    if (cmd.length <= SCOPE_COMMAND_CHARS) return cmd;
+    return `${cmd.slice(0, SCOPE_COMMAND_CHARS - 20)} … ${cmd.slice(-16)}`;
+}
+
 /** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
 export function shortScope(scope: string): string {
     // A command (gaiacpp quotes it in backticks) is never shortened by its paths: `cp /a/x /b/y`
@@ -308,6 +314,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const markedScope = notification.alwaysScope && visibleStrict(notification.alwaysScope);
     const scopeText = alwaysScopeText({ ...notification, alwaysScope: markedScope }, t)
         ?? visibleStrict(notification.alwaysLabel ?? scope ?? '');
+    const alwaysButtonScope = alwaysCommandScopeRef(markedScope, (cmd) => markLtr(shortCommand(cmd))) ?? shortScope(scopeText);
+    const alwaysHintScope = alwaysCommandScopeRef(markedScope, markLtr) ?? scopeText;
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const field = summarize(notification);
@@ -459,7 +467,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
             )}
             {suggestAlways && !expired && (
                 <p className="perm-card-hint">
-                    {t.compose((say) => `${say(pluralKey('prompt.repeated', repeats), { n: repeats })} ${say('prompt.alwaysHint', { scope: scopeText })}`)}
+                    <MarkedText
+                        text={t.compose((say) => `${say(pluralKey('prompt.repeated', repeats), { n: repeats })} ${say('prompt.alwaysHint', { scope: alwaysHintScope })}`)}
+                    />
                 </p>
             )}
             {expired ? (
@@ -478,7 +488,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             disabled={busy}
                             title={scopeText}
                         >
-                            {t('prompt.alwaysAllow', { scope: shortScope(scopeText) })}
+                            <span className="perm-btn-label"><MarkedText text={t('prompt.alwaysAllow', { scope: alwaysButtonScope })} /></span>
                         </button>
                     )}
                     <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>
