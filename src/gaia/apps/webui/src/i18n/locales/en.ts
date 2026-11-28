@@ -1203,6 +1203,7 @@ export const enMessages = {
     'fileBrowser.columnsLabel': 'Columns:',
     'fileBrowser.previewLoading': 'Loading preview...',
     'fileBrowser.binary': 'Binary file - no preview available',
+    'fileBrowser.emptyFile': 'This file is empty',
     'docs.loadRetry': 'Try again',
     'docs.deleteFailed': 'Couldn\'t remove {name}: {error}',
     'docs.cancelFailed': 'Couldn\'t cancel indexing {name}: {error}',
