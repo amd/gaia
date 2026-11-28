@@ -219,6 +219,20 @@ const RUN_NATIVE_AGENT_FAILED = {
         test('agent', 'failed', { subject: QWEN_ID, kind: 'agent', agent: 'gaiacpp', agent_error: NATIVE_SAID, error: NATIVE_CHAT_FAILED, seconds: 4 }),
     ],
 };
+// The chosen gaiacpp isn't on this PC: the same two fixes a new chat offers (#8772).
+const NATIVE_MISSING = 'gaiacpp is chosen as the agent but it is not installed on this PC (looked in: C:\\Users\\you\\.gaia\\bin\\gaiacpp.exe).';
+const NATIVE_MISSING_FAILED = `The test chat couldn't run: ${NATIVE_MISSING.slice(0, -1)}. Download gaiacpp again, or finish setup on the Python agent. The setup report has the details.`;
+const RUN_NATIVE_AGENT_MISSING = {
+    ...RUN, state: 'failed', error: NATIVE_MISSING_FAILED, models: DONE_ROWS,
+    tests: [
+        test('server', 'passed', { seconds: 1 }),
+        test('chat', 'passed', { subject: QWEN_ID, seconds: 21 }),
+        test('agent', 'failed', {
+            subject: QWEN_ID, kind: 'agent', agent: 'gaiacpp', agent_error: NATIVE_MISSING, error: NATIVE_MISSING_FAILED, seconds: 1,
+            agent_problem: { code: 'gaiacpp_missing', detail: NATIVE_MISSING },
+        }),
+    ],
+};
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
 
 // Setup is ready; speech-to-text, added on the Download step, is downloading on its own.
@@ -894,6 +908,12 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.setup-result-error-said')).toBeVisible(),
     },
     {
+        // The chosen gaiacpp is missing: download it again or use the Python agent, right here.
+        name: 'test-failed-agent-gaiacpp-missing',
+        answers: { status: RUN_NATIVE_AGENT_MISSING, agent: { gaiacpp: 'downloadable' } },
+        reach: (page) => expect(page.locator('.agent-recovery-actions button')).toHaveCount(2),
+    },
+    {
         name: 'test-long',
         answers: { status: RUN_TEST_LONG, plan: PLAN_LONG },
         reach: (page) => expect(page.locator('.setup-result-error')).toBeVisible(),
@@ -918,7 +938,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'models-agent-outdated', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-failed-agent-gaiacpp', 'test-long', 'ready'];
+export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'models-agent-outdated', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-failed-agent-gaiacpp', 'test-failed-agent-gaiacpp-missing', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

@@ -702,19 +702,20 @@ def schemas():
     return out
 
 
-def main():
+def main(out_dir=None):
     cases = []
     for spec in CASES:
         spec = dict(spec, expected=run(spec))
         cases.append(spec)
     httpx.Client = REAL_CLIENT
-    target = Path(__file__).with_name("email_tools_parity.json")
+    target = Path(out_dir or Path(__file__).parent) / "email_tools_parity.json"
     target.write_text(
         json.dumps({"schemas": schemas(), "cases": cases}, indent=1, ensure_ascii=False)
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     print(f"wrote {len(cases)} cases to {target}")
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1] if len(sys.argv) > 1 else None)

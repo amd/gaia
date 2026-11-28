@@ -24,7 +24,10 @@ const json& field(const json& obj, const char* key);
 bool truthy(const json& value);
 
 /// `value` when it is a string, else "".
-std::string text(const json& value);
+std::string textOf(const json& value);
+
+/// An ASCII letter or digit, or one of `extra`.
+bool isWordChar(char c, const char* extra);
 
 /// `str(value)` for a JSON scalar, as Python prints it.
 std::string pyStr(const json& value);

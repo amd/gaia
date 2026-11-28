@@ -301,6 +301,7 @@ private:
         // Non-2xx with a body — drives error-status tests.
         server_->Get("/test/boom", [](const httplib::Request&, httplib::Response& res) {
             res.status = 500;
+            res.set_header("Retry-After", "7");
             res.set_content("boom: upstream exploded", "text/plain");
         });
 

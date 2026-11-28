@@ -419,7 +419,7 @@ struct HttpClient::Impl {
         response.headers = convertHeaders(result->headers);
 
         const bool redirect = response.status >= 300 && response.status < 400;
-        if (!response.ok() && !(redirect && config.returnRedirects)) {
+        if (!response.ok() && !config.returnErrorStatuses && !(redirect && config.returnRedirects)) {
             throw HttpError(std::string(method) + " " + t.url + " returned HTTP " +
                                 std::to_string(response.status) +
                                 (response.body.empty()
@@ -441,6 +441,8 @@ struct HttpClient::Impl {
     HttpResponse doGet(const std::string& path, const HttpHeaders& headers, int timeoutSec, int connectTimeoutSec);
     HttpResponse doPost(const std::string& path, const std::string& body, const HttpHeaders& headers,
                         int timeoutSec, int connectTimeoutSec);
+    HttpResponse doSend(const char* method, const std::string& path, const std::string& body,
+                        const HttpHeaders& headers, int timeoutSec, int connectTimeoutSec);
     HttpResponse doPostMultipart(const std::string& path, const std::vector<HttpMultipartPart>& parts,
                                  const HttpHeaders& headers, int timeoutSec, int connectTimeoutSec);
     HttpResponse doPostStreaming(const std::string& path, const std::string& body, HttpChunkCallback onChunk,
@@ -552,7 +554,7 @@ HttpResponse HttpClient::Impl::doGet(const std::string& path, const HttpHeaders&
             cli.stop();  // the rest of the body is still on this connection
             // A long error page is still an error, not the content that was asked for.
             const bool redirect = capped.status >= 300 && capped.status < 400;
-            if (!capped.ok() && !(redirect && config.returnRedirects)) {
+            if (!capped.ok() && !config.returnErrorStatuses && !(redirect && config.returnRedirects)) {
                 throw HttpError("GET " + t.url + " returned HTTP " + std::to_string(capped.status) + ": " +
                                     truncateForError(capped.body),
                                 t.url, capped.status, capped.body);
@@ -569,19 +571,29 @@ HttpResponse HttpClient::Impl::doGet(const std::string& path, const HttpHeaders&
 HttpResponse HttpClient::Impl::doPost(const std::string& path, const std::string& body,
                               const HttpHeaders& headers, int timeoutSec,
                               int connectTimeoutSec) {
+    return doSend("POST", path, body, headers, timeoutSec, connectTimeoutSec);
+}
+
+HttpResponse HttpClient::Impl::doSend(const char* method, const std::string& path, const std::string& body,
+                                      const HttpHeaders& headers, int timeoutSec, int connectTimeoutSec) {
     const Target t = resolve(path);
     const int readSec    = readTimeout(timeoutSec);
     const int connectSec = connectTimeout(connectTimeoutSec);
+    const std::string verb = method;
+    const bool bodiless = verb == "DELETE" && body.empty();
     std::string contentType = "application/json";
-    const httplib::Headers hdrs = mergeHeaders(headers, t.url, &contentType);
-    logRequest("POST", t);
+    const httplib::Headers hdrs = mergeHeaders(headers, t.url, bodiless ? nullptr : &contentType);
+    logRequest(method, t);
 
     Lease lease(*this, t);
     httplib::ClientImpl& cli = lease.client();
     applyTimeouts(cli, connectSec, readSec);
     cli.set_follow_location(false); // only GET follows redirects
-    httplib::Result result = cli.Post(t.path, hdrs, body, contentType);
-    return finish("POST", t, result, connectSec, readSec);
+    httplib::Result result = verb == "POST"  ? cli.Post(t.path, hdrs, body, contentType)
+                             : verb == "PATCH" ? cli.Patch(t.path, hdrs, body, contentType)
+                             : bodiless        ? cli.Delete(t.path, hdrs)
+                                               : cli.Delete(t.path, hdrs, body, contentType);
+    return finish(method, t, result, connectSec, readSec);
 }
 
 HttpResponse HttpClient::Impl::doPostMultipart(const std::string& path,
@@ -767,6 +779,21 @@ HttpResponse HttpClient::post(const std::string& path, const std::string& body,
                               int connectTimeoutSec) {
     return Impl::cancellable(impl_, "POST", path, [=](Impl& impl) {
         return impl.doPost(path, body, headers, timeoutSec, connectTimeoutSec);
+    });
+}
+
+HttpResponse HttpClient::patch(const std::string& path, const std::string& body,
+                               const HttpHeaders& headers, int timeoutSec,
+                               int connectTimeoutSec) {
+    return Impl::cancellable(impl_, "PATCH", path, [=](Impl& impl) {
+        return impl.doSend("PATCH", path, body, headers, timeoutSec, connectTimeoutSec);
+    });
+}
+
+HttpResponse HttpClient::del(const std::string& path, const HttpHeaders& headers, int timeoutSec,
+                             int connectTimeoutSec) {
+    return Impl::cancellable(impl_, "DELETE", path, [=](Impl& impl) {
+        return impl.doSend("DELETE", path, "", headers, timeoutSec, connectTimeoutSec);
     });
 }
 

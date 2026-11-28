@@ -322,6 +322,13 @@ class AgentLoop:
         if agent_mode == "manual":
             return LoopDirective("paused", reason="agent_mode=manual")
 
+        # Goals run on Full-featured's memory; gaiacpp lacks Goals and set_loop_state.
+        from gaia.daemon.sidecars import fetch
+
+        if fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
+            logger.debug("AgentLoop: paused while flagship_agent=gaiacpp")
+            return LoopDirective("paused", reason="flagship_agent=gaiacpp")
+
         # ── Hourly rate limit ────────────────────────────────────────────
         # Check before the session/goal lookups so a spent budget short-circuits;
         # the counter is only incremented once a tick reaches _execute_tick.

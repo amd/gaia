@@ -411,6 +411,13 @@ public:
         flushTokens();
         resetStream();
     }
+    void printAnswerRetracted(const std::string&) override {
+        resetStream();
+        server_.write({{"type", "status"},
+                       {"phase", "answer_check"},
+                       {"message", "Checking the answer"},
+                       {"retracts_answer", true}});
+    }
     void printStreamToken(const std::string& token) override {
         // Reasoning stays out of the answer. A tag may be split across tokens,
         // so a possible tag prefix is held back.

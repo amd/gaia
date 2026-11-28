@@ -13,7 +13,7 @@ import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import { confirmTool } from '../services/api';
 import { useChatStore } from './chatStore';
-import { isMessageKey, ref, type MessageKey } from '../i18n/registry';
+import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, type Translate } from '../i18n/useT';
 
 // ── Constants ────────────────────────────────────────────────────────────
@@ -129,13 +129,37 @@ function toolAction(n: GaiaNotification, t: Translate): string | null {
 
 /** The scope of a folder grant shared by writes, edits and renames. */
 const FILE_CHANGE_SCOPE = 'changes to files in ';
+const BASH_EXACT_SCOPE = 'bash_execute:exact:';
+const BASH_CMD_SCOPE = 'bash_execute:cmd:';
+
+/**
+ * Localized message ref for a gaiacpp shell grant (`bash_execute:exact:` / `bash_execute:cmd:`),
+ * so both the UI language and any bracketed English gloss translate without raw backticks.
+ */
+export function alwaysCommandScopeRef(
+  alwaysScope: string | undefined,
+  formatCommand: (cmd: string) => string = (s) => s,
+): MessageRef | null {
+  if (alwaysScope?.startsWith(BASH_EXACT_SCOPE)) {
+    const command = alwaysScope.slice(BASH_EXACT_SCOPE.length);
+    if (command) return ref('prompt.always.command', { command: formatCommand(command) });
+  }
+  if (alwaysScope?.startsWith(BASH_CMD_SCOPE)) {
+    const command = alwaysScope.slice(BASH_CMD_SCOPE.length);
+    if (command) return ref('prompt.always.commands', { command: formatCommand(command) });
+  }
+  return null;
+}
 
 /**
  * What an "always allow" answer covers, in the UI language. The backend words
- * its scope in English (`write_file on notes.txt`, `changes to files in /x`);
- * null when the scope isn't one of those, and the caller keeps the backend's text.
+ * its scope in English (`write_file on notes.txt`, `changes to files in /x`,
+ * `bash_execute:exact:...`, `bash_execute:cmd:...`); null when the scope isn't
+ * one of those, and the caller keeps the backend's text.
  */
 export function alwaysScopeText(n: GaiaNotification, t: Translate): string | null {
+  const bashRef = alwaysCommandScopeRef(n.alwaysScope);
+  if (bashRef) return t.bare(bashRef.ref, bashRef.params);
   if (n.alwaysScope?.startsWith(FILE_CHANGE_SCOPE)) {
     return t.bare('prompt.always.changes', { folder: n.alwaysScope.slice(FILE_CHANGE_SCOPE.length) });
   }

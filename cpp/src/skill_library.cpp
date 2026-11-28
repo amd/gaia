@@ -163,6 +163,11 @@ void SkillLibrary::refresh() {
         }
     }
     addBuiltIns();
+    std::lock_guard<std::mutex> lock(loadedMutex_);
+    for (auto it = loaded_.begin(); it != loaded_.end();) {
+        if (skills_.find(it->first) == skills_.end()) it = loaded_.erase(it);
+        else ++it;
+    }
 }
 
 void SkillLibrary::addBuiltIns() {

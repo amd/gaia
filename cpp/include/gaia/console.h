@@ -87,6 +87,11 @@ public:
     /// Called once after the streaming response completes.
     /// TerminalConsole prints a trailing newline.
     virtual void printStreamEnd() {}
+
+    /// Called when an end-of-turn check sends a draft answer back to be rewritten.
+    /// Wire consoles emit the canonical `answer_check` retraction instead of
+    /// leaking the internal review prompt; terminal consoles print `detail`.
+    virtual void printAnswerRetracted(const std::string& detail) { printWarning(detail); }
 };
 
 /// Terminal console with ANSI color output.

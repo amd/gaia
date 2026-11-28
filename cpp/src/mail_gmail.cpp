@@ -18,6 +18,7 @@
 #include <thread>
 
 #include "lower_ascii.h"
+#include "mail_text.h"
 
 namespace gaia::mail {
 
@@ -51,11 +52,6 @@ const std::string& summaryFields() {
     static const std::string fields =
         "id,threadId,labelIds,snippet,internalDate,payload(" + partFields(kPartTreeDepth) + ")";
     return fields;
-}
-
-bool isWordChar(char c, const char* extra) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-           std::string(extra).find(c) != std::string::npos;
 }
 
 // The shape Gmail issues for a message id. Thread ids share it.
@@ -372,314 +368,13 @@ std::string decodeWords(const std::string& raw) {
     }
 }
 
-// ---- addresses (email.utils.getaddresses, strict) ----
-
-using Address = std::pair<std::string, std::string>;
-
-class AddrlistParser {
-public:
-    explicit AddrlistParser(std::string field) : field_(std::move(field)) {}
-
-    std::vector<Address> addrlist() {
-        std::vector<Address> result;
-        while (pos_ < field_.size()) {
-            const auto ad = address();
-            if (!ad.empty()) {
-                result.insert(result.end(), ad.begin(), ad.end());
-            } else {
-                result.emplace_back("", "");
-            }
-        }
-        return result;
-    }
-
-private:
-    static constexpr const char* kSpecials = "()<>@,:;.\"[]";
-    static constexpr const char* kLws = " \t";
-
-    bool in(const char* set) const { return pos_ < field_.size() && std::string(set).find(field_[pos_]) != std::string::npos; }
-    bool atomEnd() const { return in(kSpecials) || in(" \t\r\n"); }
-    bool phraseEnd() const { return in("()<>@,:;\"[]") || in(" \t\r\n"); }
-
-    static std::string join(const std::vector<std::string>& parts, const std::string& sep) {
-        std::string out;
-        for (std::size_t i = 0; i < parts.size(); ++i) {
-            if (i) out += sep;
-            out += parts[i];
-        }
-        return out;
-    }
-
-    std::string gotonext() {
-        std::string ws;
-        while (pos_ < field_.size()) {
-            if (in(" \t\n\r")) {
-                if (!in("\n\r")) ws += field_[pos_];
-                ++pos_;
-            } else if (field_[pos_] == '(') {
-                comments_.push_back(comment());
-            } else {
-                break;
-            }
-        }
-        return ws;
-    }
-
-    std::vector<Address> address() {
-        comments_.clear();
-        gotonext();
-        const std::size_t oldpos = pos_;
-        const auto oldcl = comments_;
-        const auto plist = phraselist();
-        gotonext();
-        std::vector<Address> out;
-        if (pos_ >= field_.size()) {
-            if (!plist.empty()) out = {{join(comments_, " "), plist[0]}};
-        } else if (in(".@")) {
-            pos_ = oldpos;
-            comments_ = oldcl;
-            const std::string spec = addrspec();
-            out = {{join(comments_, " "), spec}};
-        } else if (field_[pos_] == ':') {
-            ++pos_;
-            while (pos_ < field_.size()) {
-                gotonext();
-                if (pos_ < field_.size() && field_[pos_] == ';') {
-                    ++pos_;
-                    break;
-                }
-                const auto member = address();
-                out.insert(out.end(), member.begin(), member.end());
-            }
-        } else if (field_[pos_] == '<') {
-            const std::string route = routeaddr();
-            if (!comments_.empty()) {
-                out = {{join(plist, " ") + " (" + join(comments_, " ") + ")", route}};
-            } else {
-                out = {{join(plist, " "), route}};
-            }
-        } else {
-            if (!plist.empty()) {
-                out = {{join(comments_, " "), plist[0]}};
-            } else if (in(kSpecials)) {
-                ++pos_;
-            }
-        }
-        gotonext();
-        if (pos_ < field_.size() && field_[pos_] == ',') ++pos_;
-        return out;
-    }
-
-    std::string routeaddr() {
-        bool expectroute = false;
-        ++pos_;
-        gotonext();
-        std::string adlist;
-        while (pos_ < field_.size()) {
-            if (expectroute) {
-                domain();
-                expectroute = false;
-            } else if (field_[pos_] == '>') {
-                ++pos_;
-                break;
-            } else if (field_[pos_] == '@') {
-                ++pos_;
-                expectroute = true;
-            } else if (field_[pos_] == ':') {
-                ++pos_;
-            } else {
-                adlist = addrspec();
-                ++pos_;
-                break;
-            }
-            gotonext();
-        }
-        return adlist;
-    }
-
-    std::string addrspec() {
-        std::vector<std::string> aslist;
-        const auto popBlank = [&] {
-            if (!aslist.empty() && pyStrip(aslist.back()).empty()) aslist.pop_back();
-        };
-        gotonext();
-        while (pos_ < field_.size()) {
-            bool preserveWs = true;
-            if (field_[pos_] == '.') {
-                popBlank();
-                aslist.emplace_back(".");
-                ++pos_;
-                preserveWs = false;
-            } else if (field_[pos_] == '"') {
-                std::string quoted;
-                for (const char c : quote()) {
-                    if (c == '\\' || c == '"') quoted += '\\';
-                    quoted += c;
-                }
-                aslist.push_back("\"" + quoted + "\"");
-            } else if (atomEnd()) {
-                popBlank();
-                break;
-            } else {
-                aslist.push_back(atom(false));
-            }
-            const std::string ws = gotonext();
-            if (preserveWs && !ws.empty()) aslist.push_back(ws);
-        }
-        if (pos_ >= field_.size() || field_[pos_] != '@') return join(aslist, "");
-        aslist.emplace_back("@");
-        ++pos_;
-        gotonext();
-        const std::string dom = domain();
-        if (dom.empty()) return "";
-        return join(aslist, "") + dom;
-    }
-
-    std::string domain() {
-        std::string out;
-        while (pos_ < field_.size()) {
-            if (in(kLws)) {
-                ++pos_;
-            } else if (field_[pos_] == '(') {
-                comments_.push_back(comment());
-            } else if (field_[pos_] == '[') {
-                out += "[" + delimited('[', "]\r", false) + "]";
-            } else if (field_[pos_] == '.') {
-                ++pos_;
-                out += '.';
-            } else if (field_[pos_] == '@') {
-                return "";
-            } else if (atomEnd()) {
-                break;
-            } else {
-                out += atom(false);
-            }
-        }
-        return out;
-    }
-
-    std::string delimited(char begin, const char* ends, bool allowComments) {
-        if (field_[pos_] != begin) return "";
-        std::string out;
-        bool quoted = false;
-        ++pos_;
-        while (pos_ < field_.size()) {
-            if (quoted) {
-                out += field_[pos_];
-                quoted = false;
-            } else if (in(ends)) {
-                ++pos_;
-                break;
-            } else if (allowComments && field_[pos_] == '(') {
-                out += comment();
-                continue;
-            } else if (field_[pos_] == '\\') {
-                quoted = true;
-            } else {
-                out += field_[pos_];
-            }
-            ++pos_;
-        }
-        return out;
-    }
-
-    std::string quote() { return delimited('"', "\"\r", false); }
-    std::string comment() { return delimited('(', ")\r", true); }
-
-    std::string atom(bool phrase) {
-        std::string out;
-        while (pos_ < field_.size() && !(phrase ? phraseEnd() : atomEnd())) out += field_[pos_++];
-        return out;
-    }
-
-    std::vector<std::string> phraselist() {
-        std::vector<std::string> plist;
-        while (pos_ < field_.size()) {
-            if (in(" \t\r\n")) {
-                ++pos_;
-            } else if (field_[pos_] == '"') {
-                plist.push_back(quote());
-            } else if (field_[pos_] == '(') {
-                comments_.push_back(comment());
-            } else if (phraseEnd()) {
-                break;
-            } else {
-                plist.push_back(atom(true));
-            }
-        }
-        return plist;
-    }
-
-    std::string field_;
-    std::size_t pos_ = 0;
-    std::vector<std::string> comments_;
-};
-
-// (position, char) pairs with backslash escapes kept together, as _iter_escaped_chars.
-std::vector<std::pair<std::size_t, std::string>> escapedChars(const std::string& s) {
-    std::vector<std::pair<std::size_t, std::string>> out;
-    bool escape = false;
-    std::size_t pos = 0;
-    for (pos = 0; pos < s.size(); ++pos) {
-        if (escape) {
-            out.emplace_back(pos, std::string("\\") + s[pos]);
-            escape = false;
-        } else if (s[pos] == '\\') {
-            escape = true;
-        } else {
-            out.emplace_back(pos, std::string(1, s[pos]));
-        }
-    }
-    if (escape) out.emplace_back(s.empty() ? 0 : s.size() - 1, "\\");
-    return out;
-}
-
-std::string stripQuotedRealnames(const std::string& s) {
-    if (s.find('"') == std::string::npos) return s;
-    std::size_t start = 0;
-    std::optional<std::size_t> open;
-    std::string out;
-    for (const auto& [pos, ch] : escapedChars(s)) {
-        if (ch != "\"") continue;
-        if (!open) {
-            open = pos;
-        } else {
-            if (start != *open) out += s.substr(start, *open - start);
-            start = pos + 1;
-            open.reset();
-        }
-    }
-    if (start < s.size()) out += s.substr(start);
-    return out;
-}
-
-bool balancedParens(const std::string& s) {
-    int opens = 0;
-    for (const auto& [pos, ch] : escapedChars(stripQuotedRealnames(s))) {
-        (void)pos;
-        if (ch == "(") ++opens;
-        if (ch == ")" && --opens < 0) return false;
-    }
-    return opens == 0;
-}
-
-std::vector<Address> getAddresses(const std::string& value) {
-    const std::vector<Address> invalid = {{"", ""}};
-    if (!balancedParens(value)) return invalid;
-    std::vector<Address> result = value.empty() ? std::vector<Address>{} : AddrlistParser(value).addrlist();
-    for (auto& a : result) {
-        if (a.second.find('[') != std::string::npos) a = {"", ""};
-    }
-    const std::string bare = stripQuotedRealnames(value);
-    const auto expected = static_cast<std::size_t>(1 + std::count(bare.begin(), bare.end(), ','));
-    return result.size() == expected ? result : invalid;
-}
+// ---- addresses ----
 
 // One RFC 5322 address header as Graph's `Name <addr>` list.
 std::string addressList(const std::string& raw) {
     std::string out;
-    for (const auto& [rawName, rawAddr] : getAddresses(decodeWords(raw))) {
-        const std::string name = pyStrip(rawName), addr = pyStrip(rawAddr);
+    for (const auto& address : text::getaddresses(decodeWords(raw))) {
+        const std::string name = pyStrip(address.name), addr = pyStrip(address.addr);
         std::string part;
         if (!name.empty() && !addr.empty() && lowerAscii(name) != lowerAscii(addr)) {
             part = name + " <" + addr + ">";
@@ -694,140 +389,6 @@ std::string addressList(const std::string& raw) {
     return out;
 }
 
-// ---- html.unescape ----
-
-struct Entity {
-    const char* name;
-    long cp;
-    bool legacy;  // also matched without the closing ';'
-};
-
-const Entity kEntities[] = {
-    {"amp", '&', true},     {"lt", '<', true},       {"gt", '>', true},      {"quot", '"', true},
-    {"AMP", '&', true},     {"LT", '<', true},       {"GT", '>', true},      {"QUOT", '"', true},
-    {"COPY", 0xA9, true},   {"REG", 0xAE, true},     {"apos", '\'', false},  {"nbsp", 0xA0, true},
-    {"iexcl", 0xA1, true},  {"cent", 0xA2, true},    {"pound", 0xA3, true},  {"curren", 0xA4, true},
-    {"yen", 0xA5, true},    {"brvbar", 0xA6, true},  {"sect", 0xA7, true},   {"uml", 0xA8, true},
-    {"copy", 0xA9, true},   {"ordf", 0xAA, true},    {"laquo", 0xAB, true},  {"not", 0xAC, true},
-    {"shy", 0xAD, true},    {"reg", 0xAE, true},     {"macr", 0xAF, true},   {"deg", 0xB0, true},
-    {"plusmn", 0xB1, true}, {"sup2", 0xB2, true},    {"sup3", 0xB3, true},   {"acute", 0xB4, true},
-    {"micro", 0xB5, true},  {"para", 0xB6, true},    {"middot", 0xB7, true}, {"cedil", 0xB8, true},
-    {"sup1", 0xB9, true},   {"ordm", 0xBA, true},    {"raquo", 0xBB, true},  {"frac14", 0xBC, true},
-    {"frac12", 0xBD, true}, {"frac34", 0xBE, true},  {"iquest", 0xBF, true}, {"Agrave", 0xC0, true},
-    {"Aacute", 0xC1, true}, {"Acirc", 0xC2, true},   {"Atilde", 0xC3, true}, {"Auml", 0xC4, true},
-    {"Aring", 0xC5, true},  {"AElig", 0xC6, true},   {"Ccedil", 0xC7, true}, {"Egrave", 0xC8, true},
-    {"Eacute", 0xC9, true}, {"Ecirc", 0xCA, true},   {"Euml", 0xCB, true},   {"Igrave", 0xCC, true},
-    {"Iacute", 0xCD, true}, {"Icirc", 0xCE, true},   {"Iuml", 0xCF, true},   {"ETH", 0xD0, true},
-    {"Ntilde", 0xD1, true}, {"Ograve", 0xD2, true},  {"Oacute", 0xD3, true}, {"Ocirc", 0xD4, true},
-    {"Otilde", 0xD5, true}, {"Ouml", 0xD6, true},    {"times", 0xD7, true},  {"Oslash", 0xD8, true},
-    {"Ugrave", 0xD9, true}, {"Uacute", 0xDA, true},  {"Ucirc", 0xDB, true},  {"Uuml", 0xDC, true},
-    {"Yacute", 0xDD, true}, {"THORN", 0xDE, true},   {"szlig", 0xDF, true},  {"agrave", 0xE0, true},
-    {"aacute", 0xE1, true}, {"acirc", 0xE2, true},   {"atilde", 0xE3, true}, {"auml", 0xE4, true},
-    {"aring", 0xE5, true},  {"aelig", 0xE6, true},   {"ccedil", 0xE7, true}, {"egrave", 0xE8, true},
-    {"eacute", 0xE9, true}, {"ecirc", 0xEA, true},   {"euml", 0xEB, true},   {"igrave", 0xEC, true},
-    {"iacute", 0xED, true}, {"icirc", 0xEE, true},   {"iuml", 0xEF, true},   {"eth", 0xF0, true},
-    {"ntilde", 0xF1, true}, {"ograve", 0xF2, true},  {"oacute", 0xF3, true}, {"ocirc", 0xF4, true},
-    {"otilde", 0xF5, true}, {"ouml", 0xF6, true},    {"divide", 0xF7, true}, {"oslash", 0xF8, true},
-    {"ugrave", 0xF9, true}, {"uacute", 0xFA, true},  {"ucirc", 0xFB, true},  {"uuml", 0xFC, true},
-    {"yacute", 0xFD, true}, {"thorn", 0xFE, true},   {"yuml", 0xFF, true},   {"OElig", 0x152, false},
-    {"oelig", 0x153, false}, {"Scaron", 0x160, false}, {"scaron", 0x161, false}, {"Yuml", 0x178, false},
-    {"fnof", 0x192, false}, {"circ", 0x2C6, false},  {"tilde", 0x2DC, false}, {"ensp", 0x2002, false},
-    {"emsp", 0x2003, false}, {"thinsp", 0x2009, false}, {"zwnj", 0x200C, false}, {"zwj", 0x200D, false},
-    {"lrm", 0x200E, false}, {"rlm", 0x200F, false},  {"ndash", 0x2013, false}, {"mdash", 0x2014, false},
-    {"lsquo", 0x2018, false}, {"rsquo", 0x2019, false}, {"sbquo", 0x201A, false}, {"ldquo", 0x201C, false},
-    {"rdquo", 0x201D, false}, {"bdquo", 0x201E, false}, {"dagger", 0x2020, false}, {"Dagger", 0x2021, false},
-    {"bull", 0x2022, false}, {"hellip", 0x2026, false}, {"permil", 0x2030, false}, {"lsaquo", 0x2039, false},
-    {"rsaquo", 0x203A, false}, {"euro", 0x20AC, false}, {"trade", 0x2122, false},
-};
-
-const Entity* findEntity(const std::string& name, bool withSemicolon) {
-    for (const Entity& e : kEntities) {
-        if (name == e.name && (withSemicolon || e.legacy)) return &e;
-    }
-    return nullptr;
-}
-
-bool invalidCodepoint(long n) {
-    return (n >= 0x1 && n <= 0x8) || n == 0xB || (n >= 0xE && n <= 0x1F) || (n >= 0x7F && n <= 0x9F) ||
-           (n >= 0xFDD0 && n <= 0xFDEF) || (n & 0xFFFE) == 0xFFFE;
-}
-
-std::string numericCharref(long num) {
-    std::string out;
-    if (num == 0) return "\xEF\xBF\xBD";
-    if (num == 0x0D) return "\r";
-    if (num >= 0x80 && num <= 0x9F) {
-        const long cp = kCp1252High[num - 0x80];
-        appendUtf8(out, cp ? cp : num);
-        return out;
-    }
-    if ((num >= 0xD800 && num <= 0xDFFF) || num > 0x10FFFF) return "\xEF\xBF\xBD";
-    if (invalidCodepoint(num)) return "";
-    appendUtf8(out, num);
-    return out;
-}
-
-std::string htmlUnescape(const std::string& s) {
-    if (s.find('&') == std::string::npos) return s;
-    std::string out;
-    std::size_t i = 0;
-    while (i < s.size()) {
-        if (s[i] != '&') {
-            out += s[i++];
-            continue;
-        }
-        std::size_t j = i + 1;
-        if (j < s.size() && s[j] == '#') {
-            const bool hex = j + 1 < s.size() && (s[j + 1] == 'x' || s[j + 1] == 'X');
-            std::size_t k = j + (hex ? 2 : 1);
-            const std::size_t digits = k;
-            long num = 0;
-            while (k < s.size() && (hex ? std::isxdigit(static_cast<unsigned char>(s[k])) != 0
-                                        : std::isdigit(static_cast<unsigned char>(s[k])) != 0)) {
-                const long d = std::isdigit(static_cast<unsigned char>(s[k]))
-                                   ? s[k] - '0'
-                                   : std::tolower(static_cast<unsigned char>(s[k])) - 'a' + 10;
-                num = std::min<long>(num * (hex ? 16 : 10) + d, 0x110000);
-                ++k;
-            }
-            if (k == digits) {
-                out += s[i++];
-                continue;
-            }
-            if (k < s.size() && s[k] == ';') ++k;
-            out += numericCharref(num);
-            i = k;
-            continue;
-        }
-        std::size_t k = j;
-        while (k < s.size() && k - j < 32 && std::string("\t\n\f <&#;").find(s[k]) == std::string::npos) ++k;
-        if (k == j) {
-            out += s[i++];
-            continue;
-        }
-        const std::string name = s.substr(j, k - j);
-        const bool semi = k < s.size() && s[k] == ';';
-        if (const Entity* e = findEntity(name, semi)) {
-            appendUtf8(out, e->cp);
-            i = k + (semi ? 1 : 0);
-            continue;
-        }
-        const std::string ref = name + (semi ? ";" : "");
-        bool matched = false;
-        for (std::size_t x = ref.size() - 1; x >= 2; --x) {
-            if (const Entity* e = findEntity(ref.substr(0, x), false)) {
-                appendUtf8(out, e->cp);
-                out += ref.substr(x);
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) out += "&" + ref;
-        i = k + (semi ? 1 : 0);
-    }
-    return out;
-}
-
 // ---- message parts ----
 
 using HeaderMap = std::map<std::string, std::string>;
@@ -837,8 +398,8 @@ HeaderMap headerMap(const json& part) {
     const json& headers = field(part, "headers");
     if (!headers.is_array()) return out;
     for (const json& header : headers) {
-        const std::string name = lowerAscii(text(field(header, "name")));
-        if (!name.empty() && !out.count(name)) out[name] = text(field(header, "value"));
+        const std::string name = lowerAscii(textOf(field(header, "name")));
+        if (!name.empty() && !out.count(name)) out[name] = textOf(field(header, "value"));
     }
     return out;
 }
@@ -878,7 +439,7 @@ std::string received(const json& internalDate) {
 }
 
 const json* findPart(const json& part, const std::string& mimeType) {
-    if (lowerAscii(text(field(part, "mimeType"))) == mimeType && !truthy(field(part, "filename"))) return &part;
+    if (lowerAscii(textOf(field(part, "mimeType"))) == mimeType && !truthy(field(part, "filename"))) return &part;
     const json& parts = field(part, "parts");
     if (!parts.is_array()) return nullptr;
     for (const json& child : parts) {
@@ -888,7 +449,7 @@ const json* findPart(const json& part, const std::string& mimeType) {
 }
 
 std::string decodePart(const json& part) {
-    const std::string data = text(field(field(part, "body"), "data"));
+    const std::string data = textOf(field(field(part, "body"), "data"));
     if (data.empty()) return "";
     const auto badBase64 = [] {
         return MailboxError(
@@ -918,7 +479,7 @@ std::pair<std::string, std::string> selectBody(const json& payload) {
 // An inline image (signature logo, cid: reference), not a file. Apple Mail
 // marks PDFs inline too, so only images count.
 bool isInline(const json& part) {
-    if (lowerAscii(text(field(part, "mimeType"))).compare(0, 6, "image/") != 0) return false;
+    if (lowerAscii(textOf(field(part, "mimeType"))).compare(0, 6, "image/") != 0) return false;
     const HeaderMap headers = headerMap(part);
     const std::string disposition = lowerAscii(pyStrip(headerOf(headers, "content-disposition")));
     if (disposition.compare(0, 10, "attachment") == 0) return false;
@@ -926,7 +487,7 @@ bool isInline(const json& part) {
 }
 
 void collectAttachments(const json& part, json& found) {
-    const std::string filename = text(field(part, "filename"));
+    const std::string filename = textOf(field(part, "filename"));
     if (!filename.empty() && !isInline(part)) {
         long long size = 0;
         const json& rawSize = field(field(part, "body"), "size");
@@ -934,7 +495,7 @@ void collectAttachments(const json& part, json& found) {
             throw std::invalid_argument("Gmail returned a part size that is not a number: " + pyRepr(rawSize));
         }
         found.push_back({{"name", decodeWords(filename)},
-                         {"mime_type", lowerAscii(text(field(part, "mimeType")))},
+                         {"mime_type", lowerAscii(textOf(field(part, "mimeType")))},
                          {"size", size}});
     }
     const json& parts = field(part, "parts");
@@ -979,7 +540,7 @@ json messageSummary(const json& msg, const std::map<std::string, json>& labelNam
         {"flagged", hasLabel(labelIds, "STARRED")},
         {"categories", categories(labelIds, labelNames)},
         // Gmail entity-encodes the snippet where Graph's bodyPreview is plain.
-        {"preview", pyStrip(htmlUnescape(text(field(msg, "snippet"))))},
+        {"preview", pyStrip(text::htmlUnescape(textOf(field(msg, "snippet"))))},
         {"has_attachments", !attachments.empty()},
         {"attachments", attachments},
         {"auto_submitted", decodeWords(headerOf(headers, "auto-submitted"))},
@@ -1002,7 +563,7 @@ public:
 
     std::string getUserEmail() override {
         const json data = get("/users/me/profile");
-        const std::string address = pyStrip(text(field(data, "emailAddress")));
+        const std::string address = pyStrip(textOf(field(data, "emailAddress")));
         if (address.empty()) {
             throw withConnector(MailboxError("Gmail returned no address for the connected account (`emailAddress` "
                                              "was empty). The connection is in an unusable state and needs "

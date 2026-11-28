@@ -3,16 +3,12 @@
 
 #include "mail_internal.h"
 
-#include <chrono>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 
-#include <httplib.h>
-
-#include "lower_ascii.h"
+#include "gaia/http_client.h"
 
 namespace gaia::mail {
 
@@ -120,7 +116,12 @@ bool truthy(const json& value) {
     }
 }
 
-std::string text(const json& value) {
+bool isWordChar(char c, const char* extra) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+           std::string(extra).find(c) != std::string::npos;
+}
+
+std::string textOf(const json& value) {
     return value.is_string() ? value.get<std::string>() : std::string();
 }
 
@@ -305,18 +306,12 @@ std::string queryString(const std::vector<std::pair<std::string, std::string>>& 
 namespace {
 
 constexpr int kTimeoutSec = 15;
-// Reopen a kept connection idle this long; servers drop them without saying so.
-constexpr auto kIdleReuse = std::chrono::seconds(4);
-constexpr std::size_t kIdlePerHost = 5;
+// Gmail fetches up to five messages at once; one kept client each keeps its connection warm.
+constexpr std::size_t kIdleClients = 5;
 
-struct Target {
-    std::string host;
-    int port = 443;
-    std::string pathAndQuery;
-    std::string key() const { return host + ":" + std::to_string(port); }
-};
-
-Target parseHttps(const std::string& url) {
+// Refused before sending: the mail code only ever talks to the providers over https.
+// Returns the host, for error messages.
+std::string requireHttps(const std::string& url) {
     const std::string scheme = "https://";
     if (url.compare(0, scheme.size(), scheme) != 0) {
         throw std::invalid_argument("The mailbox transport only sends https:// requests, not " + url);
@@ -324,143 +319,105 @@ Target parseHttps(const std::string& url) {
     const std::size_t slash = url.find('/', scheme.size());
     const std::string authority =
         url.substr(scheme.size(), slash == std::string::npos ? std::string::npos : slash - scheme.size());
-    Target t;
-    t.pathAndQuery = slash == std::string::npos ? "/" : url.substr(slash);
     const std::size_t colon = authority.rfind(':');
-    t.host = authority.substr(0, colon);
     if (colon != std::string::npos) {
         const std::string port = authority.substr(colon + 1);
         if (port.empty() || port.find_first_not_of("0123456789") != std::string::npos || port.size() > 5 ||
             std::stoi(port) < 1 || std::stoi(port) > 65535) {
             throw std::invalid_argument("The mailbox transport got a URL with a bad port: " + url);
         }
-        t.port = std::stoi(port);
     }
-    if (t.host.empty()) throw std::invalid_argument("The mailbox transport got a URL with no host: " + url);
-    return t;
+    const std::string host = authority.substr(0, colon);
+    if (host.empty()) throw std::invalid_argument("The mailbox transport got a URL with no host: " + url);
+    return host;
 }
 
-std::string describe(httplib::Error err, const std::string& host) {
-    switch (err) {
-        case httplib::Error::Connection:
-        case httplib::Error::ConnectionTimeout:
-            return "could not connect to " + host + " (no network, host unreachable, or no answer within " +
-                   std::to_string(kTimeoutSec) + " s)";
-        case httplib::Error::Read:
-            return "no complete answer from " + host + " within " + std::to_string(kTimeoutSec) +
-                   " s (connection dropped or too slow)";
-        case httplib::Error::Write:
-            return "the request to " + host + " could not be sent (connection closed while writing)";
-        case httplib::Error::SSLConnection:
-            return "the TLS handshake with " + host + " failed";
-        case httplib::Error::SSLLoadingCerts:
-            return "the system's TLS certificates could not be loaded";
-        case httplib::Error::SSLServerVerification:
-            return "the TLS certificate of " + host + " could not be verified";
-        default:
-            return "transport error talking to " + host + ": " + httplib::to_string(err);
+// HttpClient words a lost connection for developers and names the full URL, search
+// terms included. The backends add their own remedy, so this names the host only.
+std::string describe(const HttpError& e, const std::string& host) {
+    const std::string what = e.what();
+    const auto has = [&](const char* s) { return what.find(s) != std::string::npos; };
+    const std::string secs = std::to_string(kTimeoutSec);
+    if (has("could not connect")) {
+        return "could not connect to " + host + " (no network, host unreachable, or no answer within " + secs + " s)";
     }
-}
-
-const char* kindOf(httplib::Error err) {
-    switch (err) {
-        case httplib::Error::ConnectionTimeout: return "ConnectTimeout";
-        case httplib::Error::Connection:
-        case httplib::Error::SSLConnection:
-        case httplib::Error::SSLLoadingCerts:
-        case httplib::Error::SSLServerVerification: return "ConnectError";
-        case httplib::Error::Read: return "ReadError";
-        case httplib::Error::Write: return "WriteError";
-        default: return "TransportError";
+    if (has("read timeout")) {
+        return "no complete answer from " + host + " within " + secs + " s (connection dropped or too slow)";
     }
+    if (has("could not be sent")) {
+        return "the request to " + host + " could not be sent (connection closed while writing)";
+    }
+    if (has("TLS handshake failed")) return "the TLS handshake with " + host + " failed";
+    if (has("TLS certificates could not be loaded")) return "the system's TLS certificates could not be loaded";
+    if (has("certificate verification failed")) return "the TLS certificate of " + host + " could not be verified";
+    return "transport error talking to " + host;
 }
 
-bool neverSent(httplib::Error err) {
-    const std::string kind = kindOf(err);
-    return kind == "ConnectError" || kind == "ConnectTimeout";
+// The failure as httpx names it, read off HttpClient's wording; a request that
+// never connected certainly changed nothing.
+TransportError transportError(const HttpError& e, const std::string& host) {
+    const std::string what = e.what();
+    const auto has = [&](const char* s) { return what.find(s) != std::string::npos; };
+    const bool unconnected = has("could not connect") || has("TLS ");
+    const char* kind = unconnected                 ? "ConnectError"
+                       : has("read timeout")       ? "ReadError"
+                       : has("could not be sent")  ? "WriteError"
+                                                   : "TransportError";
+    return TransportError(kind, unconnected, describe(e, host));
 }
 
-struct Idle {
-    std::unique_ptr<httplib::SSLClient> client;
-    std::chrono::steady_clock::time_point since;
-};
-
-// Fan-out calls run on several threads, and an SSLClient serves one request at a
-// time, so each call leases its own and hands it back for the next.
 class ClientPool {
 public:
-    std::unique_ptr<httplib::SSLClient> take(const Target& t) {
+    explicit ClientPool(HttpClientConfig config) : config_(std::move(config)) {}
+
+    std::unique_ptr<HttpClient> take() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            auto& idle = idle_[t.key()];
-            while (!idle.empty()) {
-                Idle entry = std::move(idle.back());
-                idle.pop_back();
-                if (std::chrono::steady_clock::now() - entry.since < kIdleReuse) return std::move(entry.client);
+            if (!idle_.empty()) {
+                auto client = std::move(idle_.back());
+                idle_.pop_back();
+                return client;
             }
         }
-        auto cli = std::make_unique<httplib::SSLClient>(t.host, t.port);
-        cli->enable_server_certificate_verification(true);
-        cli->set_connection_timeout(kTimeoutSec);
-        cli->set_read_timeout(kTimeoutSec);
-        cli->set_write_timeout(kTimeoutSec);
-        cli->set_keep_alive(true);
-        cli->set_url_encode(false);
-        return cli;
+        return std::make_unique<HttpClient>(config_);
     }
 
-    void give(const Target& t, std::unique_ptr<httplib::SSLClient> cli) {
+    void give(std::unique_ptr<HttpClient> client) {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto& idle = idle_[t.key()];
-        if (idle.size() < kIdlePerHost) idle.push_back({std::move(cli), std::chrono::steady_clock::now()});
+        if (idle_.size() < kIdleClients) idle_.push_back(std::move(client));
     }
 
 private:
+    const HttpClientConfig config_;
     std::mutex mutex_;
-    std::map<std::string, std::vector<Idle>> idle_;
+    std::vector<std::unique_ptr<HttpClient>> idle_;
 };
 
 }  // namespace
 
 Transport httpsTransport() {
-    auto pool = std::make_shared<ClientPool>();
+    HttpClientConfig config;
+    config.timeoutSec = kTimeoutSec;
+    config.connectTimeoutSec = kTimeoutSec;
+    config.returnErrorStatuses = true;
+    auto pool = std::make_shared<ClientPool>(config);
     return [pool](const HttpCall& call) -> HttpResponse {
-        const Target t = parseHttps(call.url);
-        httplib::Request req;
-        req.method = call.method;
-        req.path = t.pathAndQuery;
-        bool hasType = false;
-        for (const auto& [name, value] : call.headers) {
-            hasType = hasType || gaia::detail::lowerAscii(name) == "content-type";
-            req.headers.emplace(name, value);
+        const std::string host = requireHttps(call.url);
+        if (call.method != "GET" && call.method != "POST" && call.method != "PATCH" && call.method != "DELETE") {
+            throw std::invalid_argument("The mailbox transport sends GET, POST, PATCH and DELETE only, not " +
+                                        call.method);
         }
-        if (!call.body.empty()) {
-            req.body = call.body;
-            if (!hasType) req.headers.emplace("Content-Type", "application/json");
-        }
-
-        auto cli = pool->take(t);
-        httplib::Result result = cli->send(req);
-        if (!result) {
-            const httplib::Error err = result.error();
-            throw TransportError(kindOf(err), neverSent(err), describe(err, t.host));
-        }
-
+        auto client = pool->take();
         HttpResponse response;
-        response.status = result->status;
-        response.body = result->body;
-        for (const auto& [name, value] : result->headers) {
-            auto it = response.headers.begin();
-            for (; it != response.headers.end(); ++it) {
-                if (gaia::detail::lowerAscii(it->first) == gaia::detail::lowerAscii(name)) break;
-            }
-            if (it == response.headers.end()) {
-                response.headers.emplace(name, value);
-            } else {
-                it->second += ", " + value;
-            }
+        try {
+            response = call.method == "GET"     ? client->get(call.url, call.headers)
+                       : call.method == "PATCH" ? client->patch(call.url, call.body, call.headers)
+                       : call.method == "DELETE" ? client->del(call.url, call.headers)
+                                                 : client->post(call.url, call.body, call.headers);
+        } catch (const HttpError& e) {
+            throw transportError(e, host);
         }
-        pool->give(t, std::move(cli));
+        pool->give(std::move(client));
         return response;
     };
 }

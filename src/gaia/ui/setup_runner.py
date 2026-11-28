@@ -410,6 +410,15 @@ def _native_agent_failure(model_id: str, why: str) -> str:
     )
 
 
+def _native_agent_unavailable(detail: str) -> str:
+    """The Test step's sentence when the chosen gaiacpp is missing or damaged."""
+    return (
+        f"The test chat couldn't run: {detail.rstrip('.')}. Download gaiacpp "
+        "again, or finish setup on the Python agent. The setup report has the "
+        "details."
+    )
+
+
 def agent_ui_chat_model(db, run: "SetupRun") -> str:
     """The model the Agent UI's first chat after *run* opens on.
 
@@ -1560,7 +1569,7 @@ class SetupRunner:
             for k in ("job", "subject", "state", "error", "kind", "seconds")
         }
         # Only a chat test that failed on gaiacpp names its agent.
-        for k in ("agent", "agent_error"):
+        for k in ("agent", "agent_error", "agent_problem"):
             if event.get(k):
                 row[k] = event[k]
         run.tests[(row["job"], row["subject"])] = row
@@ -1917,7 +1926,7 @@ class SetupRunner:
             )
             if problem is None:
                 run.note(f"Testing a chat on {model}")
-        program = agent_error = None
+        program = agent_error = agent_problem = None
         if problem is None:
             why = _agent_turn_problem(model)
             if why == AGENT_MISSING:
@@ -1929,8 +1938,16 @@ class SetupRunner:
                     None if isinstance(why, ModelServerDown) else _test_chat_program()
                 )
                 if program is not None:
-                    agent_error = why
-                    problem = _native_agent_failure(model, why)
+                    from gaia.ui.routers.agent_programs import chosen_agent_problem
+
+                    # The sidecar's start failure is generic; name a missing or damaged binary.
+                    agent_problem = chosen_agent_problem()
+                    if agent_problem is not None:
+                        agent_error = agent_problem["detail"]
+                        problem = _native_agent_unavailable(agent_error)
+                    else:
+                        agent_error = why
+                        problem = _native_agent_failure(model, why)
                 else:
                     problem = _agent_turn_failure(model)
                 with self._lock:
@@ -1950,6 +1967,7 @@ class SetupRunner:
                     ),
                     "agent": program,
                     "agent_error": agent_error,
+                    "agent_problem": agent_problem,
                     "seconds": round(time.monotonic() - started, 1),
                 },
             )

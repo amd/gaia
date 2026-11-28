@@ -50,6 +50,10 @@ on:
       - 'cpp/src/model_registry.cpp'
       - 'cpp/tests/fixtures/thinking_probes.json'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
+      # The gaiacpp mail fixtures and the generators that rewrite them.
+      - 'cpp/src/mail_text_tables.inc'
+      - 'cpp/tests/fixtures/mail_screens_parity.json'
+      - 'cpp/tests/fixtures/mail/**'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.
@@ -137,6 +141,10 @@ on:
       - 'cpp/src/model_registry.cpp'
       - 'cpp/tests/fixtures/thinking_probes.json'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
+      # The gaiacpp mail fixtures and the generators that rewrite them.
+      - 'cpp/src/mail_text_tables.inc'
+      - 'cpp/tests/fixtures/mail_screens_parity.json'
+      - 'cpp/tests/fixtures/mail/**'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.

@@ -305,6 +305,19 @@ TEST(MailHttp, HttpsTransportRefusesAnythingButHttpsBeforeSending) {
     EXPECT_THROW(transport({"GET", "https://host:99999/x", {}, ""}), std::invalid_argument);
 }
 
+TEST(MailHttp, HttpsTransportNamesOnlyTheHostWhenNothingAnswers) {
+    const Transport transport = httpsTransport();
+    try {
+        transport({"GET", "https://127.0.0.1:1/gmail/v1/users/me/messages?q=secret%20plans", {}, ""});
+        FAIL() << "expected an error";
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        EXPECT_NE(what.find("could not connect to 127.0.0.1"), std::string::npos) << what;
+        EXPECT_EQ(what.find("secret"), std::string::npos) << what;
+        EXPECT_EQ(what.find("HttpClientConfig"), std::string::npos) << what;
+    }
+}
+
 // ===========================================================================
 // Gmail: HTTP layer and get_user_email
 // ===========================================================================
