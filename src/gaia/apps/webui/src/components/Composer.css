@@ -344,6 +344,11 @@
     animation-timeline: scroll(self inline);
 }
 
+/* Compact status chips omit the bracketed English gloss so RTL overflow never slices its opening words. */
+:is(.composer-chip-agent, .composer-chip-memory) .composer-chip-label .i18n-gloss.i18n-gloss {
+    display: none;
+}
+
 /* Gives up its label's width before the model name does, but never fades to a speck. */
 .composer-chip-agent {
     flex-shrink: 100;

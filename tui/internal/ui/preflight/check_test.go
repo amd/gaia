@@ -1790,3 +1790,40 @@ func TestCheckAcceptsASidecarRunningInTheRequestedMode(t *testing.T) {
 			row.State.Word(), row.Line, rep)
 	}
 }
+
+// #9200: the daemon reports a running gaiacpp as user mode, but dev mode does
+// not apply to gaiacpp, so a dev launch must attach rather than halt.
+func TestCheckDevRequestAttachesToRunningGaiacpp(t *testing.T) {
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "dev")
+	prev := daemon.SavedFlagshipHarness
+	daemon.SavedFlagshipHarness = func() (string, error) { return "gaiacpp", nil }
+	t.Cleanup(func() { daemon.SavedFlagshipHarness = prev })
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsRunning)
+
+	rep := Check(context.Background(), f, testConfig())
+
+	row, _ := rep.Find(KeySidecar)
+	if row.State != StateOK {
+		t.Fatalf("a dev launch with gaiacpp chosen must attach to the running "+
+			"sidecar, got %s (%s)\n%s", row.State.Word(), row.Line, rep)
+	}
+}
+
+func TestCheckDevRequestStillConflictsForThePythonAgent(t *testing.T) {
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "dev")
+	prev := daemon.SavedFlagshipHarness
+	daemon.SavedFlagshipHarness = func() (string, error) { return "", nil }
+	t.Cleanup(func() { daemon.SavedFlagshipHarness = prev })
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsRunning)
+
+	rep := Check(context.Background(), f, testConfig())
+
+	row, _ := rep.Find(KeySidecar)
+	if row.State != StateFailed || row.Line != "running in user mode, dev requested" {
+		t.Fatalf("the Python agent in user mode must still halt a dev launch, "+
+			"got %s (%s)\n%s", row.State.Word(), row.Line, rep)
+	}
+	if blocker, has := rep.Blocker(); !has || blocker.Key != KeySidecar {
+		t.Fatalf("the sidecar row must block the launch:\n%s", rep)
+	}
+}

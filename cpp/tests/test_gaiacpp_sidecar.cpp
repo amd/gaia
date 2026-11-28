@@ -682,9 +682,30 @@ TEST_F(GaiacppSidecar, AReplyThatRunsOutWhileReasoningNamesSomethingAnAppUserCan
     bool progress = false;
     for (const auto& e : events) {
         progress = progress || (e.value("type", "") == "status" && e.value("phase", "") == "reasoning" &&
-                                e.value("words", 0) == 5);
+                                e.value("words", 0) == 5 && e.value("message", "") == "Reasoning - 5 words so far");
     }
     EXPECT_TRUE(progress) << "no reasoning progress was reported: " << t.describe();
+}
+
+TEST_F(GaiacppSidecar, ReasoningProgressUsesSingularWordForOneWord) {
+    mock().enableSseStreaming(true);
+    mock().pushSseStream("data: " + json{{"choices", json::array({{{"index", 0},
+                                                                  {"delta", {{"reasoning_content", "Hmm"}}},
+                                                                  {"finish_reason", "length"}}})}}
+                                           .dump() +
+                              "\n\ndata: [DONE]\n\n");
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-one-word", "think", {{"session_id", "chat-one-word"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    bool found = false;
+    for (const auto& e : events) {
+        if (e.value("type", "") == "status" && e.value("phase", "") == "reasoning" && e.value("words", 0) == 1) {
+            EXPECT_EQ(e.value("message", ""), "Reasoning - 1 word so far");
+            found = true;
+        }
+    }
+    EXPECT_TRUE(found) << "no 1-word reasoning status was reported: " << t.describe();
 }
 
 TEST_F(GaiacppSidecar, TheHelperSettingReachesAChatsAgent) {
@@ -2423,6 +2444,58 @@ TEST_F(GaiacppSidecar, DetachingTheOnlyAttachedFileDoesNotOpenHome) {
         ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
         EXPECT_EQ(t.raw().find("8830"), std::string::npos) << "home file must not leak: " << t.describe();
     }
+}
+
+TEST_F(GaiacppSidecar, AnswerCheckRetractsStreamedDraftWithoutLeakingReviewPrompt) {
+    auto sseChunks = [](const std::vector<std::string>& pieces) {
+        std::string out;
+        for (const auto& p : pieces) {
+            out += "data: " +
+                   json{{"choices", json::array({{{"index", 0}, {"delta", {{"content", p}}}}})}}.dump() +
+                   "\n\n";
+        }
+        out += "data: " +
+               json{{"choices", json::array({{{"index", 0}, {"delta", json::object()}, {"finish_reason", "stop"}}})},
+                    {"usage", {{"prompt_tokens", 50}, {"completion_tokens", 10}, {"total_tokens", 60}}}}
+                   .dump() +
+               "\n\ndata: [DONE]\n\n";
+        return out;
+    };
+    mock().enableSseStreaming(true);
+    mock().pushSseStream(sseChunks({"All done: ", "I saved the summary to report.md."}));
+    mock().pushSseStream(sseChunks({"I could not save report.md; ", "here is the summary inline."}));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-retract", "summarize",
+                            {{"session_id", "chat-retract"}, {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_EQ(t.status(), 200) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+
+    int retractIndex = -1;
+    int firstDraftToken = -1;
+    std::string afterRetract;
+    for (size_t i = 0; i + 1 < events.size(); ++i) {
+        const auto& ev = events[i];
+        if (ev["type"] == "status") {
+            const std::string msg = ev.value("message", "");
+            EXPECT_EQ(msg.find("Answer sent back"), std::string::npos) << "internal review prompt leaked: " << ev.dump();
+            EXPECT_EQ(msg.find("no such file exists"), std::string::npos)
+                << "internal review note leaked: " << ev.dump();
+            if (ev.value("phase", "") == "answer_check" && ev.value("retracts_answer", false)) {
+                retractIndex = static_cast<int>(i);
+                EXPECT_EQ(msg, "Checking the answer");
+            }
+        } else if (ev["type"] == "token") {
+            if (firstDraftToken < 0) firstDraftToken = static_cast<int>(i);
+            if (retractIndex >= 0) afterRetract += ev["delta"].get<std::string>();
+        }
+    }
+    EXPECT_GE(firstDraftToken, 0) << t.describe();
+    EXPECT_GT(retractIndex, firstDraftToken) << "answer_check retraction must follow the draft tokens: " << t.describe();
+    EXPECT_EQ(afterRetract, "I could not save report.md; here is the summary inline.");
+    EXPECT_EQ(events.back()["answer"], "I could not save report.md; here is the summary inline.");
 }
 
 }  // namespace
