@@ -359,3 +359,228 @@ def test_a_turn_the_failure_breaker_ends_still_names_its_unread_citations(
     result = agent.process_query("research the finding")
     assert result["result"].startswith("From what I know")
     assert f"This cited page was never opened: {_PAGE}." in result["result"]
+
+
+class _ShellAgent(Agent):
+    """Has a shell, the step #8803's request ruled out."""
+
+    def _get_system_prompt(self):
+        return "Answer."
+
+    def _register_tools(self):
+        from gaia.agents.base.tools import tool
+
+        agent = self
+
+        @tool
+        def run_shell_command(command: str) -> dict:
+            """Run a shell command."""
+            agent.ran.append(command)
+            return {"status": "success", "return_code": 0, "stdout": ""}
+
+
+_FORBIDS = (
+    "Use the file edit tool to replace alpha with beta in /tmp/ro.txt. "
+    "Do not change permissions and do not use the shell."
+)
+_CHMOD = {
+    "tool": "run_shell_command",
+    "tool_args": {"command": "chmod u+w /tmp/ro.txt"},
+}
+_HIDDEN = "Done — `alpha` → `beta` in `/tmp/ro.txt`. A backup was saved."
+
+
+def _shell(monkeypatch, tmp_path, approve):
+    agent = _make(_ShellAgent, monkeypatch, tmp_path)
+    agent.ran = []
+    agent._tool_requires_confirmation = lambda *a, **kw: True
+    agent.console.confirm_tool_execution.return_value = approve
+    agent.console.confirmation_timed_out.return_value = False
+    return agent
+
+
+def test_an_approved_step_the_user_forbade_is_sent_back_to_be_disclosed(
+    monkeypatch, tmp_path
+):
+    agent = _shell(monkeypatch, tmp_path, approve=True)
+    told = "Done, but I ran `chmod u+w` on it, which you asked me not to."
+    sent = _script_steps(agent, _CHMOD, {"answer": _HIDDEN}, {"answer": told})
+    result = agent.process_query(_FORBIDS)
+    assert agent.ran == ["chmod u+w /tmp/ro.txt"]
+    (repair,) = _repairs(sent)
+    assert "chmod u+w /tmp/ro.txt" in repair
+    assert "went against the user's instruction" in repair
+    assert result["result"] == told
+
+
+def test_a_forbidden_step_left_unsaid_after_the_repair_is_named(monkeypatch, tmp_path):
+    agent = _shell(monkeypatch, tmp_path, approve=True)
+    sent = _script_steps(agent, _CHMOD, {"answer": _HIDDEN}, {"answer": _HIDDEN})
+    result = agent.process_query(_FORBIDS)
+    assert len(sent) == 3, "only one repair round"
+    assert result["result"].startswith(_HIDDEN)
+    assert "`chmod u+w /tmp/ro.txt`" in result["result"]
+
+
+def test_a_declined_forbidden_step_is_not_sent_back(monkeypatch, tmp_path):
+    agent = _shell(monkeypatch, tmp_path, approve=False)
+    answer = "I can't make the replacement: the file is read-only."
+    sent = _script_steps(agent, _CHMOD, {"answer": answer})
+    result = agent.process_query(_FORBIDS)
+    assert agent.ran == []
+    assert _repairs(sent) == []
+    assert result["result"] == answer
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Replace alpha with beta in /tmp/ro.txt.",
+        "Replace alpha with beta in /tmp/ro.txt. Do not touch any other file.",
+    ],
+)
+def test_a_step_nobody_forbade_answers_once(monkeypatch, tmp_path, request_text):
+    agent = _shell(monkeypatch, tmp_path, approve=True)
+    sent = _script_steps(agent, _CHMOD, {"answer": _HIDDEN})
+    result = agent.process_query(request_text)
+    assert agent.ran == ["chmod u+w /tmp/ro.txt"]
+    assert _repairs(sent) == []
+    assert result["result"] == _HIDDEN
+
+
+def test_only_a_permission_change_breaks_a_no_permission_change_request(
+    monkeypatch, tmp_path
+):
+    agent = _shell(monkeypatch, tmp_path, approve=True)
+    look = {"tool": "run_shell_command", "tool_args": {"command": "ls -l /tmp/ro.txt"}}
+    sent = _script_steps(agent, look, {"answer": "It is `-r--r--r--`."})
+    agent.process_query("Check /tmp/ro.txt but don't change its permissions.")
+    assert agent.ran == ["ls -l /tmp/ro.txt"]
+    assert _repairs(sent) == []
+
+
+@pytest.mark.parametrize(
+    "request_text, forbidden",
+    [
+        ("Do not change permissions and do not use the shell.", 2),
+        ("Fix it without using the terminal.", 1),
+        ("Don’t chmod the file.", 1),
+        ("Edit it, but never change the file's permissions.", 1),
+        ("No shell commands, please.", 1),
+        ("I don't know how to use the shell, can you do it?", 0),
+        ("Don't worry, use the shell if you need to.", 0),
+        ("Run chmod on it.", 0),
+        ("Don＇t use the shell.", 1),
+        ("Do​n't use the shell.", 1),
+        ("I don't use the shell much; please list the files.", 0),
+        ("We never touch the terminal at work. What's in this folder?", 0),
+        ("Why is there no shell in this container?", 0),
+        ("There's no terminal on this box, so check it another way.", 0),
+        ("Fix it, and do not use the shell.", 1),
+        ("There’s no shell here, so read the file another way.", 0),
+        ("there’s no terminal on this box. What's in /tmp?", 0),
+        ("I don’t use the shell much; please list the files.", 0),
+        ("Don’t use the shell.", 1),
+    ],
+)
+def test_what_counts_as_ruling_a_step_out(request_text, forbidden):
+    from gaia.agents.base.forbidden_steps import ruled_out
+
+    assert len(ruled_out(request_text)) == forbidden
+
+
+_RAN_CHMOD = [
+    {"tool": "run_shell_command", "args": {"command": "chmod u+w ro.txt"}, "ran": True}
+]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Done, alpha is beta now. It's writable now.",
+        "Done. I made the file writable first.",
+        "Done, alpha is beta now. I didn't use the shell.",
+        "Done. No command was run; no commands were run at all.",
+        "Done. I never touched permissions.",
+        "Done. I didn’t change the file's permissions.",
+    ],
+)
+def test_saying_only_the_effect_does_not_disclose_the_step(answer):
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    request = "Replace alpha with beta in ro.txt. Don't change permissions."
+    assert "`chmod u+w ro.txt`" in undisclosed_forbidden_steps(
+        request, _RAN_CHMOD, answer
+    )
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Replace alpha with beta in ro.txt.",
+        "Make ro.txt writable and fix the typo.",
+        "Can you check the file permissions on ro.txt?",
+        "There’s no shell on my laptop, can you run it for me?",
+        "Why is there no terminal in this container?",
+        "I don't use the shell much; please fix the file.",
+        "Use the shell to fix the permissions.",
+        "Don't worry about permissions, just make it work.",
+        "We never open a terminal at work, so walk me through it.",
+        "Please don't delete anything else.",
+        "Run chmod on ro.txt so I can edit it.",
+    ],
+)
+def test_ordinary_requests_do_not_trigger_the_check(request_text):
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    answer = "Done, alpha is beta now."
+    assert undisclosed_forbidden_steps(request_text, _RAN_CHMOD, answer) == ""
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "You told me not to use the shell, but I did.",
+        "You told me not to change permissions, but I did: I made ro.txt writable.",
+        "Against your instruction not to touch the permissions, I changed them.",
+        "You asked me never to use the terminal, and I used it anyway.",
+        "You said not to change the file's permissions, but I had to.",
+    ],
+)
+def test_repeating_the_ban_and_admitting_the_step_owns_up(answer):
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    request = (
+        "Replace alpha with beta in ro.txt. Don't change permissions "
+        "and don't use the shell."
+    )
+    assert undisclosed_forbidden_steps(request, _RAN_CHMOD, answer) == ""
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "You asked me not to use the shell, so I didn't use it.",
+        "You told me not to change permissions; I never did.",
+        "As you asked, I did not use the shell.",
+        "You said I didn't need the shell, and no command was run.",
+    ],
+)
+def test_repeating_the_ban_and_then_denying_it_does_not_own_up(answer):
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    request = (
+        "Replace alpha with beta in ro.txt. Don't change permissions "
+        "and don't use the shell."
+    )
+    assert "`chmod u+w ro.txt`" in undisclosed_forbidden_steps(
+        request, _RAN_CHMOD, answer
+    )
+
+
+def test_naming_the_step_that_ran_owns_up():
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    request = "Replace alpha with beta in ro.txt. Don't change permissions."
+    answer = "Done, but I ran chmod +x, which you'd ruled out."
+    assert undisclosed_forbidden_steps(request, _RAN_CHMOD, answer) == ""

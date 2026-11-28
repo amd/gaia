@@ -20,8 +20,9 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
 
-// nativeAgentEnv optionally names a real gaiacpp for this test to switch to;
-// unset, a copy of the mock agent stands in for it.
+// nativeAgentEnv names a real gaiacpp for this test to switch to. Unset, a
+// copy of the mock agent stands in for it, unless requireNativeEnv says the
+// run must test the real one (CI does).
 const nativeAgentEnv = "GAIA_TEST_GAIACPP"
 
 // shotsEnv optionally names a directory to save each stage's screen into, as
@@ -104,6 +105,10 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	nativePath := filepath.Join(programs, catalog.NativeAgentBinary+suffix)
 	nativeSource := os.Getenv(nativeAgentEnv)
 	if nativeSource == "" {
+		if os.Getenv(requireNativeEnv) == "1" {
+			t.Fatalf("%s is not set, and %s=1 says this run must switch to a real gaiacpp, not the mock agent",
+				nativeAgentEnv, requireNativeEnv)
+		}
 		nativeSource = mock
 	}
 	copyProgram(t, nativeSource, nativePath)

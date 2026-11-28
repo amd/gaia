@@ -44,6 +44,39 @@ describe('SetupSettings', () => {
         expect(screen.queryByText(/Qwen3\.6/)).toBeNull();
     });
 
+    it('says the chat model can\'t be used, not Ready, when its saved cloud key no longer works', async () => {
+        const message = "Couldn't restore your last model deepseek-v4p1-flash: Fireworks AI has no working key.";
+        useModelStore.setState({ active: { ...CLOUD, restore: { status: 'failed', message, model_id: CLOUD.model! } } });
+        render(<SetupSettings />);
+        expect(await screen.findByText("Your chat model can't be used yet")).toBeTruthy();
+        expect(screen.getByText(message, { exact: false })).toBeTruthy();
+        expect(screen.queryByText('Ready')).toBeNull();
+        expect(screen.queryByText(/^Running /)).toBeNull();
+    });
+
+    it('words the restore failure in the chosen language, like the banner', async () => {
+        const message = "Couldn't restore your last model, deepseek-v4p1-flash: it has no working key. Pick a model to continue.";
+        const restore = { status: 'failed' as const, message, model: 'deepseek-v4p1-flash', reason: 'it has no working key', reason_code: 'no_key', model_id: CLOUD.model! };
+        useModelStore.setState({ active: { ...CLOUD, restore } });
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<SetupSettings />);
+            expect(await screen.findByText(/تعذّرت استعادة آخر نموذج استخدمته/)).toBeTruthy();
+            expect(screen.getByText(/لا يوجد له مفتاح صالح/)).toBeTruthy();
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
+
+    it('keeps saying Ready when the failed restore is about a different model than the one in use', async () => {
+        const message = "Couldn't restore your last model old-model: it is not downloaded.";
+        useModelStore.setState({ active: { ...LOCAL, restore: { status: 'failed', message, model_id: 'Deleted-Model-GGUF' } } });
+        render(<SetupSettings />);
+        expect(await screen.findByText('Running Qwen3.6 35B A3B')).toBeTruthy();
+        expect(screen.queryByText("Your chat model can't be used yet")).toBeNull();
+        expect(screen.queryByText(message)).toBeNull();
+    });
+
     it('says the model server is not answering instead of Ready while it is down', async () => {
         useModelStore.setState({
             active: {

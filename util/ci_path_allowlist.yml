@@ -24,7 +24,36 @@ dependencies:
       tests/unit/test_flagship_ci.py names it as the docs page that must NOT
       trigger this lane; it is a probe string, not a file the test reads.
 
+  build_agents.yml:
+    conftest.py: >-
+      The build job runs the harness contract suite on the gaiacpp it built. A
+      change to how pytest or the package is set up reaches that suite through
+      test_distributed_seams.yml, which runs it on Linux and triggers on these
+      files; rebuilding gaiacpp on three platforms for them would test nothing
+      more.
+    pyproject.toml: >-
+      Same reason as conftest.py.
+    setup.py: >-
+      Same reason as conftest.py.
+    tests/conftest.py: >-
+      Same reason as conftest.py.
+    tests/integration/conftest.py: >-
+      Same reason as conftest.py.
+    installer/headless/fake_model_server.py: >-
+      Same reason as conftest.py: the harness contract suite reads it, and
+      test_distributed_seams.yml runs that suite on Linux and triggers on it.
+    src/gaia/ui/local_models.py: >-
+      Same reason as installer/headless/fake_model_server.py.
+    src/gaia/version.py: >-
+      Same reason as installer/headless/fake_model_server.py.
+    docs/cpp/gaia-agent.mdx: >-
+      Same reason as installer/headless/fake_model_server.py.
+
   test_unit.yml:
+    cpp/packaging/package_agents.py: >-
+      tests/unit/test_gaiacpp_ci_coverage.py looks for the build_agents.yml
+      step that runs it; the script's name is a search string, not a file the
+      test reads.
     docs/guides/email.mdx: >-
       tests/unit/test_audit_synthesis_prep.py uses it as a finding's path in a
       synthetic audit backlog; it is fixture text, not a file the test reads.

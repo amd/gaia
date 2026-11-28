@@ -54,10 +54,16 @@ on:
       - 'src/gaia/ui/setup*'
       - 'tests/conftest.py'
       - 'tests/setup_journey/**'
+      # The journeys that pick gaiacpp: how it is fetched, found and listed.
+      - 'util/fetch_ci_gaiacpp.py'
+      - 'src/gaia/daemon/sidecars/fetch.py'
+      - 'src/gaia/ui/routers/agent_programs.py'
   workflow_dispatch:
 
 permissions:
   contents: read
+  # The gaiacpp journeys run the binary main's last green build_agents.yml run kept.
+  actions: read
 
 concurrency:
   group: setup-journey-${{ github.event.pull_request.number || github.ref }}
@@ -117,6 +123,17 @@ jobs:
 
       - name: Mirror the GAIA assistant from the hub
         run: python installer/headless/hub_mirror.py --out "$RUNNER_TEMP/hub-mirror"
+
+      # For the journeys that choose gaiacpp on Customize: the real program, as
+      # main last built it for this platform. build_agents.yml tests a pull
+      # request's own cpp/ changes.
+      - name: Fetch main's gaiacpp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          binary="$(python util/fetch_ci_gaiacpp.py --out "${RUNNER_TEMP}/gaiacpp")"
+          echo "GAIA_E2E_GAIACPP=${binary}" >> "${GITHUB_ENV}"
 
       - name: Walk first-run setup
         working-directory: src/gaia/apps/webui

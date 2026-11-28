@@ -5,10 +5,22 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { isMessageKey, ref } from '../../i18n/registry';
-import { useT, type Translate } from '../../i18n/useT';
+import { tEn, useT, type Translate } from '../../i18n/useT';
+import { CLAIMS_ESCAPE } from '../../hooks/useEscapeToClose';
 import { requestErrorText } from '../../utils/requestErrors';
 import { SkillDescription } from './SkillDescription';
 import type { FeaturedLibrary, LinkAddResult, LinkPreview, LinkSkill } from '../../types';
+
+/** A link with nothing behind it in the user's language, naming the link they pasted; other errors as sent. */
+function linkErrorText(err: unknown, t: Translate): string {
+    if (err instanceof api.ApiError && err.reason === 'link_not_found') {
+        const link = err.body?.link;
+        if (typeof link === 'string' && tEn('settings.skills.link.notFound', { link }) === err.detail) {
+            return t('settings.skills.link.notFound', { link });
+        }
+    }
+    return requestErrorText(err, t);
+}
 
 /** Ready to add: readable, not blocked, new or an update, and code only when allowed. */
 const addable = (s: LinkSkill, allowCode: boolean) =>
@@ -55,7 +67,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
             setPreview(p);
             setPicked(new Set(p.skills.filter((s) => addable(s, false)).map((s) => s.name)));
         } catch (err) {
-            setError(requestErrorText(err, t));
+            setError(linkErrorText(err, t));
         } finally {
             setBusy(null);
         }
@@ -72,7 +84,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
             setUrl('');
             if (r.added.length) onAdded();
         } catch (err) {
-            setError(requestErrorText(err, t));
+            setError(linkErrorText(err, t));
         } finally {
             setBusy(null);
         }
@@ -126,6 +138,12 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                     inputMode="url"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key !== 'Escape' || busy !== null || !(preview || url)) return;
+                        e.preventDefault();
+                        if (preview) setPreview(null); else setUrl('');
+                    }}
+                    {...CLAIMS_ESCAPE}
                     onPaste={(e) => {
                         if (busy !== null) return;
                         const pasted = e.clipboardData.getData('text').trim();

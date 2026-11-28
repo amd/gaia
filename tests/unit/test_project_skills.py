@@ -203,13 +203,31 @@ def test_malformed_gaia_metadata_grants_nothing(dirs, caplog):
     assert skill.gaia.permissions == [] and "ignoring its metadata.gaia" in caplog.text
 
 
-def test_lenient_parsing_is_only_for_the_project_root(dirs):
-    """~/.claude/skills keeps GAIA's schema: an invalid one is still an error."""
+def test_user_claude_skills_parse_as_claude_code_parses_them(dirs):
+    """Claude Code offers a ~/.claude/skills skill with a 1,025-character description."""
     project, home = dirs
+    long = "Use when asked. " + "x" * 1009
+    _skill(home, "long-one", f"name: long-one\ndescription: {long}\n")
     _skill(home, "Bad_Name", "name: Bad_Name\ndescription: d\n")
     manager = _manager(project, home)
+    skills = manager.discover()
+    assert sorted(skills) == ["bad-name", "long-one"]
+    assert skills["long-one"].root == ROOT_CLAUDE_IMPORT
+    assert manager.discovery_errors == {}
+    assert manager.load("long-one").description == long
+
+
+def test_gaia_own_skills_keep_the_description_limit(dirs):
+    project, home = dirs
+    mine = home / "gaia-skills" / "long-one"
+    mine.mkdir(parents=True)
+    (mine / "SKILL.md").write_text(
+        f"---\nname: long-one\ndescription: {'x' * 1025}\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    manager = _manager(project, home)
     assert manager.discover() == {}
-    assert len(manager.discovery_errors) == 1
+    assert "the limit is 1024" in manager.discovery_errors[str(mine)]
 
 
 # ── this repository's own skills ─────────────────────────────────────────

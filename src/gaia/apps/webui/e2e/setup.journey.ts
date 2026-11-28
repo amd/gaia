@@ -7,7 +7,7 @@
  */
 
 import {
-    CHAT_MODEL, EMBEDDER, UNTESTED_CHAT_MODEL, downloadToReady, expect, expectTestsPassed, pastChecks, stepTitle, test,
+    CHAT_MODEL, EMBEDDER, GAIACPP, UNTESTED_CHAT_MODEL, downloadToReady, expect, expectTestsPassed, pastChecks, stepTitle, test,
     testToReady, type Say,
 } from './harness';
 import type { Page } from '@playwright/test';
@@ -226,6 +226,70 @@ test('a server that already has the models still gets setup, which installs the 
     await testToReady(page, say, shot);
     await expectTestsPassed(page, journey.url, ['chat', 'vision', 'embedding', 'agent']);
     expect(journey.pulls(), 'the models were already on the server').toEqual([]);
+});
+
+/** From an empty home to Customize, with gaiacpp picked as the agent. */
+async function pickGaiacpp(page: Page, say: Say): Promise<void> {
+    await pastChecks(page, say);
+    await page.getByRole('button', { name: say('setup.plan.customize') }).click();
+    await expect(stepTitle(page)).toHaveText(say('setup.models.title'));
+    const gaiacpp = page.getByRole('radio', { name: /gaiacpp/ });
+    await expect(gaiacpp).not.toHaveAttribute('aria-disabled', 'true');
+    await gaiacpp.click();
+    await expect(gaiacpp).toHaveAttribute('aria-checked', 'true');
+}
+
+// The gaiacpp the desktop app starts, through first-run setup. The model server is
+// GAIA's own here: no address reaches the backend, so setup's test chat only passes
+// if gaiacpp finds the server and its key the way an installed one must (#8854).
+test.describe('setup with gaiacpp as the agent', () => {
+    // CI names a gaiacpp; without one there is nothing real to test.
+    test.skip(!GAIACPP && !process.env.CI, 'set GAIA_E2E_GAIACPP to a built gaiacpp');
+    test.beforeEach(() => {
+        expect(GAIACPP, 'GAIA_E2E_GAIACPP must name the gaiacpp these journeys run').not.toBe('');
+    });
+
+    test('Customize picks gaiacpp, setup tests it, and the first chat answers', async ({ page, journey, say, shot, open }) => {
+        await journey.startFake({ own: true, env: { FAKE_LEMONADE_PULL_SECONDS: '1' } });
+        await journey.startBackend();
+        await open();
+        await pickGaiacpp(page, say);
+        await shot('agent-gaiacpp');
+        await page.getByRole('button', { name: say('setup.continue') }).click();
+        await testToReady(page, say, shot);
+        await shot('ready-gaiacpp');
+        await expectTestsPassed(page, journey.url, ['server', 'chat', 'embedding', 'agent']);
+        expect(journey.config().flagship_agent).toBe('gaiacpp');
+        expect(journey.agentProgram(), 'the program that answered setup\'s test chat').toBe('gaiacpp');
+
+        await page.getByRole('button', { name: say('setup.ready.start') }).click();
+        await newChat(page, say).getByRole('textbox').fill('Hello');
+        await page.keyboard.press('Enter');
+        await expect(page.getByText('Hello from the fake model server').first()).toBeVisible({ timeout: 2 * 60_000 });
+        await shot('first-chat-gaiacpp');
+        expect(journey.agentProgram()).toBe('gaiacpp');
+        expect(journey.requests().filter((r) => r.auth !== 'ok'), 'requests without the key of GAIA\'s own server').toEqual([]);
+    });
+
+    test('a gaiacpp that cannot reach the model server fails the agent\'s row, with a reason', async ({ page, journey, say, shot, open }) => {
+        test.skip(process.platform === 'win32', 'stands a shell script in for gaiacpp, which Windows cannot start as one');
+        await journey.startFake({ own: true, env: { FAKE_LEMONADE_PULL_SECONDS: '1' } });
+        await journey.startBackend({ GAIA_GAIACPP_PATH: journey.blindGaiacpp() });
+        await open();
+        await pickGaiacpp(page, say);
+        await page.getByRole('button', { name: say('setup.continue') }).click();
+
+        // The failure card, whatever it says: the wording is another change's to settle.
+        await expect(page.locator('.setup-failure[role="alert"]')).toBeVisible({ timeout: 5 * 60_000 });
+        await shot('agent-failed-gaiacpp');
+        await expect(page.locator('.setup-result.is-failed')).toHaveCount(1);
+        await expect(page.locator('.setup-result.is-failed .setup-result-error')).not.toBeEmpty();
+        const status = (await (await page.request.get(`${journey.url}/api/setup/status`)).json()) as {
+            tests: Array<{ job: string; state: string; kind: string | null }>;
+        };
+        expect(status.tests.filter((t) => t.state === 'failed').map((t) => [t.job, t.kind])).toEqual([['agent', 'agent']]);
+        await expect(page.getByRole('button', { name: say('setup.ready.start') })).toHaveCount(0);
+    });
 });
 
 test('with no models, a chat asks to download one', async ({ page, journey, lang, say, shot, open }) => {
