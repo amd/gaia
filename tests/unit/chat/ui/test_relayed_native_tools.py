@@ -268,6 +268,31 @@ class TestActivityLines:
         assert result["success"] is False
         assert result["summary"] == summary
 
+    def test_a_search_with_no_match_is_an_answer_not_a_failure(self):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "bash_execute",
+                "args": {"command": "grep foo ."},
+            },
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 1,
+                    "expected_exit": "grep exits 1 when nothing matches",
+                    "timed_out": False,
+                    "cwd": "/tmp",
+                },
+            },
+        )
+
+        result = handler.events[-1]
+        assert result["success"] is True
+        assert result["summary"] == "grep exits 1 when nothing matches (exit 1)"
+
     def test_a_search_result_is_named_as_its_call_was(self):
         handler = _relay(
             {
@@ -399,6 +424,84 @@ def test_only_gaiacpps_search_code_is_read_as_the_code_index():
     )
     python_call = {"pattern": "TODO", "directory": "."}
     assert as_flagship_call("search_code", python_call) == ("search_code", python_call)
+
+
+@pytest.mark.parametrize(
+    "data,expected_success,expected_text",
+    [
+        (
+            {
+                "status": "error",
+                "has_errors": True,
+                "indexed": [],
+                "failed": [
+                    {
+                        "document": "budget_sheet.xlsx",
+                        "error": "Can't index budget_sheet.xlsx: Excel (.xlsx) files aren't supported.",
+                    },
+                    {
+                        "document": "pitch_deck.pptx",
+                        "error": "Can't index pitch_deck.pptx: PowerPoint (.pptx) files aren't supported.",
+                    },
+                ],
+                "summary": (
+                    "Couldn't index 2 documents:\n"
+                    "- budget_sheet.xlsx: Excel (.xlsx) files aren't supported for automatic indexing.\n"
+                    "- pitch_deck.pptx: PowerPoint (.pptx) files aren't supported for automatic indexing."
+                ),
+            },
+            False,
+            "pitch_deck.pptx",
+        ),
+        (
+            {
+                "status": "partial",
+                "has_errors": True,
+                "indexed": [{"document": "memo.txt", "chunks": 1}],
+                "failed": [
+                    {
+                        "document": "budget_sheet.xlsx",
+                        "error": "Can't index budget_sheet.xlsx: Excel (.xlsx) files aren't supported.",
+                    }
+                ],
+                "summary": "Indexed memo.txt (1 passage); couldn't index budget_sheet.xlsx.",
+            },
+            False,
+            "Indexed memo.txt",
+        ),
+        (
+            {
+                "status": "ok",
+                "indexed": [{"document": "quarterly_report.pdf", "chunks": 2}],
+                "failed": [],
+                "summary": "Indexed quarterly_report.pdf (2 passages)",
+            },
+            True,
+            "Indexed quarterly_report.pdf (2 passages)",
+        ),
+    ],
+)
+def test_relayed_index_documents_preserves_status_and_full_summary(
+    data, expected_success, expected_text
+):
+    handler = _relay(
+        {
+            "type": "tool_call",
+            "tool": "index_documents",
+            "args": {"documents": ["budget_sheet.xlsx", "pitch_deck.pptx"]},
+        },
+        {
+            "type": "tool_result",
+            "tool": "index_documents",
+            "data": data,
+        },
+    )
+    result = handler.events[-1]
+    assert result["type"] == "tool_result"
+    assert result["tool"] == "index_documents"
+    assert result["success"] is expected_success
+    assert expected_text in result["summary"]
+    assert result["summary"] == data["summary"]
 
 
 def test_index_document_path_arg_is_mapped_to_file_path():
