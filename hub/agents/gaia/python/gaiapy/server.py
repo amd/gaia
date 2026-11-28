@@ -1064,20 +1064,9 @@ def _confirmation_refusal(action: str, surface: str = "service") -> Dict[str, An
     it as a success. A ``cli`` caller is ``gaia -p``, whose remedy is a flag.
     """
     if surface == "cli":
-        from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+        from gaia.agents.base.console import cli_refusal_message
 
-        remedy = (
-            "Re-run with --full-access to grant paths outside the current folder "
-            "for this run (it also turns the shell guardrails off)."
-            if action == PATH_ACCESS_PROMPT_TOOL
-            else "Re-run with --dangerously-skip-permissions to let this run use "
-            "gated tools without asking, or --full-access to also turn the shell "
-            "guardrails off."
-        )
-        answer = (
-            f"I stopped before running '{action}' because it needs your approval, "
-            f"and gaia -p has nobody to ask. {remedy}"
-        )
+        answer = cli_refusal_message(action)
     else:
         answer = (
             f"I stopped before running '{action}' because it needs your explicit "

@@ -412,6 +412,53 @@ TEST(WorkspaceTest, AShortNameForAnOutsideFolderIsRefused) {
 }
 #endif
 
+TEST(WorkspaceTest, ARelativeCdOutOfTheFolderIsRefused) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    fs::create_directories(d.work / "sub");
+    InFolder in(d.work);
+    for (const bool posix : {true, false}) {
+        EXPECT_NE(ws.checkCommand("cd .. && cat other/secret.txt", posix), "") << posix;
+        EXPECT_NE(ws.checkCommand("cd sub && cd ../..", posix), "") << posix;
+        EXPECT_EQ(ws.checkCommand("cd sub && cd ..", posix), "") << posix;
+        EXPECT_EQ(ws.checkCommand("cd sub", posix), "") << posix;
+    }
+    EXPECT_NE(ws.checkCommand("cd /d .. && type other\\secret.txt", false), "");
+    // From a subfolder the shell stands in, one step up is still inside.
+    EXPECT_EQ(ws.judgeCommand("cd ..", true, (d.work / "sub").string()).refusal, "");
+    EXPECT_NE(ws.judgeCommand("cd ../..", true, (d.work / "sub").string()).refusal, "");
+}
+
+// The wrapped shell tool judges a relative `cd` from where the shell stands, not the process's folder.
+TEST(WorkspaceTest, AConfinedShellJudgesCdFromTheShellsFolder) {
+    Dirs d;
+    std::ofstream(d.work / "in.txt") << "inside text";
+    auto ws = std::make_shared<Workspace>(std::vector<std::string>{d.work.string()});
+    InFolder in(d.work);
+    std::string shellAt = d.work.string();
+    ToolInfo sh;
+    sh.name = "sh";
+    sh.parameters = {{"command", ToolParamType::STRING, true, ""}};
+    sh.callback = [&shellAt, &d](const json& args) -> json {
+        const std::string command = args["command"].get<std::string>();
+        if (command == "cd sub") shellAt = (d.work / "sub").string();
+        if (command == "cd ..") shellAt = fs::path(shellAt).parent_path().string();
+        return json{{"status", "success"}};
+    };
+    ToolRegistry reg;
+    reg.registerTool(Workspace::confineShell(sh, ws, "command", true, nullptr, [&shellAt] { return shellAt; }));
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd sub"}})["status"], "success");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cat ../in.txt"}})["status"], "success");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd .."}})["status"], "success");
+    EXPECT_EQ(shellAt, d.work.string());
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cat in.txt"}})["status"], "success");
+    // From the root itself, one step up leaves the folder.
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd .."}})["status"], "error");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd sub/../.."}})["status"], "error");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd ../other"}})["status"], "error");
+    EXPECT_EQ(shellAt, d.work.string());
+}
+
 TEST(WorkspaceTest, ACommandNamingALinkOutOfTheFolderIsRefused) {
     Dirs d;
     Workspace ws({d.work.string()});
