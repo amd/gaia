@@ -272,7 +272,7 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
                 }
             } else if (decision == ToolConfirmResult::DENY) {
                 noteDeclined(resolvedName, effectiveArgs);
-                return json{{"status", "error"},
+                return json{{"status", "denied"},
                             {"error", "Tool '" + resolvedName + "' execution denied by user"},
                             {"hint", declinedHint()}};
             } else if (decision == ToolConfirmResult::UNATTENDED) {
@@ -553,7 +553,7 @@ bool hasPhrase(const std::string& text, const std::string& phrase) {
 }
 
 json notRun(const std::string& shown, const std::string& error) {
-    return json{{"status", "error"},
+    return json{{"status", "denied"},
                 {"not_executed", true},
                 {"already_declined", true},
                 {"declined_call", shown},

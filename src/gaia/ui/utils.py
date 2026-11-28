@@ -300,6 +300,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         library_notices=msg.get("library_notices"),
         stopped=bool(msg.get("stopped")),
         failed=bool(msg.get("failed")),
+        agent_program=msg.get("agent_program"),
     )
 
 

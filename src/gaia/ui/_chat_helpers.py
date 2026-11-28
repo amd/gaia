@@ -3924,6 +3924,18 @@ def _turn_failure_kind(answer_event: Optional[dict], result: Any) -> Optional[st
     return None
 
 
+def _turn_program(agent_type: str) -> Optional[str]:
+    """``gaiapy`` or ``gaiacpp`` for a flagship turn, else None."""
+    from gaia.daemon.sidecars import fetch
+
+    if agent_type != FLAGSHIP_AGENT_ID:
+        return None
+    program = fetch.saved_flagship()
+    return (
+        program if program in (fetch.PYTHON_FLAGSHIP, fetch.NATIVE_FLAGSHIP) else None
+    )
+
+
 def _failed_turn_program(
     agent_type: str, failure: Optional[str] = None
 ) -> Optional[str]:
@@ -6040,6 +6052,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 stopped=turn_cancelled,
                 # As on `done`: a Stop wins over the failure it cut short.
                 failed=turn_failed and not turn_cancelled,
+                agent_program=_turn_program(agent_type),
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -6174,6 +6187,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     ends_turn=True,
                     stopped=turn_cancelled,
                     failed=failed,
+                    agent_program=_turn_program(agent_type),
                 )
                 done_event = _done_event(
                     msg_id,

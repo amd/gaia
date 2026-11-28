@@ -86,6 +86,7 @@ export function fromApiMessages(raw: unknown[] | undefined): Message[] {
             turnSummary: m.turnSummary || m.turn_summary || undefined,
             libraryNotices: m.libraryNotices || m.library_notices || undefined,
             stopState: m.stopState ?? (m.stopped ? 'stopped' : undefined),
+            agentProgram: m.agentProgram || m.agent_program || undefined,
         };
     });
 }
