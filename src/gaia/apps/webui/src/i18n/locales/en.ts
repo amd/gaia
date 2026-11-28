@@ -2130,6 +2130,7 @@ export const enMessages = {
     'settings.automations.cancel': 'Cancel',
     'settings.automations.removeTitle': 'Remove “{name}”?',
     'settings.automations.removeBody': 'GAIA stops running it. To get it back, ask GAIA in chat to set it up again.',
+    'settings.automations.removeBodyNative': 'GAIA stops running it. Fast and light can’t set it up again; switch to Full-featured under Agent & model to recreate it in chat.',
     'modelNeeded.dialog': 'Download a model',
     'modelNeeded.title.chat': 'Chatting needs a model',
     'modelNeeded.title.vision': 'Reading this image needs a vision model',
