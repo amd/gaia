@@ -259,6 +259,7 @@ void Agent::setTemperature(double temperature) {
         throw std::invalid_argument("temperature must be in [0.0, 2.0]");
     std::lock_guard<std::mutex> lock(configMutex_);
     config_.temperature = temperature;
+    config_.cardSampling = false;  // a chosen temperature replaces the card's sampling
 }
 
 void Agent::setDebug(bool debug) {
