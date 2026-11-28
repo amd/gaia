@@ -670,6 +670,7 @@ export const enMessages = {
     'modelMenu.addFromLinkNote': 'Any GGUF chat model on Hugging Face',
     'modelMenu.providers': 'Providers and keys…',
     'modelMenu.downloadModel': 'Download {name}',
+    'modelMenu.aboutModel': 'About {name}',
     'modelMenu.ready': 'Ready',
     'media.showFull': 'Show full size',
     'media.showSmaller': 'Show smaller',
