@@ -1483,9 +1483,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .then(() => setQueue((q) => messageQueue.promote(q, id, 'sending', 'delivered')))
             .catch((err) => {
                 log.chat.info(`Follow-up not taken by the running reply; it stays queued: ${err instanceof Error ? err.message : err}`);
-                if ((err as { httpStatus?: unknown } | null)?.httpStatus === 409) {
-                    setFollowupsUnavailable(true);
-                }
                 setQueue((q) => messageQueue.steerRefused(q, id));
             });
     }, [queue, isStreaming, sessionId, setQueue]);

@@ -146,7 +146,7 @@ describe('messages typed during a reply', () => {
     });
 
     it('stay queued, saying so, when the running reply cannot take them', async () => {
-        mockedApi.sendFollowUp.mockRejectedValue(Object.assign(new Error('409'), { httpStatus: 409 }));
+        mockedApi.sendFollowUp.mockRejectedValue(new Error('409'));
         await startTurn();
         await type('second');
 
@@ -155,7 +155,6 @@ describe('messages typed during a reply', () => {
         });
         expect(screen.getByText("Can't add to this reply; it will send when the reply ends.")).toBeTruthy();
         expect(screen.queryByText('Queued. Sends when this reply ends.')).toBeNull();
-        expect(screen.queryByText('Add to this reply')).toBeNull();
 
         await act(async () => {
             current().onDone({ type: 'done', content: 'answer one', message_id: 2 } as StreamEvent);
