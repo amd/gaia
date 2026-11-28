@@ -56,6 +56,8 @@ beforeEach(() => {
 
     mocked.getActiveModel.mockResolvedValue({
         provider: 'local', model: 'Qwen3.6-35B-A3B-GGUF', label: 'Qwen', display_name: 'Qwen 3.6', remote: false, is_default: true,
+        // As the backend answers for a new chat: it runs on this PC.
+        inference_remote: false,
     } as never);
     mocked.listProviderModels.mockResolvedValue({ models: [] } as never);
     mocked.checkSetup.mockResolvedValue(READY);
@@ -105,17 +107,18 @@ async function send(text: string) {
 }
 
 describe('settings read before the backend listens', () => {
-    it('the model chip names the model once the backend answers', async () => {
+    it('the run-mode chip says where chat runs, and names the model, once the backend answers', async () => {
         mocked.getActiveModel.mockRejectedValueOnce(NOT_LISTENING()).mockRejectedValueOnce(NOT_LISTENING());
         render(<App />);
         await advance(0);
-        // The composer's right-hand chip is the model's.
-        const chipLabel = () => [...document.querySelectorAll('.composer-chip-label')].pop()?.textContent ?? '';
-        expect(chipLabel()).toMatch(/^Model/);
+        // The composer's right-hand chip is the run mode's.
+        const chip = () => [...document.querySelectorAll('.composer-chip-label')].pop()?.closest('button');
+        expect(chip()?.textContent).toBe('Mode');
 
         await advance(3_100);
         expect(mocked.getActiveModel).toHaveBeenCalledTimes(3);
-        expect(chipLabel()).toMatch(/^Qwen 3\.6/);
+        expect(chip()?.textContent).toBe('Local');
+        expect(chip()?.getAttribute('title')).toMatch(/Qwen 3\.6/);
     });
 
     it('a new chat starts in the saved default (full access) when the first read failed', async () => {

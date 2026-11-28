@@ -563,7 +563,7 @@ the same work.
 Once the gate clears, GAIA starts the agent and drops you into the conversation:
 
 ```
-GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
+GAIA │ agent gaia v0.2.0 │ Local · Gemma-4-E4B-it-GGUF
 ────────────────────────────────────────────────────────────────────────────────
 Welcome to GAIA
 Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
@@ -598,8 +598,9 @@ can name a different build than the one answering.
 On a narrow terminal this segment is the first thing to give way, never the model
 chip next to it.
 
-The model chip names the chat model from the moment the chat opens, local
-included: the one the startup check loaded, until the agent reports the model it
+The model chip says where chat runs, **Local** or **Cloud**, then names the chat
+model (a cloud model with its provider, `Cloud · Fireworks AI · glm-5p3-flash`). It
+does so from the moment the chat opens, local included: the one the startup check loaded, until the agent reports the model it
 actually runs. The model you last picked is restored on the next launch, and the
 status bar says `restoring <model>…` until it is; if it can't be, the chat says
 so in one line and opens the provider picker. See
@@ -775,6 +776,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/models` | The models on this PC: tick one to download it, untick to stop using it, `x` removes one (it asks first), `c` picks the chat model, `a` applies. Downloads keep going when you close it, and the status line shows `downloading 38%` |
 | `/gpu` | Give the GPU more memory so bigger models fit. Offered only on a PC with an integrated GPU |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
+| `/mode` | Switch where chat runs: `/mode local` or `/mode cloud`. Each mode remembers its own chat model, and switching runs that model through `/model`. Bare `/mode` lists both modes and the model each uses. Cloud moves chat only; reading images, speech, image creation and documents stay on this PC. The Agent UI's Local/Cloud switch saves the same choice, so the two stay in step. See [Choose where GAIA runs](/guides/agent-ui/control#choose-where-gaia-runs) |
 | `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
 | `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds and what each skill may do, with a security warning; `/skills add <link> confirm` adds that version (a `confirm` with no preview previews first) (`--allow-code` to include skills that ship scripts). In the default session, where the agent runs behind GAIA's background service, `/skills` lists the skills the chat can run and cannot add one yet: add it in the Agent UI under Settings › Skills, then type `/skills` again to see it |
 | `/research <topic>` | Research a topic: GAIA searches the web, reads the sources and writes a report that cites each page it read. `/research-report <topic>` does the same. Bare `/research` switches research mode on, so every message is researched until you type `/research` again or `/clear` (a `/<skill>` command for an installed skill still runs that skill); the header shows `research` while it is on. A message you type while GAIA is still answering steers that answer and is not researched on its own. See [Deep research](/guides/gaia#deep-research) |
@@ -836,7 +838,7 @@ session's saved history, and GAIA's memory and document search are how it finds
 them again.
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
-their own — `/model`, `/skills`, `/research`, `/setup`, `/models`, `/gpu`, `/provider` and `/agent` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
+their own — `/mode`, `/model`, `/skills`, `/research`, `/setup`, `/models`, `/gpu`, `/provider` and `/agent` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
 needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
 

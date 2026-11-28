@@ -30,7 +30,7 @@ func TestRelayedFlagshipRestoresACloudModelWithoutAModelTurn(t *testing.T) {
 	m = updated.(FlagshipModel)
 
 	// An armed restore turn leaves the header blank until the agent confirms.
-	if h := headerOf(m); !strings.Contains(h, "AMD LLM Gateway · Gemma-4-31B (remote)") {
+	if h := headerOf(m); !strings.Contains(h, "Cloud · AMD LLM Gateway · Gemma-4-31B") {
 		t.Fatalf("header does not name the restored model: %q", h)
 	}
 }
@@ -52,7 +52,7 @@ func TestRelayedFlagshipRemembersAModelPickedAtTheGate(t *testing.T) {
 	if len(saved) != 1 || saved[0] != "amd/"+gatewayModel {
 		t.Fatalf("the gate pick was not remembered for the next launch: %v", saved)
 	}
-	if h := headerOf(m); !strings.Contains(h, "Gemma-4-31B (remote)") {
+	if h := headerOf(m); !strings.Contains(h, "Cloud · AMD LLM Gateway · Gemma-4-31B") {
 		t.Fatalf("header does not name the picked model: %q", h)
 	}
 }

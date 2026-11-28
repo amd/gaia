@@ -60,10 +60,15 @@
     container: composer-row / inline-size;
 }
 
-/* A narrow row gives way in this order before the model name is cut: the Research
-   label, the day's spend, then the chat's spend, then the context bar (its % stays),
-   then the folder's name (its icon stays). The Fast and light chip's label fades
+/* A narrow row gives way in this order before the run mode is cut: the Research
+   label, the folder's name (its icon stays), the day's spend, then the chat's
+   spend, then the context bar (its % stays). The Fast and light chip's label fades
    first of all, then goes, then the chip; Settings › Agent & model still says it. */
+@container composer-row (max-width: 640px) {
+    .composer-row .folder-chip { flex-shrink: 0; }
+    .folder-chip .composer-chip-label { display: none; }
+}
+
 @container composer-row (max-width: 600px) {
     .spend-meter-today { display: none; }
     .composer-chip-agent .composer-chip-label { display: none; }
@@ -80,7 +85,6 @@
 
 @container composer-row (max-width: 540px) {
     .context-meter .context-meter-bar { display: none; }
-    .folder-chip .composer-chip-label { display: none; }
 }
 
 /* The Research chip goes first: its telescope and tooltip still say what it is.
@@ -91,6 +95,20 @@
 
 @container composer-row (max-width: 600px) {
     .composer-chip-research:not(.is-on) { display: none; }
+}
+
+/* The run mode is one short word, so it is the last chip to be cut: only a
+   phone-width row, with nothing else left to give, fades it. */
+.composer-row .run-mode-chip-wrap { flex-shrink: 0; }
+
+@container composer-row (max-width: 480px) {
+    .composer-row .run-mode-chip-wrap,
+    .composer-row .run-mode-chip-wrap > .composer-chip { flex-shrink: 1; min-width: 0; }
+}
+
+/* In a narrow row the run mode's customize button gives way: its menu still ends in Customize. */
+@container composer-row (max-width: 540px) {
+    .composer-chip.run-mode-customize { display: none; }
 }
 
 .composer-row-left,
@@ -338,6 +356,8 @@
 }
 
 .composer-chip-label {
+    /* A crowded row cuts a label inside its chip instead of spilling it out. */
+    min-width: 0;
     overflow: hidden;
     text-overflow: clip;
     animation: fade-cut-inline both;
@@ -367,6 +387,12 @@
 /* In a narrow row the label goes before the model name is cut; the eye icon and the button's aria-label still carry the state. */
 @container composer-row (max-width: 560px) {
     .composer-chip-memory .composer-chip-label { display: none; }
+}
+
+/* On a phone the permission and memory chips drop their arrows, so the run mode stays whole; a click still opens each. */
+@container composer-row (max-width: 400px) {
+    .composer-chip-permission > .lucide-chevron-down,
+    .composer-chip-memory > .lucide-chevron-down { display: none; }
 }
 
 /* Beside the Research chip it gives up that chip's width, so the model name keeps its room. */

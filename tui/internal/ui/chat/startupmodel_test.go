@@ -244,7 +244,7 @@ func TestHeaderNamesTheGateModelBeforeTheFirstPing(t *testing.T) {
 	m := NewChatModelForFlagship(&queryCapturingClient{}, "gaia", "GAIA", true).
 		WithExpectedModel("Gemma-4-E4B-it-GGUF")
 	m.width, m.height = 120, 30
-	if !strings.Contains(ansi.Strip(m.renderHeader()), "│ Gemma-4-E4B-it-GGUF") {
+	if !strings.Contains(ansi.Strip(m.renderHeader()), "│ Local · Gemma-4-E4B-it-GGUF") {
 		t.Fatalf("header = %q", ansi.Strip(m.renderHeader()))
 	}
 	before := len(m.messages)

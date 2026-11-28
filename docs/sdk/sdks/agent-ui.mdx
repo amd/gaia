@@ -3420,7 +3420,49 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     now; **503** while the local model server is still starting. A successful
     pick clears this run's restore notice. Picking a local model also starts a
     fresh warm-up (see `POST /api/system/warm-up`), so the model loads before
-    the next message; follow it with `GET /api/system/warm-up`.
+    the next message; follow it with `GET /api/system/warm-up`. The pick also
+    saves `run_mode` (`cloud` for a cloud model, else `local`) and that mode's
+    chat model, and the mode being left keeps the model it was on.
+  </Accordion>
+</AccordionGroup>
+
+### Run modes
+
+Local or Cloud, the composer's choice of where chat runs. A mode is its chat
+model: every other capability runs on this PC in both.
+
+<AccordionGroup>
+  <Accordion title="GET /api/run-modes">
+    Returns `{"active": "local" | "cloud", "modes": [...]}`. Each mode carries
+    `id`, `active`, `chat` (`model`, `display_name`, `provider`, `provider_name`,
+    `default_model`, `default_display_name`, `customized`) and `capabilities`:
+    one row each for `vision`, `speech_to_text`, `read_aloud`, `images` and
+    `documents`, with `place` (always `local`), `model` and `display_name`
+    (null when off), `unavailable` (`platform`, `npu` or `chat_model`),
+    `cloud_note` (`not_offered` or `not_tested`: why Cloud leaves it on this
+    PC) and `settings` (the settings section that changes it). The active mode
+    is read off the model new turns run, so it follows a pick made anywhere.
+  </Accordion>
+
+  <Accordion title="POST /api/run-modes/select">
+    Body `{"mode": "cloud", "chat": "fireworks.glm-5p3-flash"}`; `chat` is
+    optional and sets the mode's chat model on the way in. Switches by picking
+    the mode's chat model, with every check `POST /api/providers/select` makes:
+    **409** when it cannot run (no working key, Local only, not downloaded),
+    **503** while the model server starts, and the mode stays as it was.
+    **422** when `chat` runs in the other place; **404** for an unknown mode.
+  </Accordion>
+
+  <Accordion title="PUT /api/run-modes/{mode}">
+    Body `{"chat": "<model id>"}`. Sets the mode's chat model. For the mode in
+    use that switches the model now; for the other it is saved, after the same
+    can-it-run check.
+  </Accordion>
+
+  <Accordion title="POST /api/run-modes/{mode}/reset">
+    Puts the mode back on its default chat model: the local default for
+    `local`, GAIA's first recommended Fireworks model for `cloud`. For the mode
+    in use the default has to be able to run, or **409** and nothing changes.
   </Accordion>
 </AccordionGroup>
 

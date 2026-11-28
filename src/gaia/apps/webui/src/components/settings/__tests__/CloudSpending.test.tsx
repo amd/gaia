@@ -9,12 +9,14 @@ import { CloudPrices } from '../CloudPrices';
 import { SpendingLimit } from '../SpendingLimit';
 import { ModelSettings } from '../ModelSettings';
 import { formatPrice } from '../cloudPrice';
-import { ModelChip } from '../../ModelChip';
+import { RunModeChip } from '../../RunModeChip';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
 import { mockSetupApis } from '../../../test/setupApiMocks';
 import type { ActiveModel, ModelPrice, ProviderInfo, SpendingReport } from '../../../types';
+
+import { openModeMenu, runModesView } from '../../../test/runModes';
 
 vi.mock('../../../services/api');
 
@@ -178,7 +180,7 @@ describe('Settings › Model', () => {
     });
 });
 
-describe('ModelChip', () => {
+describe('RunModeChip', () => {
     it('shows a cloud model’s price in the picker', async () => {
         mockedApi.listProviders.mockResolvedValue({
             providers: [LOCAL, fireworks({ models_discovered: true })], active: LOCAL_ACTIVE, lemonade_error: null,
@@ -189,9 +191,9 @@ describe('ModelChip', () => {
                 { id: 'fireworks.glm-5p3-flash', context_length: null, downloaded: true, labels: [], rank: 2, note: 'cheapest', evidence: null, price: FLASH },
             ],
         }));
-        render(<ModelChip />);
-        fireEvent.click(screen.getByRole('button', { name: /Gemma|Model/ }));
-        const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
+        mockedApi.getRunModes.mockResolvedValue(runModesView('local'));
+        render(<RunModeChip />);
+        const dialog = await openModeMenu();
         fireEvent.mouseEnter(await within(dialog).findByRole('button', { name: /^About glm-5p3-flash/i }));
         const bubble = await screen.findByRole('tooltip');
         expect(bubble).toHaveTextContent('#2 cheapest');

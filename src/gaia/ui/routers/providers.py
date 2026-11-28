@@ -1663,18 +1663,11 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
     }
 
 
-class SelectModelRequest(BaseModel):
-    model: str
+def require_runnable(model_id: str) -> bool:
+    """Raise the HTTP error that says why *model_id* can't run now.
 
-
-@router.post("/api/providers/select")
-def select_model(
-    body: SelectModelRequest, db: ChatDatabase = Depends(get_db)
-) -> Dict[str, Any]:
-    """Make *model* the one new turns run, and remember it across restarts."""
-    model_id = body.model.strip()
-    if not model_id:
-        raise HTTPException(status_code=422, detail="No model given.")
+    Returns whether it runs in the cloud.
+    """
     refuse_blocked_cloud_model(model_id)
     cloud = _is_cloud(model_id)
     from gaia.config import GaiaConfigError
@@ -1702,10 +1695,68 @@ def select_model(
             status_code=409,
             detail=f"Can't switch to {model_label(model_id)}: {reason}.",
         )
+    return cloud
+
+
+def _save_pick(model_id: str, leaving: Optional[str]) -> None:
+    """Remember *model_id* as the model chat reopens on, and the run mode it sets.
+
+    *leaving* is the model chat ran until now. When the pick changes the run
+    mode, the mode being left keeps *leaving*, so going back reopens on it.
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.run_modes import mode_for, record_pick, with_chat
+
     try:
-        _write_config_keys(
-            {"last_provider": provider_of(model_id), "last_model": model_id}
-        )
+        try:
+            remote: Optional[bool] = _is_cloud_model(model_id)
+        except ProviderError as e:
+            # A Custom model ID saves with no model server up; the mode is read
+            # off the model in use, so only its bookkeeping waits.
+            logger.info("Saving %s without its run mode: %s", model_id, e)
+            remote = None
+        left = None
+        if leaving and remote is not None:
+            try:
+                left = _is_cloud_model(leaving)
+            except ProviderError as e:
+                # Bookkeeping for the mode being left; never a reason to refuse the pick.
+                logger.info("Not remembering %s for its run mode: %s", leaving, e)
+
+        def _apply(doc: dict) -> None:
+            doc["last_provider"] = provider_of(model_id)
+            doc["last_model"] = model_id
+            if remote is None:
+                return
+            if left is not None and left != remote:
+                doc["run_profiles"] = with_chat(
+                    doc.get("run_profiles") or {}, mode_for(left), leaving
+                )
+            record_pick(doc, model_id, remote)
+
+        GaiaConfig.edit_doc(_apply)
+    except (GaiaConfigError, HybridConfigError) as e:
+        raise ProviderError(
+            f"The model choice was not saved: {e} Then pick the model again.",
+            500,
+        ) from e
+
+
+class SelectModelRequest(BaseModel):
+    model: str
+
+
+@router.post("/api/providers/select")
+def select_model(
+    body: SelectModelRequest, db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
+    """Make *model* the one new turns run, and remember it across restarts."""
+    model_id = body.model.strip()
+    if not model_id:
+        raise HTTPException(status_code=422, detail="No model given.")
+    cloud = require_runnable(model_id)
+    try:
+        _save_pick(model_id, _active_view(db)["model"])
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)

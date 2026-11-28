@@ -4,11 +4,13 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { ModelChip } from '../ModelChip';
+import { RunModeChip } from '../RunModeChip';
 import { useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { ActiveModel, ProviderInfo, ProviderModel, Session } from '../../types';
+
+import { openModeMenu, runModesView } from '../../test/runModes';
 
 vi.mock('../../services/api');
 
@@ -54,11 +56,11 @@ beforeEach(() => {
     }));
     mockedApi.selectModel.mockResolvedValue(CLOUD_ACTIVE);
     mockedApi.listSessions.mockResolvedValue({ sessions: [SESSION], total: 1 });
+    mockedApi.getRunModes.mockResolvedValue(runModesView('local'));
 });
 
 async function openPicker() {
-    fireEvent.click(screen.getByRole('button', { name: /Gemma|kimi|auto|Model/ }));
-    return screen.findByRole('dialog', { name: 'Choose a model' });
+    return openModeMenu();
 }
 
 /** Says yes to the download the list asks about. */
@@ -75,25 +77,32 @@ async function rowFor(dialog: HTMLElement, name: RegExp) {
     return row;
 }
 
-describe('ModelChip', () => {
-    it('labels a local model with Local', () => {
-        render(<ModelChip />);
-        expect(screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Local/ })).toBeInTheDocument();
+describe('RunModeChip', () => {
+    it('says Local for a local model, and names the model on hover', () => {
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: 'Local' });
+        expect(chip.getAttribute('title')).toBe('Gemma-4-E4B-it-GGUF · Runs on this PC');
+    });
+
+    it('has a customize button that opens Settings on Run mode', () => {
+        render(<RunModeChip />);
+        fireEvent.click(screen.getByRole('button', { name: 'Customize run modes' }));
+        expect(useChatStore.getState().settingsSection).toBe('mode');
     });
 
     it('does not claim Local when the backend cannot tell where chat runs', () => {
         useChatStore.setState({ sessions: [{ ...SESSION, inference_remote: null }] });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF/ });
-        expect(chip.textContent).not.toMatch(/local/i);
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: 'Mode' });
+        expect(chip.textContent).not.toMatch(/local|cloud/i);
     });
 
     it('names the cloud provider the backend reports for a non-cloud pick', () => {
         useChatStore.setState({
             sessions: [{ ...SESSION, inference_remote: true, inference_provider_name: 'Fireworks AI', inference_description: 'Sent to Fireworks AI.' }],
         });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Fireworks AI/ });
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: 'Cloud' });
         expect(chip.getAttribute('title')).toBe('Sent to Fireworks AI.');
     });
 
@@ -110,7 +119,7 @@ describe('ModelChip', () => {
                 ],
             }
             : { provider: 'local', models: [model('Gemma-4-E4B-it-GGUF')] }));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         expect(within(dialog).getByRole('option', { name: /recommended/ })).toBeInTheDocument();
@@ -133,7 +142,7 @@ describe('ModelChip', () => {
                 models: [model('fireworks.recommended', { rank: 1 }), model('fireworks.auto'), model('fireworks.other')],
             }
             : { provider: 'local', models: [model('Gemma-4-E4B-it-GGUF')] }));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         expect(within(dialog).getByRole('option', { name: /^recommended$/ })).toBeInTheDocument();
@@ -145,28 +154,30 @@ describe('ModelChip', () => {
         useChatStore.setState({
             sessions: [{ ...SESSION, inference_remote: true, inference_provider_name: 'Fireworks AI', inference_description: 'Runs there, model `Qwen3`.' }],
         });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF/ });
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: 'Cloud' });
         expect(chip.getAttribute('title')).toBe('Runs there, model Qwen3.');
     });
 
-    it('labels a cloud model with its provider', () => {
+    it('says Cloud for a cloud model, and names the model and provider on hover', () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
-        render(<ModelChip />);
-        expect(screen.getByRole('button', { name: /kimi-k2 · Fireworks AI/ })).toBeInTheDocument();
+        useChatStore.setState({ currentSessionId: null });
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: 'Cloud' });
+        expect(chip.getAttribute('title')).toBe('kimi-k2 · Runs on Fireworks AI — chat history leaves this PC');
     });
 
     it("names the open chat's model, not the picked one", () => {
         useChatStore.setState({ sessions: [{ ...SESSION, effective_model: 'Qwen3-30B-A3B-Instruct-2507-GGUF' }] });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /Qwen3-30B-A3B-Instruct-2507-GGUF · Local/ });
-        expect(chip.textContent).not.toContain('Gemma');
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: 'Local' });
+        expect(chip.getAttribute('title')).toBe('Qwen3-30B-A3B-Instruct-2507-GGUF · Runs on this PC');
     });
 
     it('names the model the backend resolves when it differs from the stored one', () => {
         useChatStore.setState({ sessions: [{ ...SESSION, model: 'qwen', effective_model: 'my-custom-model' }] });
-        render(<ModelChip />);
-        expect(screen.getByRole('button', { name: /my-custom-model · Local/ })).toBeInTheDocument();
+        render(<RunModeChip />);
+        expect(screen.getByRole('button', { name: 'Local' }).getAttribute('title')).toMatch(/^my-custom-model · /);
     });
 
     it('names the Claude model a chat runs under the eval provider', () => {
@@ -176,8 +187,9 @@ describe('ModelChip', () => {
                 inference_provider: 'claude', inference_provider_name: 'Anthropic',
             }],
         });
-        render(<ModelChip />);
-        expect(screen.getByRole('button', { name: /claude-sonnet-4-5 · Anthropic/ })).toBeInTheDocument();
+        render(<RunModeChip />);
+        expect(screen.getByRole('button', { name: 'Cloud' }).getAttribute('title'))
+            .toBe('claude-sonnet-4-5 · Runs on Anthropic — chat history leaves this PC');
     });
 
     it('names the picked model when no chat is open', () => {
@@ -185,8 +197,8 @@ describe('ModelChip', () => {
             sessions: [{ ...SESSION, effective_model: 'Qwen3-30B-A3B-Instruct-2507-GGUF' }],
             currentSessionId: null,
         });
-        render(<ModelChip />);
-        expect(screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Local/ })).toBeInTheDocument();
+        render(<RunModeChip />);
+        expect(screen.getByRole('button', { name: 'Local' }).getAttribute('title')).toMatch(/^Gemma-4-E4B-it-GGUF · /);
     });
 
     it("shows the chat's new model as soon as a switch lands", async () => {
@@ -198,31 +210,32 @@ describe('ModelChip', () => {
         mockedApi.listSessions.mockResolvedValue({
             sessions: [{ ...SESSION, effective_model: 'Qwen3-8B-GGUF' }], total: 1,
         });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(await within(dialog).findByRole('option', { name: /^Qwen3-8B-GGUF/ }));
 
-        expect(await screen.findByRole('button', { name: /Qwen3-8B-GGUF · Local/ })).toBeInTheDocument();
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Local' }).getAttribute('title')).toMatch(/^Qwen3-8B-GGUF · /));
         expect(mockedApi.listSessions).toHaveBeenCalledTimes(1);
     });
 
     it('still switches when the chat list cannot be refreshed', async () => {
         mockedApi.listSessions.mockRejectedValue(new Error('backend restarting'));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(await within(dialog).findByRole('option', { name: /^kimi-k2/ }));
         fireEvent.click(within(dialog).getByRole('button', { name: 'Use kimi-k2' }));
 
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-        expect(screen.getByRole('button', { name: /kimi-k2 · Fireworks AI/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Cloud' })).toBeInTheDocument();
     });
 
     it('lists models from connected providers only', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         await within(dialog).findByText('Fireworks AI');
 
-        expect(within(dialog).getByText('Local')).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /^Local/ })).toHaveAttribute('aria-selected', 'true');
+        expect(within(dialog).getByRole('option', { name: /^Cloud/ })).toHaveAttribute('aria-selected', 'false');
         expect(within(dialog).queryByText('AMD LLM Gateway')).not.toBeInTheDocument();
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('amd');
         expect(within(dialog).getByRole('option', { name: /^kimi-k2/ })).toBeInTheDocument();
@@ -231,7 +244,7 @@ describe('ModelChip', () => {
     });
 
     it('asks before moving a local chat to a cloud model, then switches', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(await within(dialog).findByRole('option', { name: /^kimi-k2/ }));
 
@@ -241,12 +254,12 @@ describe('ModelChip', () => {
         fireEvent.click(within(dialog).getByRole('button', { name: 'Use kimi-k2' }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.accounts/fireworks/models/kimi-k2'));
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-        expect(screen.getByRole('button', { name: /kimi-k2 · Fireworks AI/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Cloud' })).toBeInTheDocument();
     });
 
     it('shows the cloud notice under the clicked row and scrolls it into view', async () => {
         const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         const row = await within(dialog).findByRole('option', { name: /^kimi-k2/ });
         fireEvent.click(row);
@@ -262,7 +275,7 @@ describe('ModelChip', () => {
             provider: id, models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF')] : [],
         }));
         mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(await within(dialog).findByRole('option', { name: /^Qwen3-8B-GGUF/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
@@ -276,7 +289,7 @@ describe('ModelChip', () => {
         }));
         mockedApi.downloadModel.mockImplementation(async () => { downloaded = true; return {} as never; });
         mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -305,7 +318,7 @@ describe('ModelChip', () => {
         const visibility = vi.spyOn(document, 'visibilityState', 'get');
         vi.useFakeTimers({ shouldAdvanceTime: true });
         try {
-            render(<ModelChip />);
+            render(<RunModeChip />);
             const dialog = await openPicker();
             fireEvent.click(await rowFor(dialog, /Qwen3/));
             confirmDownload(dialog);
@@ -337,7 +350,7 @@ describe('ModelChip', () => {
         });
         mockedApi.downloadModel.mockResolvedValue({ status: 'downloading', model: 'Qwen3-8B-GGUF' });
         mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -351,7 +364,7 @@ describe('ModelChip', () => {
             provider: id,
             models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF', { downloaded: false, size_gb: 5.2 })] : [],
         }));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -370,7 +383,7 @@ describe('ModelChip', () => {
     });
 
     it('keeps one question open: a download question replaces the cloud one', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(await within(dialog).findByRole('option', { name: /^kimi-k2/ }));
         expect(within(dialog).getByRole('alert')).toHaveTextContent('Chat history is sent to Fireworks AI.');
@@ -386,7 +399,7 @@ describe('ModelChip', () => {
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
     });
 
-    it('lists the provider in use first, and models on this PC before ones to download', async () => {
+    it('lists Local before Cloud, and models on this PC before ones to download', async () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         mockedApi.listProviderModels.mockImplementation(async (id) => ({
             provider: id,
@@ -394,14 +407,17 @@ describe('ModelChip', () => {
                 ? [model('Qwen3-8B-GGUF', { downloaded: false, size_gb: 5.2 }), model('Gemma-4-E4B-it-GGUF', { size_gb: 5.6 })]
                 : [model('fireworks.accounts/fireworks/models/kimi-k2', { rank: 1 })],
         }));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         await within(dialog).findByRole('option', { name: /^kimi-k2/ });
 
         const headings = Array.from(dialog.querySelectorAll('.popover-heading')).map((h) => h.textContent);
-        expect(headings).toEqual(['Fireworks AI', 'Local']);
-        const rows = within(dialog).getAllByRole('option').map((o) => o.textContent);
-        expect(rows).toEqual(['kimi-k2', 'Gemma-4-E4B-it-GGUF5.6 GB', 'Qwen3-8B-GGUF5.2 GB']);
+        expect(headings).toEqual(['Fireworks AI']);
+        const rows = within(dialog).getAllByRole('option').map((o) => o.dataset.row);
+        expect(rows).toEqual([
+            'mode:local', 'Gemma-4-E4B-it-GGUF', 'Qwen3-8B-GGUF',
+            'mode:cloud', 'fireworks.accounts/fireworks/models/kimi-k2',
+        ]);
         const subheading = dialog.querySelector('.popover-subheading')!;
         expect(subheading).toHaveTextContent('Available to download');
         expect(subheading.compareDocumentPosition(within(dialog).getByRole('option', { name: /^Qwen3/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -421,11 +437,10 @@ describe('ModelChip', () => {
                 ]
                 : [],
         }));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         await within(dialog).findByRole('option', { name: /^Aardvark/ });
-        const local = within(dialog).getByRole('group', { name: 'Local' });
-        const rows = within(local).getAllByRole('option');
+        const rows = within(dialog).getAllByRole('option').filter((o) => !o.dataset.row?.startsWith('mode:'));
         expect(rows.map((r) => r.querySelector('.popover-item-title')!.textContent)).toEqual([
             'Gemma-4-E4B-it-GGUF', 'Qwen3.6-35B-A3B-GGUF', 'Qwen3.5-4B-GGUF', 'Qwen3.5-2B-GGUF', 'Aardvark-21B-GGUF', 'Mine-GGUF',
         ]);
@@ -445,7 +460,7 @@ describe('ModelChip', () => {
         });
         const tall = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(900);
         onTestFinished(() => { box.mockRestore(); tall.mockRestore(); vi.unstubAllGlobals(); });
-        render(<div className="main-content" style={{ overflow: 'hidden' }}><ModelChip /></div>);
+        render(<div className="main-content" style={{ overflow: 'hidden' }}><RunModeChip /></div>);
         const dialog = await openPicker();
         await within(dialog).findByRole('option', { name: /^Qwen3/ });
         expect(dialog).toHaveClass('popover-below');
@@ -463,7 +478,7 @@ describe('ModelChip', () => {
             qwen = { downloaded: false, download_progress: { state: 'error', percent: 0, message: 'No space left on device' } as never };
             return { status: 'downloading', model: 'Qwen3-8B-GGUF' };
         });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -475,7 +490,7 @@ describe('ModelChip', () => {
 
     it('a download that never starts is given up, visibly', async () => {
         mockedApi.downloadModel.mockResolvedValue({ status: 'downloading', model: 'Qwen3-8B-GGUF' });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -499,7 +514,7 @@ describe('ModelChip', () => {
             return {} as never;
         });
         mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Phi-4-GGUF' });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -523,7 +538,7 @@ describe('ModelChip', () => {
                 : [],
         }));
         mockedApi.downloadModel.mockImplementation(async () => { listed = false; return {} as never; });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -548,7 +563,7 @@ describe('ModelChip', () => {
             return {} as never;
         });
         mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -572,7 +587,7 @@ describe('ModelChip', () => {
         }));
         mockedApi.downloadModel.mockImplementation(async () => { downloaded = true; return {} as never; });
         mockedApi.selectModel.mockRejectedValue(new Error('Not enough memory to load it'));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -585,7 +600,7 @@ describe('ModelChip', () => {
 
     it('does not switch to a model whose download failed', async () => {
         mockedApi.downloadModel.mockRejectedValue(new Error('Disk full'));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
@@ -598,7 +613,7 @@ describe('ModelChip', () => {
     it('shows why a switch failed', async () => {
         mockedApi.selectModel.mockRejectedValue(new Error('Model failed to load'));
         useModelStore.setState({ active: CLOUD_ACTIVE });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(await within(dialog).findByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ }));
         expect(await within(dialog).findByRole('alert')).toHaveTextContent('Model failed to load');
@@ -606,7 +621,7 @@ describe('ModelChip', () => {
 
     it('surfaces a model-server error instead of an empty list', async () => {
         mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL], active: LOCAL_ACTIVE, lemonade_error: 'Lemonade is not running' });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         expect(await within(dialog).findByRole('alert')).toHaveTextContent('Lemonade is not running');
     });
@@ -620,7 +635,7 @@ describe('ModelChip', () => {
         mockedApi.listProviders
             .mockResolvedValueOnce({ providers: [LOCAL, waiting, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null })
             .mockResolvedValue({ providers: [LOCAL, FIREWORKS, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         const status = await within(dialog).findByText(/asking GAIA for keychain access/);
@@ -641,7 +656,7 @@ describe('ModelChip', () => {
         };
         mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, locked, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
         mockedApi.retryKeyStore.mockResolvedValue({ retrying: true });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
 
         const retry = await within(dialog).findByRole('option', { name: /Try again/ });
@@ -656,17 +671,17 @@ describe('ModelChip', () => {
         await waitFor(() => expect(mockedApi.listProviders.mock.calls.length).toBe(reads + 1));
     });
 
-    it('opens model settings from the picker', async () => {
-        render(<ModelChip />);
+    it('opens Run mode settings from the menu', async () => {
+        render(<RunModeChip />);
         const dialog = await openPicker();
-        fireEvent.click(within(dialog).getByRole('button', { name: 'Providers and keys…' }));
-        expect(useChatStore.getState().settingsSection).toBe('model');
+        fireEvent.click(within(dialog).getByRole('button', { name: /^Customize…/ }));
+        expect(useChatStore.getState().settingsSection).toBe('mode');
     });
 
     it('"Add your key" opens settings on that provider', async () => {
         const noKey = { ...FIREWORKS, models_discovered: false };
         mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, noKey, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(await within(dialog).findByRole('option', { name: /^Add your key/ }));
         expect(useChatStore.getState().settingsSection).toBe('model');
@@ -674,7 +689,7 @@ describe('ModelChip', () => {
     });
 });
 
-describe('ModelChip keyboard', () => {
+describe('RunModeChip keyboard', () => {
     const KIMI = 'fireworks.accounts/fireworks/models/kimi-k2';
 
     beforeEach(() => {
@@ -691,58 +706,68 @@ describe('ModelChip keyboard', () => {
         }));
     });
     async function openWithKeyboard(user: ReturnType<typeof userEvent.setup>) {
-        screen.getByRole('button', { name: /Gemma|kimi|Model/ }).focus();
+        screen.getByRole('button', { name: /^(Local|Cloud)$/ }).focus();
         await user.keyboard('{Enter}');
-        const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
-        await within(dialog).findByRole('option', { name: /^kimi-k2/ });
-        return dialog;
-    }
-    async function openLocalWithKeyboard(user: ReturnType<typeof userEvent.setup>) {
-        screen.getByRole('button', { name: /Gemma|kimi|Model/ }).focus();
-        await user.keyboard('{Enter}');
-        const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
-        await within(dialog).findByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ });
+        const dialog = await screen.findByRole('dialog', { name: 'Choose where GAIA runs' });
+        await within(dialog).findByRole('option', { name: /^Local/ });
         return dialog;
     }
     const option = (dialog: HTMLElement, name: RegExp) => within(dialog).getByRole('option', { name });
 
-    it('opens on the current model, scrolled into view, as the only Tab stop', async () => {
+    it('opens on the mode in use as the only Tab stop, with the model lists closed', async () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         const user = userEvent.setup();
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openWithKeyboard(user);
 
-        const kimi = option(dialog, /^kimi-k2/);
-        await waitFor(() => expect(kimi).toHaveFocus());
+        const cloud = option(dialog, /^Cloud/);
+        await waitFor(() => expect(cloud).toHaveFocus());
         expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
-        expect(kimi).toHaveAttribute('aria-selected', 'true');
-        expect(within(dialog).getByRole('listbox', { name: 'Models' })).toBeInTheDocument();
-        const stops = within(dialog).getAllByRole('option').filter((o) => o.tabIndex === 0);
-        expect(stops).toEqual([kimi]);
+        expect(cloud).toHaveAttribute('aria-selected', 'true');
+        expect(within(dialog).getByRole('listbox', { name: 'Choose where GAIA runs' })).toBeInTheDocument();
+        const options = within(dialog).getAllByRole('option');
+        expect(options.map((o) => o.dataset.row)).toEqual(['mode:local', 'mode:cloud']);
+        expect(options.filter((o) => o.tabIndex === 0)).toEqual([cloud]);
+    });
+
+    it('opens a mode on ArrowRight and closes it on ArrowLeft', async () => {
+        const user = userEvent.setup();
+        render(<RunModeChip />);
+        const dialog = await openWithKeyboard(user);
+        const local = option(dialog, /^Local/);
+        await waitFor(() => expect(local).toHaveFocus());
+
+        await user.keyboard('{ArrowRight}');
+        expect(await within(dialog).findByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: 'Show Local models' })).toHaveAttribute('aria-expanded', 'true');
+        await user.keyboard('{ArrowLeft}');
+        expect(within(dialog).queryByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ })).not.toBeInTheDocument();
+        expect(local).toHaveFocus();
     });
 
     it('moves with the arrows, Home and End, skipping headings and busy rows', async () => {
-        useModelStore.setState({ active: CLOUD_ACTIVE });
         const user = userEvent.setup();
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openWithKeyboard(user);
-        await waitFor(() => expect(option(dialog, /^kimi-k2/)).toHaveFocus());
+        await waitFor(() => expect(option(dialog, /^Local/)).toHaveFocus());
 
-        // The provider in use (Fireworks) is listed first; the downloading row is skipped.
-        await user.keyboard('{ArrowUp}');
-        expect(option(dialog, /^kimi-k2/)).toHaveFocus();
+        // Local's models open under it; the downloading row is skipped.
+        await user.keyboard('{ArrowRight}{ArrowUp}');
+        expect(option(dialog, /^Local/)).toHaveFocus();
         await user.keyboard('{ArrowDown}');
         expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
         await user.keyboard('{ArrowDown}');
         expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
         await user.keyboard('{ArrowDown}');
-        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
+        expect(option(dialog, /^Cloud/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Cloud/)).toHaveFocus();
         await user.keyboard('{Home}');
-        expect(option(dialog, /^kimi-k2/)).toHaveFocus();
+        expect(option(dialog, /^Local/)).toHaveFocus();
         await user.keyboard('{End}');
-        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
-        expect(option(dialog, /^Qwen3-8B-GGUF/).tabIndex).toBe(0);
-        expect(option(dialog, /^kimi-k2/).tabIndex).toBe(-1);
+        expect(option(dialog, /^Cloud/)).toHaveFocus();
+        expect(option(dialog, /^Cloud/).tabIndex).toBe(0);
+        expect(option(dialog, /^Local/).tabIndex).toBe(-1);
     });
 
     it('makes the expanded Fireworks list keyboard-reachable and focuses its first new row', async () => {
@@ -753,11 +778,11 @@ describe('ModelChip keyboard', () => {
                 : [model('fireworks.recommended', { rank: 1 }), model('fireworks.auto')],
         }));
         const user = userEvent.setup();
-        render(<ModelChip />);
-        const dialog = await openLocalWithKeyboard(user);
-        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+        render(<RunModeChip />);
+        const dialog = await openWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^Local/)).toHaveFocus());
 
-        await user.keyboard('{ArrowDown}');
+        await user.keyboard('{ArrowDown}{ArrowRight}{ArrowDown}');
         expect(option(dialog, /^recommended$/)).toHaveFocus();
         await user.keyboard('{ArrowDown}');
         expect(option(dialog, /^Show all models$/)).toHaveFocus();
@@ -765,48 +790,50 @@ describe('ModelChip keyboard', () => {
         await waitFor(() => expect(option(dialog, /^auto$/)).toHaveFocus());
     });
 
-    it('picks the focused row on Enter', async () => {
+    it('picks the focused model on Enter', async () => {
         mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
         const user = userEvent.setup();
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openWithKeyboard(user);
-        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+        await waitFor(() => expect(option(dialog, /^Local/)).toHaveFocus());
 
-        await user.keyboard('{ArrowDown}{Enter}');
+        await user.keyboard('{ArrowRight}{ArrowDown}{ArrowDown}{Enter}');
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
     });
 
     it('closes on Escape and returns focus to the chip', async () => {
         const user = userEvent.setup();
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openWithKeyboard(user);
-        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+        await waitFor(() => expect(option(dialog, /^Local/)).toHaveFocus());
 
         await user.keyboard('{Escape}');
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Local/ })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Local' })).toHaveFocus();
     });
 
     it('leaves the list in one Tab, and Shift+Tab comes back to the same row', async () => {
         const user = userEvent.setup();
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openWithKeyboard(user);
-        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
-        await user.keyboard('{ArrowDown}');
+        await waitFor(() => expect(option(dialog, /^Local/)).toHaveFocus());
+        await user.keyboard('{ArrowRight}{ArrowDown}{ArrowDown}');
 
         await user.tab();
-        // The first stop after the list is the footer's first item.
-        expect(within(dialog).getByRole('button', { name: /Add a model from a link/ })).toHaveFocus();
+        // The first stop after the list is the footer's item.
+        expect(within(dialog).getByRole('button', { name: /^Customize…/ })).toHaveFocus();
         await user.tab({ shift: true });
         expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
     });
 
-    it("shows the focused row's details on ArrowRight and hides them on ArrowLeft", async () => {
+    it("shows the focused model's details on ArrowRight and hides them on ArrowLeft", async () => {
         const user = userEvent.setup();
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^Local/)).toHaveFocus());
+        await user.keyboard('{ArrowRight}{ArrowDown}');
         const gemma = option(dialog, /^Gemma-4-E4B-it-GGUF/);
-        await waitFor(() => expect(gemma).toHaveFocus());
+        expect(gemma).toHaveFocus();
 
         await user.keyboard('{ArrowRight}');
         const bubble = await screen.findByRole('tooltip');
@@ -819,7 +846,7 @@ describe('ModelChip keyboard', () => {
     });
 });
 
-describe('ModelChip in Arabic', () => {
+describe('RunModeChip in Arabic', () => {
     // The backend's own wording, which the UI translates by provider.
     const LOCAL_SERVER: ProviderInfo = { ...LOCAL, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' };
     const FIREWORKS_SERVER: ProviderInfo = { ...FIREWORKS, privacy_notice: 'Chat history is sent to Fireworks AI. Usage may incur charges.' };
@@ -830,23 +857,26 @@ describe('ModelChip in Arabic', () => {
     });
     afterEach(() => useChatStore.setState({ locale: 'en' }));
 
-    it('names the local group in Arabic and keeps the cloud brand name', async () => {
-        render(<ModelChip />);
-        fireEvent.click(screen.getByRole('button', { name: /Gemma/ }));
-        const dialog = await screen.findByRole('dialog', { name: /Choose a model/ });
-        const headings = await waitFor(() => {
-            const found = Array.from(dialog.querySelectorAll('.popover-heading')).map((h) => h.textContent);
-            expect(found).toHaveLength(2);
-            return found;
-        });
-        expect(headings).toEqual(expect.arrayContaining(['محلي', 'Fireworks AI']));
-        expect(headings).not.toContain('Local');
+    async function openArabic() {
+        fireEvent.click(screen.getByRole('button', { name: /محلي|سحابي/ }));
+        const dialog = await screen.findByRole('dialog', { name: /اختيار مكان تشغيل GAIA/ });
+        const cloud = await within(dialog).findByRole('button', { name: /عرض نماذج الوضع السحابي/ });
+        fireEvent.click(cloud);
+        return dialog;
+    }
+
+    it('names the modes in Arabic and keeps the cloud brand name', async () => {
+        render(<RunModeChip />);
+        const dialog = await openArabic();
+        expect(within(dialog).getByRole('option', { name: /محلي.*\(Local\)/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /سحابي.*\(Cloud\)/ })).toBeInTheDocument();
+        const headings = Array.from(dialog.querySelectorAll('.popover-heading')).map((h) => h.textContent);
+        expect(headings).toEqual(['Fireworks AI']);
     });
 
     it('warns in Arabic before a cloud model is used', async () => {
-        render(<ModelChip />);
-        fireEvent.click(screen.getByRole('button', { name: /Gemma/ }));
-        const dialog = await screen.findByRole('dialog', { name: /Choose a model/ });
+        render(<RunModeChip />);
+        const dialog = await openArabic();
         fireEvent.click(await rowFor(dialog, /kimi-k2/));
         const alert = await within(dialog).findByRole('alert');
         expect(alert).toHaveTextContent('يُرسَل سجل المحادثة إلى Fireworks AI');
@@ -856,15 +886,15 @@ describe('ModelChip in Arabic', () => {
     it('says a cloud chat leaves this PC in Arabic on hover', () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         useChatStore.setState({ sessions: [{ ...SESSION, inference_remote: true, inference_provider_name: 'Fireworks AI' }] });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /kimi-k2/ });
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: /سحابي/ });
         expect(chip.getAttribute('title')).toContain('ويغادر سجل المحادثة هذا الجهاز');
     });
 
     it('labels the not-downloaded icon in Arabic', () => {
         useModelStore.setState({ active: { ...LOCAL_ACTIVE, downloaded: false } });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /Gemma/ });
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: /محلي/ });
         expect(chip).toHaveClass('is-warning');
         expect(chip.querySelector('[aria-label*="غير منزَّل"]')).not.toBeNull();
         expect(chip.getAttribute('title')).toContain('لم يُنزَّل');
@@ -872,8 +902,8 @@ describe('ModelChip in Arabic', () => {
 
     it('localizes the queued next-model indicator and isolates the model name LTR in Arabic', () => {
         useModelStore.setState({ active: CLOUD_ACTIVE, queued: 'fireworks.glm-5p3-flash' });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /kimi-k2/ });
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: /سحابي/ });
         const next = chip.querySelector('.composer-chip-next');
         expect(next).not.toBeNull();
         expect(next?.textContent).not.toContain('→');
@@ -901,9 +931,9 @@ describe('ModelChip in Arabic', () => {
                     price: { input_per_million: 0.3, output_per_million: 1.2, cached_input_per_million: 0, source: 'test' },
                 })],
         }));
-        render(<ModelChip />);
-        fireEvent.click(screen.getByRole('button', { name: /Gemma/ }));
-        const dialog = await screen.findByRole('dialog', { name: /Choose a model/ });
+        render(<RunModeChip />);
+        const dialog = await openArabic();
+        fireEvent.click(await within(dialog).findByRole('button', { name: /عرض نماذج الوضع المحلي/ }));
 
         const cloudInfoBtn = await within(dialog).findByRole('button', { name: /حول.*kimi-k2/ });
         fireEvent.click(cloudInfoBtn);

@@ -91,6 +91,17 @@ func WriteFullAccess(enabled bool) (string, error) {
 
 // writeConfigKeys sets keys in config.json, leaving every other key as it was.
 func writeConfigKeys(keys map[string]any) (string, error) {
+	return editConfigDoc(func(doc map[string]any) error {
+		for k, v := range keys {
+			doc[k] = v
+		}
+		return nil
+	})
+}
+
+// editConfigDoc applies edit to config.json as one locked read-modify-write,
+// leaving every key edit does not touch as it was.
+func editConfigDoc(edit func(doc map[string]any) error) (string, error) {
 	path := configPath(realHostProbe())
 	if path == "" {
 		return "", fmt.Errorf("cannot locate ~/.gaia/config.json (no home directory)")
@@ -118,8 +129,12 @@ func writeConfigKeys(keys map[string]any) (string, error) {
 		return path, fmt.Errorf("cannot read %s: %w", path, err)
 	}
 
-	for k, v := range keys {
-		doc[k] = v
+	if doc == nil {
+		// A file holding just `null` decodes to no map at all.
+		doc = map[string]any{}
+	}
+	if err := edit(doc); err != nil {
+		return path, err
 	}
 	body, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

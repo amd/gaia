@@ -1406,9 +1406,11 @@ async def update_settings(
 
         from .providers import (
             PICKED_MODEL_SETTING,
+            ProviderError,
+            _active_view,
+            _save_pick,
             clear_restore_notice,
             model_after_clearing_custom,
-            provider_of,
             refuse_blocked_cloud_model,
         )
 
@@ -1421,15 +1423,14 @@ async def update_settings(
             logger.info("Custom model override cleared; running %s", value or "default")
             if value:
                 db.set_setting(PICKED_MODEL_SETTING, value)
-        # last_model is what the flagship sidecar warms and the next start restores.
+        # last_model is what the flagship sidecar warms and the next start restores;
+        # a model saved here also moves the run mode, as a pick under Model does.
         try:
-            GaiaConfig.save_keys(
-                {
-                    "last_model": value,
-                    "last_provider": provider_of(value) if value else None,
-                }
-            )
-        except GaiaConfigError as e:
+            if value:
+                _save_pick(value, _active_view(db)["model"])
+            else:
+                GaiaConfig.save_keys({"last_model": None, "last_provider": None})
+        except (GaiaConfigError, ProviderError) as e:
             raise HTTPException(
                 status_code=500,
                 detail=f"The custom model was not saved: {e} Then save it again.",

@@ -3557,6 +3557,19 @@
     "title": "MessageResponse",
     "type": "object"
   },
+  "ModeUpdate": {
+    "properties": {
+      "chat": {
+        "title": "Chat",
+        "type": "string"
+      }
+    },
+    "required": [
+      "chat"
+    ],
+    "title": "ModeUpdate",
+    "type": "object"
+  },
   "ModelServerBackendRequest": {
     "description": "Choose the llama.cpp backend for chat models: ``auto`` or a backend name.",
     "properties": {
@@ -4904,6 +4917,30 @@
       "after"
     ],
     "title": "SearchSnippet",
+    "type": "object"
+  },
+  "SelectModeRequest": {
+    "properties": {
+      "chat": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Chat"
+      },
+      "mode": {
+        "title": "Mode",
+        "type": "string"
+      }
+    },
+    "required": [
+      "mode"
+    ],
+    "title": "SelectModeRequest",
     "type": "object"
   },
   "SelectModelRequest": {

@@ -13,6 +13,9 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from gaia.config import IMAGE_MAX_STEPS, parse_image_size
 
+#: The model the flagship creates images with when none is saved.
+DEFAULT_IMAGE_MODEL = "SDXL-Turbo"
+
 #: Sizes offered beside a model's own default, kept only when under its cap.
 CANDIDATE_SIZES = (
     (512, 512),

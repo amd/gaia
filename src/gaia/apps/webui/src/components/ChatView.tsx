@@ -37,7 +37,7 @@ import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage, Sys
 import './ChatView.css';
 import { AgentChip } from './AgentChip';
 import { Composer } from './Composer';
-import { ModelChip } from './ModelChip';
+import { RunModeChip } from './RunModeChip';
 import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { readSkillsForResearch, researchNeedsSkills, ResearchChip, useResearchMode, withResearch } from './ResearchChip';
@@ -1933,7 +1933,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 <SpendMeter sessionId={sessionId} busy={busy} />
                                 <SessionFolderChip sessionId={sessionId} onOpen={() => revealPanelSection('environment')} />
                                 <AgentChip />
-                                <ModelChip />
+                                <RunModeChip />
                             </>
                         )}
                     />

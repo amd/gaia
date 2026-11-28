@@ -322,3 +322,28 @@
     gap: 6px;
     color: var(--accent-yellow);
 }
+
+/* The run-mode menu: Local and Cloud, each opening its own list of chat models. */
+.run-mode-group + .run-mode-group { margin-block-start: 2px; }
+.run-mode-name { display: inline-flex; align-items: center; gap: 6px; }
+.run-mode-state { color: var(--text-primary); }
+.run-mode-expand {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    inline-size: 28px;
+    block-size: 28px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.run-mode-expand:hover { background: var(--bg-hover); color: var(--text-primary); }
+:root[dir="rtl"] .run-mode-chevron { transform: scaleX(-1); }
+/* A mode's models sit under its name, set in from the edge the list starts on. */
+.run-mode-models { padding-inline-start: 14px; }
+.run-mode-chip-wrap { display: inline-flex; align-items: center; gap: 2px; }
+/* The customize button is a chip with only an icon. */
+.composer-chip.run-mode-customize { padding-inline: 6px; }

@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage, AgentPrograms, AgentDownload } from '../types';
+import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage, AgentPrograms, AgentDownload, RunModeId, RunModesView } from '../types';
 import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { PageElementWire } from '../../services/browser-pane/contract';
@@ -460,6 +460,26 @@ export async function restartLocalModel(confirm = false): Promise<{ status: stri
 
 export async function selectModel(model: string): Promise<ActiveModel> {
     return apiFetch('POST', '/providers/select', { model });
+}
+
+// -- Run modes: Local or Cloud ---------------------------------------------------
+
+export async function getRunModes(): Promise<RunModesView> {
+    return apiFetch('GET', '/run-modes');
+}
+
+/** Switch to *mode* on its own chat model; refused, with the reason, when that can't run. */
+export async function selectRunMode(mode: RunModeId): Promise<RunModesView> {
+    return apiFetch('POST', '/run-modes/select', { mode });
+}
+
+/** Set a mode's chat model; in the mode in use this switches the model now. */
+export async function updateRunMode(mode: RunModeId, chat: string): Promise<RunModesView> {
+    return apiFetch('PUT', `/run-modes/${mode}`, { chat });
+}
+
+export async function resetRunMode(mode: RunModeId): Promise<RunModesView> {
+    return apiFetch('POST', `/run-modes/${mode}/reset`);
 }
 
 /** Check a pasted Hugging Face link; nothing is saved or downloaded. */

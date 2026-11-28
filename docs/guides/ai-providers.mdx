@@ -208,8 +208,7 @@ grow the window the way it does for its own models. Removing it deletes its down
 if it was your saved model the next launch uses the default.
 
 - **Agent UI:** Settings › Agent & model › Local, open **Add a model from Hugging Face**.
-  The model chip's menu has **Add a model from a link…**. Added models have a
-  **Remove** button.
+  Added models have a **Remove** button.
 - **TUI:** in `/provider` › Local, press **Ctrl+A**, paste the link, and press
   **Enter** to check it, **Tab** for another quantization, **Enter** again to add.
   On an added model, **Ctrl+X** removes it.
@@ -418,8 +417,9 @@ remembered local model is checked against what Lemonade has downloaded and then
 used from the first message; Claude is not available on that route.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
-(`GAIA_CONFIG_DIR` relocates it). The Agent UI's model menu and **Settings >
-Advanced > Custom model ID** save there too. A one-shot `gaia-cli run gaia --query "…"` runs
+(`GAIA_CONFIG_DIR` relocates it), with `run_mode` and each mode's chat model.
+The TUI's `/mode`, the Agent UI's run-mode menu and **Settings >
+Advanced > Custom model ID** save there too (see [Choose where GAIA runs](/guides/agent-ui/control#choose-where-gaia-runs)). A one-shot `gaia-cli run gaia --query "…"` runs
 on it too. `--use-claude` overrides it for one launch;
 `gaia config set last_model ""` forgets it.
 

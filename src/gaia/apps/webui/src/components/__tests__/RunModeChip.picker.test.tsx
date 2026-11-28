@@ -8,11 +8,13 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ModelChip } from '../ModelChip';
+import { RunModeChip } from '../RunModeChip';
 import { useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { ActiveModel, ProviderInfo, ProviderModel, Session } from '../../types';
+
+import { openModeMenu, runModesView } from '../../test/runModes';
 
 vi.mock('../../services/api');
 
@@ -70,21 +72,19 @@ beforeEach(() => {
     mockedApi.listProviderModels.mockResolvedValue({ provider: 'local', models: MODELS });
     mockedApi.selectModel.mockImplementation(async (model) => ({ ...ACTIVE, model, is_default: false }));
     mockedApi.listSessions.mockResolvedValue({ sessions: [SESSION], total: 1 });
+    mockedApi.getRunModes.mockResolvedValue(runModesView('local'));
     mockedApi.downloadModel.mockResolvedValue({ status: 'downloading', model: QWEN });
 });
 
 async function openPicker() {
-    fireEvent.click(screen.getByRole('button', { name: /Gemma 4 E4B/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
-    await within(dialog).findByText('Qwen3 4B');
-    return dialog;
+    return openModeMenu();
 }
 
-describe('ModelChip during a turn', () => {
+describe('RunModeChip during a turn', () => {
     it('opens while a reply runs and says the pick is for the next message', async () => {
         useChatStore.setState({ isStreaming: true });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /Gemma 4 E4B/ });
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: 'Local' });
         expect(chip).toBeEnabled();
         const dialog = await openPicker();
         expect(within(dialog).getByRole('status')).toHaveTextContent('This reply keeps Gemma 4 E4B');
@@ -92,7 +92,7 @@ describe('ModelChip during a turn', () => {
 
     it('queues a pick, shows it on the chip, and applies it when the reply ends', async () => {
         useChatStore.setState({ isStreaming: true });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(within(dialog).getByRole('option', { name: /^Qwen3 4B/ }));
 
@@ -114,7 +114,7 @@ describe('ModelChip during a turn', () => {
     });
 
     it('switches at once when no reply is running', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.click(within(dialog).getByRole('option', { name: /^Qwen3 4B/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-4B-GGUF'));
@@ -122,9 +122,9 @@ describe('ModelChip during a turn', () => {
     });
 });
 
-describe('ModelChip model states', () => {
+describe('RunModeChip model states', () => {
     it('shows exactly one state per local model, each with a text label', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         const row = (name: RegExp) => within(dialog).getByRole('option', { name }).closest('.popover-row') as HTMLElement;
         expect(within(row(/^Gemma 4 E4B/)).getByRole('img', { name: 'Loaded' })).toBeInTheDocument();
@@ -133,7 +133,7 @@ describe('ModelChip model states', () => {
     });
 
     it('downloads with progress, then shows the new state', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         mockedApi.listProviderModels.mockResolvedValue({
             provider: 'local',
@@ -148,7 +148,7 @@ describe('ModelChip model states', () => {
     });
 
     it('shows device, size and measured speed', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         // Rows show only the name; the details wait behind each row's info icon.
         expect(within(dialog).queryByText(/tok\/s/)).not.toBeInTheDocument();
@@ -165,7 +165,7 @@ describe('ModelChip model states', () => {
     });
 
     it('closes the info bubble when the list scrolls', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         fireEvent.mouseEnter(within(dialog).getByRole('button', { name: 'About Gemma 4 E4B' }));
         expect(await screen.findByRole('tooltip')).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe('ModelChip model states', () => {
     });
 
     it('leaves out models this PC cannot run and says how many', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         expect(within(dialog).queryByText('Gemma 4 E2B')).not.toBeInTheDocument();
         expect(within(dialog).getByText(/1 model isn’t available on this PC/)).toBeInTheDocument();
@@ -188,7 +188,7 @@ describe('ModelChip model states', () => {
                 placement: { device: 'cpu', backend: 'cpu', label: 'CPU', source: 'reported', warning: 'Running on the CPU instead of the GPU, so replies will be slow.' },
             })],
         });
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         const info = within(dialog).getByRole('button', { name: 'About Qwen3 4B' });
         expect(info).toHaveClass('is-warning');
@@ -197,7 +197,7 @@ describe('ModelChip model states', () => {
     });
 
     it('offers Fireworks with Add your key, and hides an unregistered gateway', async () => {
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         expect(within(dialog).getByText('Fireworks AI')).toBeInTheDocument();
         fireEvent.click(within(dialog).getByRole('option', { name: /^Add your key/ }));
@@ -215,7 +215,7 @@ describe('ModelChip model states', () => {
         mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
             ? { provider: 'fireworks', models: [cloud('fireworks.auto'), cloud('fireworks.firerouter/auto'), cloud('fireworks.glm-5p3-flash')] }
             : { provider: 'local', models: MODELS }));
-        render(<ModelChip />);
+        render(<RunModeChip />);
         const dialog = await openPicker();
         await within(dialog).findByText('firerouter/auto');
         expect(within(dialog).getByText('auto')).toBeInTheDocument();
@@ -226,8 +226,8 @@ describe('ModelChip model states', () => {
     it('flags a default that is not downloaded on the chip', () => {
         useModelStore.setState({ active: { ...ACTIVE, model: QWEN, display_name: 'Qwen3.6 35B A3B', downloaded: false } });
         useChatStore.setState({ sessions: [{ ...SESSION, effective_model: QWEN }] });
-        render(<ModelChip />);
-        const chip = screen.getByRole('button', { name: /Qwen3.6 35B A3B/ });
-        expect(chip).toHaveAttribute('title', expect.stringMatching(/isn't downloaded yet/));
+        render(<RunModeChip />);
+        const chip = screen.getByRole('button', { name: /^Local/ });
+        expect(chip).toHaveAttribute('title', expect.stringMatching(/^Qwen3.6 35B A3B isn't downloaded yet/));
     });
 });

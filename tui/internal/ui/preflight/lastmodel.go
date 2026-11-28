@@ -71,7 +71,9 @@ func readLastModel(p hostProbe) (LastModel, error) {
 	return out, nil
 }
 
-// WriteLastModel saves provider and model together.
+// WriteLastModel saves provider and model together, and the run mode the model
+// puts GAIA in (see runmodes.go), so the Agent UI's Local/Cloud choice follows a
+// switch made here.
 func WriteLastModel(provider, model string) (string, error) {
 	if lemonade.IsHybridID(model) {
 		if err := lemonade.HybridLocalOnlyRefusal(); err != nil {
@@ -81,5 +83,13 @@ func WriteLastModel(provider, model string) (string, error) {
 		return "", fmt.Errorf("Local only is on, so %s isn't saved as your model. %s",
 			model, lemonade.LocalOnlyHint)
 	}
-	return writeConfigKeys(map[string]any{"last_provider": provider, "last_model": model})
+	return editConfigDoc(func(doc map[string]any) error {
+		// Before last_model changes: the mode being left keeps the model it ran.
+		if err := recordPick(doc, model); err != nil {
+			return err
+		}
+		doc["last_provider"] = provider
+		doc["last_model"] = model
+		return nil
+	})
 }

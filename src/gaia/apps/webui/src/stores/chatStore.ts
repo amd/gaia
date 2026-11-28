@@ -18,6 +18,7 @@ import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQu
 export type SettingsSection =
     | 'general'
     | 'setup'
+    | 'mode'
     | 'model'
     | 'images'
     | 'permissions'

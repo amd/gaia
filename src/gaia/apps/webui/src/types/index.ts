@@ -1085,6 +1085,45 @@ export interface ActiveModel {
     };
 }
 
+/** Where GAIA runs: everything on this PC, or chat in the cloud. */
+export type RunModeId = 'local' | 'cloud';
+
+/** A capability other than chat, and what serves it in a run mode. */
+export interface RunModeCapability {
+    id: 'vision' | 'speech_to_text' | 'read_aloud' | 'images' | 'documents';
+    place: 'local';
+    /** Null when the capability is off here; `unavailable` says why. */
+    model: string | null;
+    /** The model's name as a person reads it. */
+    display_name: string | null;
+    unavailable: 'platform' | 'npu' | 'chat_model' | null;
+    /** Why Cloud leaves it on this PC; null in Local. */
+    cloud_note: 'not_offered' | 'not_tested' | null;
+    /** The settings section that changes it, when one does. */
+    settings: 'voice' | 'images' | null;
+}
+
+export interface RunMode {
+    id: RunModeId;
+    active: boolean;
+    chat: {
+        model: string;
+        display_name: string;
+        provider: ProviderId;
+        provider_name: string | null;
+        default_model: string;
+        default_display_name: string;
+        /** The chat model differs from this mode's default. */
+        customized: boolean;
+    };
+    capabilities: RunModeCapability[];
+}
+
+export interface RunModesView {
+    active: RunModeId;
+    modes: RunMode[];
+}
+
 export interface ProvidersResponse {
     providers: ProviderInfo[];
     active: ActiveModel;
