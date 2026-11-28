@@ -266,7 +266,7 @@ TEST_F(ToolRegistryTest, ExecuteToolConfirmPolicy_Denied) {
     registry.registerTool(std::move(info));
 
     json result = registry.executeTool("guarded", json::object());
-    EXPECT_EQ(result["status"], "error");
+    EXPECT_EQ(result["status"], "denied");
     EXPECT_TRUE(result["error"].get<std::string>().find("denied") != std::string::npos);
 }
 

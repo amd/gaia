@@ -61,6 +61,7 @@ from gaia.ui.sidecar.native_tools import (
     as_flagship_call,
     native_prompt_summary,
     native_result_summary,
+    normalize_native_result,
 )
 from gaia.ui.sidecar.profiles import GAIA_PROFILE, RelayProfile
 from gaia.ui.sse_handler import (
@@ -485,7 +486,7 @@ def _dispatch_one(
             tool = called[1]
         else:
             tool, _ = as_flagship_call(sent_tool, None)
-        data = event.get("data")
+        data = normalize_native_result(sent_tool, event.get("data"))
         was_sensitive = getattr(handler, "relay_sensitive_memory", False)
         handler.relay_sensitive_memory = False
         if was_sensitive:

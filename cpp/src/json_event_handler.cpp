@@ -98,7 +98,7 @@ void JsonEventOutputHandler::prettyPrintJson(const json& data,
         json event = {
             {"type", "tool_result"},
             {"title", currentTool_},
-            {"success", status != "error"}
+            {"success", status != "error" && status != "denied"}
         };
 
         // Include command_output if the tool result has stdout/stderr.
