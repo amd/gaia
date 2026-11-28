@@ -339,6 +339,53 @@ TEST(NativeToolCallsTest, ALargeThinkingModelKeepsThinkingOn) {
     EXPECT_EQ(body["chat_template_kwargs"], (json{{"enable_thinking", true}}));
 }
 
+// A reasoning model sampled near greedy loops in its reasoning until the reply limit:
+// with cardSampling the request carries the model card's own sampling instead.
+TEST(NativeToolCallsTest, CardSamplingSendsTheModelsPublishedSampling) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), "Qwen3.6-35B-A3B-GGUF");
+    cfg.temperature = 0.2;
+    cfg.cardSampling = true;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    json body = json::parse(mock.receivedBodies().back());
+    EXPECT_DOUBLE_EQ(body["temperature"].get<double>(), 0.6);
+    EXPECT_DOUBLE_EQ(body["top_p"].get<double>(), 0.95);
+    EXPECT_EQ(body["top_k"], 20);
+    EXPECT_DOUBLE_EQ(body["min_p"].get<double>(), 0.0);
+    EXPECT_EQ(body["chat_template_kwargs"], (json{{"enable_thinking", true}}));
+}
+
+TEST(NativeToolCallsTest, WithoutCardSamplingTheTemperatureIsSentAlone) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), "Qwen3.6-35B-A3B-GGUF");
+    cfg.temperature = 0.2;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    json body = json::parse(mock.receivedBodies().back());
+    EXPECT_DOUBLE_EQ(body["temperature"].get<double>(), 0.2);
+    EXPECT_FALSE(body.contains("top_k"));
+}
+
+TEST(NativeToolCallsTest, KnownSamplingFollowsTheModeTheModelRunsIn) {
+    const auto qwen36 = knownSampling("user.qwen3.6-35b-a3b-gguf");
+    ASSERT_TRUE(qwen36.has_value());
+    EXPECT_DOUBLE_EQ((*qwen36)["temperature"].get<double>(), 0.6) << "thinking profile";
+    const auto small = knownSampling("Qwen3.5-2B-GGUF");
+    ASSERT_TRUE(small.has_value());
+    EXPECT_DOUBLE_EQ((*small)["temperature"].get<double>(), 0.7) << "thinking is off: the non-thinking profile";
+    EXPECT_FALSE(knownSampling("some-unknown-model").has_value());
+}
+
 TEST(NativeToolCallsTest, SwitchingModelMidSessionSwitchesTheThinkingField) {
     bench::MockLlmServer mock;
     mock.pushResponse(kPlainAnswer);

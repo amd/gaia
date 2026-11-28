@@ -97,3 +97,39 @@ def test_gaias_default_models_take_native_tool_calls():
     table = dict(_cpp_table())
     for model_id in DEFAULT_MODEL_LADDER:
         assert table[model_id] is True, model_id
+
+
+SAMPLING_ROW = re.compile(
+    r'\{"(?P<id>[^"]+)",\s*(?P<default>true|false),\s*(?P<thinking>nullptr|R"\((?:.*?)\)"),\s*'
+    r'(?P<non>nullptr|R"\((?:.*?)\)")\}'
+)
+
+
+def _cpp_sampling() -> dict:
+    import json
+
+    text = REGISTRY.read_text(encoding="utf-8")
+    body = text[text.index("kSampling = {") : text.index("for (const auto& row : kSampling)")]
+
+    def profile(literal: str):
+        return None if literal == "nullptr" else json.loads(literal[3:-2])
+
+    return {
+        m["id"]: (m["default"] == "true", profile(m["thinking"]), profile(m["non"]))
+        for m in SAMPLING_ROW.finditer(body)
+    }
+
+
+def test_the_cpp_sampling_table_matches_python():
+    # gaiacpp sent temperature 0.2 alone, and Qwen3.6 reasoned until the reply limit.
+    from gaia.llm.lemonade_client import MODEL_SAMPLING_PROFILES
+
+    python = {
+        model_id: (card.thinks_by_default, card.thinking, card.non_thinking)
+        for model_id, card in MODEL_SAMPLING_PROFILES.items()
+    }
+    assert python, "MODEL_SAMPLING_PROFILES is empty; the C++ table has nothing to mirror"
+    assert _cpp_sampling() == python, (
+        "kSampling in cpp/src/model_registry.cpp and MODEL_SAMPLING_PROFILES "
+        "differ; mirror the change in the same commit"
+    )

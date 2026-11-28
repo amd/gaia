@@ -737,6 +737,11 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     requestBody["model"] = cfg.modelId;
     requestBody["max_tokens"] = cfg.replyTokenLimit();
     requestBody["temperature"] = cfg.temperature;
+    if (cfg.cardSampling) {
+        if (const auto sampling = knownSampling(cfg.modelId)) {
+            for (const auto& [key, value] : sampling->items()) requestBody[key] = value;
+        }
+    }
     if (const auto thinking = knownThinking(cfg.modelId)) {
         requestBody["chat_template_kwargs"] = {{"enable_thinking", *thinking}};
     }
