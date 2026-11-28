@@ -32,6 +32,7 @@ import {
     Captions,
     Image as ImageIcon,
     Ban,
+    Calculator,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -126,6 +127,14 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     capture_skill: Sparkles,
     remove_skill: Sparkles,
     skill_status: Sparkles,
+    // Cards from the bundled guides and calculators skills
+    show_recipe: BookOpen,
+    show_workout: ListChecks,
+    show_how_to: BookOpen,
+    show_checklist: ListChecks,
+    show_itinerary: BookOpen,
+    show_tip_calculator: Calculator,
+    show_loan_calculator: Calculator,
 };
 
 // A tool added here without its labels would show a raw key; say so at load instead.
@@ -166,15 +175,17 @@ function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
         // Saved turns from before the server named the connector.
         return { label: ref('tool.mcp.done'), activeLabel: ref('tool.mcp.active'), icon: Globe };
     }
-    if (isMessageKey(`tool.${toolName}.done`) && isMessageKey(`tool.${toolName}.active`)) {
+    // A skill's tool is "skill/tool"; its labels and fallback name the tool alone.
+    const bare = toolName.slice(toolName.lastIndexOf('/') + 1);
+    if (isMessageKey(`tool.${bare}.done`) && isMessageKey(`tool.${bare}.active`)) {
         return {
-            label: ref(`tool.${toolName}.done` as MessageKey),
-            activeLabel: ref(`tool.${toolName}.active` as MessageKey),
-            icon: Object.prototype.hasOwnProperty.call(TOOL_ICON, toolName) ? TOOL_ICON[toolName] : Wrench,
+            label: ref(`tool.${bare}.done` as MessageKey),
+            activeLabel: ref(`tool.${bare}.active` as MessageKey),
+            icon: Object.prototype.hasOwnProperty.call(TOOL_ICON, bare) ? TOOL_ICON[bare] : Wrench,
         };
     }
     // A tool with no entry still says what it was, not a bare "Used tool".
-    const words = toolName.replace(/[_-]+/g, ' ').trim();
+    const words = bare.replace(/[_-]+/g, ' ').trim();
     return words ? named(words, Wrench) : DEFAULT_TOOL_META;
 }
 
