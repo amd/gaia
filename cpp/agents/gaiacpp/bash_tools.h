@@ -32,7 +32,8 @@ public:
     /// bash_execute: Execute a shell command.
     /// Args: {"command": string, "timeout_ms"?: int (default 30000)}
     /// Policy: CONFIRM (user must approve each command)
-    /// Returns: {"stdout": string, "stderr": string, "exit_code": int, "timed_out": bool}
+    /// Returns: {"stdout": string, "stderr": string, "exit_code": int, "timed_out": bool,
+    ///           "expected_exit"?: string}
     /// On error: {"error": string}
     static ToolInfo bashExecute();
 
@@ -53,6 +54,10 @@ public:
     /// The shell commands run in: on Windows Git Bash / MSYS2 by quoted full
     /// path (never the WSL launcher), "" for cmd.exe; elsewhere bash, else sh.
     static std::string detectShell();
+
+    /// Why `exitCode` from `command` is the program's answer (grep's 1 is "no match"),
+    /// or "" when it is a failure. Judges only a single command or pipeline's last stage.
+    static std::string answerExit(const std::string& command, int exitCode);
 
     /// env_inspect: Inspect the shell environment.
     /// Args: {} (no args)

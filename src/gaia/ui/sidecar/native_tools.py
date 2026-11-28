@@ -45,6 +45,11 @@ NATIVE_TOOL_LABELS: Dict[str, str] = {
     "read_mcp_resource": "Reading a connector's resource",
 }
 
+#: Tools both agents name the same way, whose gaiacpp argument names differ.
+_SAME_NAME_ARG_RENAMES: Dict[str, Dict[str, str]] = {
+    "index_document": {"path": "file_path"},
+}
+
 #: Every gaiacpp-only tool name this module words, for the drift test.
 NATIVE_TOOL_NAMES = frozenset(_TWINS) | frozenset(NATIVE_TOOL_LABELS) | {"file_search"}
 
@@ -55,7 +60,13 @@ def as_flagship_call(tool: str, args: Any) -> Tuple[str, Any]:
         return _file_search(args)
     twin = _TWINS.get(tool)
     if twin is None:
-        return tool, args
+        renames = _SAME_NAME_ARG_RENAMES.get(tool)
+        if not renames or not isinstance(args, dict):
+            return tool, args
+        return tool, {
+            renames[key] if key in renames and renames[key] not in args else key: value
+            for key, value in args.items()
+        }
     # The Python agent's own search_code is a pattern search, not the code index.
     if tool == "search_code" and isinstance(args, dict) and "pattern" in args:
         return tool, args
@@ -90,10 +101,23 @@ def _count(n: int, one: str, many: str) -> str:
 def native_result_summary(tool: str, data: Any) -> Optional[str]:
     """A gaiacpp tool's result in plain words, or None to summarize it generically.
 
-    *tool* is gaiacpp's own name. Failures return None: their ``error`` text is
-    already a sentence and the generic path shows it.
+    *tool* is gaiacpp's own name. Failures generally return None so the generic
+    path shows them; ``web_fetch`` returns its plain error text directly so the
+    UI does not prepend ``error: `` or clip it mid-word.
     """
-    if not isinstance(data, dict) or data.get("error"):
+    if not isinstance(data, dict):
+        return None
+    if tool == "web_fetch" and data.get("error"):
+        err = str(data["error"]).strip()
+        http_status = data.get("http_status")
+        if (
+            isinstance(http_status, int)
+            and http_status > 0
+            and str(http_status) not in err
+        ):
+            return f"HTTP {http_status}: {err}"
+        return err
+    if data.get("error"):
         return None
     path = data.get("path")
     name = str(path).replace("\\", "/").rsplit("/", 1)[-1] if path else "the file"
@@ -125,6 +149,8 @@ def _shell_summary(data: Dict[str, Any]) -> str:
         return "Command timed out"
     code = data.get("exit_code")
     stdout = str(data.get("stdout") or "").strip()
+    if code not in (0, None) and isinstance(data.get("expected_exit"), str):
+        return f"{data['expected_exit']} (exit {code})"
     if code not in (0, None):
         detail = (str(data.get("stderr") or "").strip() or stdout)[:150]
         return f"Command failed (exit {code})" + (f": {detail}" if detail else "")

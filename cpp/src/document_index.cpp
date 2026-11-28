@@ -468,7 +468,13 @@ std::vector<std::string> DocumentIndex::tokens(const std::string& text) const {
     return out;
 }
 
-void DocumentIndex::removeFile(const std::string& file) {
+void DocumentIndex::removeFile(const std::string& path) {
+    const std::string file = fs::absolute(path).lexically_normal().string();
+    std::lock_guard<std::mutex> lock(mutex_);
+    removeFileLocked(file);
+}
+
+void DocumentIndex::removeFileLocked(const std::string& file) {
     std::vector<DocumentChunk> chunks;
     std::vector<std::map<std::string, int>> tf;
     std::vector<size_t> lens;
@@ -540,7 +546,7 @@ size_t DocumentIndex::indexFile(const std::string& path) {
                 " is loaded and is the one this index was built with.");
         }
     }
-    removeFile(file);
+    removeFileLocked(file);
     for (size_t j = 0; j < fresh.size(); ++j) {
         std::map<std::string, int> tf;
         const auto toks = tokens(fresh[j].text);

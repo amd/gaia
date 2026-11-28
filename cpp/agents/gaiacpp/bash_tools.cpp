@@ -4,6 +4,7 @@
 #include "bash_tools.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <sstream>
 #include <stdexcept>
@@ -109,7 +110,114 @@ json BashTools::doBashExecute(ShellSession& session, const json& args) {
         {"cwd", session.cwd()},
     };
     if (result.cancelled) out["cancelled"] = true;
+    if (!result.timedOut && !result.cancelled) {
+        const std::string answer = answerExit(command, result.exitCode);
+        if (!answer.empty()) out["expected_exit"] = answer;
+    }
     return out;
+}
+
+namespace {
+// The words of the last pipeline stage, or {} when the line holds a list, a subshell or a substitution.
+std::vector<std::string> lastStageWords(const std::string& command) {
+    std::vector<std::string> words;
+    std::string word;
+    bool inWord = false;
+    char quote = 0;
+    for (size_t i = 0; i < command.size(); ++i) {
+        const char c = command[i];
+        if (quote) {
+            if (c == quote) {
+                quote = 0;
+            } else if (c == '\\' && quote == '"' && i + 1 < command.size()) {
+                word += command[++i];
+            } else {
+                word += c;
+            }
+            continue;
+        }
+        if (c == '\'' || c == '"') {
+            quote = c;
+            inWord = true;
+        } else if (c == '\\' && i + 1 < command.size()) {
+            word += command[++i];
+            inWord = true;
+        } else if (c == '&' && i > 0 && (command[i - 1] == '>' || command[i - 1] == '<')) {
+            word += c;  // 2>&1 duplicates a stream; it does not end the command
+        } else if (std::strchr(";&\n\r`(){}", c) || (c == '$' && i + 1 < command.size() && command[i + 1] == '(')) {
+            return {};
+        } else if (c == '|') {
+            if (i + 1 < command.size() && command[i + 1] == '|') return {};
+            words.clear();
+            word.clear();
+            inWord = false;
+        } else if (c == ' ' || c == '\t') {
+            if (inWord) words.push_back(word);
+            word.clear();
+            inWord = false;
+        } else {
+            word += c;
+            inWord = true;
+        }
+    }
+    if (quote) return {};
+    if (inWord) words.push_back(word);
+    return words;
+}
+
+// "C:\Git\usr\bin\grep.exe" as "grep".
+std::string programName(std::string word) {
+    const size_t slash = word.find_last_of("/\\");
+    if (slash != std::string::npos) word = word.substr(slash + 1);
+    std::transform(word.begin(), word.end(), word.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (word.size() > 4 && word.compare(word.size() - 4, 4, ".exe") == 0) word.resize(word.size() - 4);
+    return word;
+}
+}  // namespace
+
+std::string BashTools::answerExit(const std::string& command, int exitCode) {
+    if (exitCode != 1) return "";
+    const std::vector<std::string> words = lastStageWords(command);
+    if (words.empty()) return "";
+    const std::string name = programName(words[0]);
+    // Each program's own documented exit 1 (grep(1), diff(1), findstr /?, fc /?); 2 and up still fail.
+    for (const char* searcher : {"grep", "egrep", "fgrep", "rg", "findstr"}) {
+        if (name == searcher) return name + " exits 1 when nothing matches";
+    }
+    for (const char* comparer : {"diff", "cmp", "fc"}) {
+        if (name == comparer) return name + " exits 1 when the inputs differ";
+    }
+    std::vector<std::string> operands;
+    for (size_t i = 1; i < words.size(); ++i) {
+        if (!words[i].empty() && words[i][0] != '-' && words[i][0] != '/') operands.push_back(words[i]);
+    }
+    const auto joined = [&operands] {
+        std::string out;
+        for (const auto& o : operands) out += (out.empty() ? "" : ", ") + o;
+        return out;
+    };
+    if ((name == "which" || name == "where") && !operands.empty()) {
+        return "not found: " + joined() + " (" + name + " exits 1 for that)";
+    }
+    if (name == "command" && words.size() >= 3 && (words[1] == "-v" || words[1] == "-V")) {
+        return "not found: " + words[2] + " (command -v exits 1 for that)";
+    }
+    static const std::vector<std::string> fileTests = {"-e", "-f", "-d", "-s", "-r", "-w", "-x", "-L", "-h"};
+    const bool unary = (name == "test" && words.size() == 3) || (name == "[" && words.size() == 4 && words[3] == "]");
+    if (unary && std::find(fileTests.begin(), fileTests.end(), words[1]) != fileTests.end()) {
+        return "test " + words[1] + " " + words[2] + " is false (exit 1 is its answer)";
+    }
+    if (name == "git" && words.size() >= 2) {
+        if (words[1] == "grep") return "git grep exits 1 when nothing matches";
+        if (words[1] == "diff") {
+            for (size_t i = 2; i < words.size(); ++i) {
+                if (words[i] == "--exit-code" || words[i] == "--quiet" || words[i] == "--no-index") {
+                    return "git diff --exit-code exits 1 when there are differences";
+                }
+            }
+        }
+    }
+    return "";
 }
 
 // ---------------------------------------------------------------------------
