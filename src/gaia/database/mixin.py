@@ -127,6 +127,13 @@ class DatabaseMixin:
             self._db = None
             self._in_tx = False
 
+    def close(self) -> None:
+        """Close the database, then any ``close()`` further along the class order."""
+        self.close_db()
+        parent = getattr(super(), "close", None)
+        if callable(parent):
+            parent()
+
     @property
     def db_ready(self) -> bool:
         """True if database is initialized."""

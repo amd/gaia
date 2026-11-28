@@ -16,6 +16,7 @@ import pytest
 import requests
 from gaiapy import stdio
 
+from gaia.agents.base import model_switch  # noqa: E402
 from gaia.daemon.instance import DaemonInstance
 from gaia.llm import lemonade_client as lc
 from gaia.llm import lemonade_service
@@ -117,9 +118,11 @@ class TestTheSwitchWaits:
         self, monkeypatch, quiet_header
     ):
         listed, built = [], []
-        monkeypatch.setattr(stdio, "_lemonade_models", _unreachable_until_moved(listed))
         monkeypatch.setattr(
-            stdio, "create_client", lambda **kw: built.append(kw) or object()
+            model_switch, "_lemonade_models", _unreachable_until_moved(listed)
+        )
+        monkeypatch.setattr(
+            model_switch, "create_client", lambda **kw: built.append(kw) or object()
         )
         live = _WaitingClient(outcome=True)
         agent = _Agent(live)
@@ -142,7 +145,9 @@ class TestTheSwitchWaits:
         self, monkeypatch, quiet_header
     ):
         listed = []
-        monkeypatch.setattr(stdio, "_lemonade_models", _unreachable_until_moved(listed))
+        monkeypatch.setattr(
+            model_switch, "_lemonade_models", _unreachable_until_moved(listed)
+        )
         live = _WaitingClient(
             outcome=LemonadeClientError(
                 f"GAIA's Lemonade Server at {OLD_URL} stopped answering and was not "
@@ -173,8 +178,8 @@ class TestTheSwitchWaits:
                 raise RuntimeError(f"Lemonade Server is not reachable at {base_url}.")
             return {CLOUD_MODEL: {"id": CLOUD_MODEL}}
 
-        monkeypatch.setattr(stdio, "_lemonade_models", _models)
-        monkeypatch.setattr(stdio, "create_client", lambda **kw: object())
+        monkeypatch.setattr(model_switch, "_lemonade_models", _models)
+        monkeypatch.setattr(model_switch, "create_client", lambda **kw: object())
         live = _WaitingClient(outcome="back")
         agent = _Agent(live)
 
@@ -190,7 +195,9 @@ class TestTheSwitchWaits:
     ):
         """The user's or a remote server: nothing to wait for, no second list."""
         listed = []
-        monkeypatch.setattr(stdio, "_lemonade_models", _unreachable_until_moved(listed))
+        monkeypatch.setattr(
+            model_switch, "_lemonade_models", _unreachable_until_moved(listed)
+        )
         live = _WaitingClient(outcome=False)
 
         events = _run(_Agent(live), CLOUD_MODEL)
@@ -212,8 +219,11 @@ class TestTheSwitchWaits:
 
         listed = []
         monkeypatch.setattr(stdio, "LemonadeClient", _Fresh)
-        monkeypatch.setattr(stdio, "_lemonade_models", _unreachable_until_moved(listed))
-        monkeypatch.setattr(stdio, "create_client", lambda **kw: object())
+        monkeypatch.setattr(model_switch, "LemonadeClient", _Fresh)
+        monkeypatch.setattr(
+            model_switch, "_lemonade_models", _unreachable_until_moved(listed)
+        )
+        monkeypatch.setattr(model_switch, "create_client", lambda **kw: object())
         agent = _Agent(llm_client=object())  # a Claude client: no Lemonade URL
 
         events = _run(agent, CLOUD_MODEL)
@@ -318,7 +328,7 @@ class TestTheRegression:
         )
         built = []
         monkeypatch.setattr(
-            stdio, "create_client", lambda **kw: built.append(kw) or object()
+            model_switch, "create_client", lambda **kw: built.append(kw) or object()
         )
         live = lc.LemonadeClient(base_url=lc.resolve_lemonade_base_url())
         assert live.follows_gaia_lemonade

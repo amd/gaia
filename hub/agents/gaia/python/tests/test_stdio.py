@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from gaiapy import stdio
 
+from gaia.agents.base import model_switch  # noqa: E402
 from gaia.agents.base.history import HIDDEN_TURNS_NOTE
 from gaia.llm.lemonade_launcher import StartHint
 
@@ -973,7 +974,7 @@ def test_model_no_arg_lists_switchable_models(monkeypatch):
     from gaiapy import stdio as stdio_mod
 
     monkeypatch.setattr(
-        stdio_mod, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
+        model_switch, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
     )
     agent = _ModelSwitchAgent()
 
@@ -991,7 +992,7 @@ def test_model_switch_to_claude_succeeds(monkeypatch, stub_lemonade):
     from gaiapy import stdio as stdio_mod
 
     sentinel_client = object()
-    monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: sentinel_client)
+    monkeypatch.setattr(model_switch, "create_client", lambda **kwargs: sentinel_client)
     agent = _ModelSwitchAgent()
 
     out = _model_run(agent, "/model claude-opus-5")
@@ -1024,11 +1025,11 @@ def test_model_switch_to_local_succeeds(monkeypatch, stub_lemonade):
 
     sentinel_client = object()
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "_lemonade_models",
         lambda base_url: _listed("Qwen3-4B-Instruct-2507-GGUF"),
     )
-    monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: sentinel_client)
+    monkeypatch.setattr(model_switch, "create_client", lambda **kwargs: sentinel_client)
     agent = _ModelSwitchAgent()
     agent.chat.config.use_claude = True  # start on Claude, switch back to local
 
@@ -1055,12 +1056,12 @@ def test_model_switch_to_a_custom_model_uses_the_name_lemonade_lists(
 
     built = []
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "_lemonade_models",
         lambda base_url: _listed("Gemma-4-E4B-it-GGUF", "Qwen3-0.6B-Q4_K_M-GGUF"),
     )
     monkeypatch.setattr(
-        stdio_mod, "create_client", lambda **kwargs: built.append(kwargs) or object()
+        model_switch, "create_client", lambda **kwargs: built.append(kwargs) or object()
     )
     agent = _ModelSwitchAgent()
 
@@ -1076,7 +1077,7 @@ def test_model_switch_unknown_claude_id_is_refused_not_accepted(monkeypatch):
 
     called = []
     monkeypatch.setattr(
-        stdio_mod, "create_client", lambda **kwargs: called.append(kwargs)
+        model_switch, "create_client", lambda **kwargs: called.append(kwargs)
     )
     agent = _ModelSwitchAgent()
     previous_client = agent.chat.llm_client
@@ -1101,7 +1102,7 @@ def test_model_switch_unknown_local_id_is_refused_not_accepted(monkeypatch):
     from gaiapy import stdio as stdio_mod
 
     monkeypatch.setattr(
-        stdio_mod, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
+        model_switch, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
     )
     agent = _ModelSwitchAgent()
     previous_client = agent.chat.llm_client
@@ -1124,14 +1125,16 @@ def test_missing_cloud_model_is_listed_again_after_its_key_is_replayed(
 
     model = "amd.gpt-4.1"
     listings = [_listed("Gemma-4-E4B-it-GGUF"), _listed("Gemma-4-E4B-it-GGUF", model)]
-    monkeypatch.setattr(stdio_mod, "_lemonade_models", lambda base_url: listings.pop(0))
+    monkeypatch.setattr(
+        model_switch, "_lemonade_models", lambda base_url: listings.pop(0)
+    )
     probed = []
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "probe_model_present",
         lambda base, model_id: probed.append(model_id) or True,
     )
-    monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: object())
+    monkeypatch.setattr(model_switch, "create_client", lambda **kwargs: object())
     agent = _ModelSwitchAgent()
 
     events = _events(_model_run(agent, f"/model {model}"))
@@ -1145,11 +1148,11 @@ def test_cloud_model_still_missing_after_replay_is_refused(monkeypatch):
     from gaiapy import stdio as stdio_mod
 
     monkeypatch.setattr(
-        stdio_mod, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
+        model_switch, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
     )
     probed = []
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "probe_model_present",
         lambda base, model_id: probed.append(model_id) or False,
     )
@@ -1168,10 +1171,10 @@ def test_missing_local_model_does_not_probe_for_a_key(monkeypatch):
     from gaiapy import stdio as stdio_mod
 
     monkeypatch.setattr(
-        stdio_mod, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
+        model_switch, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
     )
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "probe_model_present",
         lambda base, model_id: pytest.fail("a local model has no key to replay"),
     )
@@ -1190,7 +1193,7 @@ def test_model_switch_missing_credential_leaves_previous_model_running(monkeypat
             "ANTHROPIC_API_KEY not found in environment.\n\nRun `claude setup-token`..."
         )
 
-    monkeypatch.setattr(stdio_mod, "create_client", _boom)
+    monkeypatch.setattr(model_switch, "create_client", _boom)
     agent = _ModelSwitchAgent()
     previous_client = agent.chat.llm_client
 
@@ -1218,7 +1221,7 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
             "GAIA starts it automatically — run `gaia daemon start`."
         )
 
-    monkeypatch.setattr(stdio_mod, "_lemonade_models", _unreachable)
+    monkeypatch.setattr(model_switch, "_lemonade_models", _unreachable)
     agent = _ModelSwitchAgent()
     previous_client = agent.chat.llm_client
 
@@ -1255,12 +1258,12 @@ def test_model_switch_after_a_lemonade_restart_uses_the_new_port(
 
     listed, built = [], []
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "_lemonade_models",
         lambda base_url: listed.append(base_url) or _listed("amd.DeepSeek-V4.1-Flash"),
     )
     monkeypatch.setattr(
-        stdio_mod, "create_client", lambda **kwargs: built.append(kwargs) or object()
+        model_switch, "create_client", lambda **kwargs: built.append(kwargs) or object()
     )
     agent = _ModelSwitchAgent()
     agent.chat.llm_client = _FollowingClient()
@@ -1277,7 +1280,7 @@ def test_model_list_after_a_lemonade_restart_reads_the_new_port(monkeypatch):
 
     listed = []
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "_lemonade_models",
         lambda base_url: listed.append(base_url) or ["Gemma-4-E4B-it-GGUF"],
     )
@@ -1295,7 +1298,7 @@ def test_model_switch_when_lemonade_cannot_be_restarted_keeps_the_model(monkeypa
     from gaia.llm.lemonade_client import LemonadeClientError
 
     monkeypatch.setattr(
-        stdio_mod, "_lemonade_models", lambda base_url: pytest.fail("not reached")
+        model_switch, "_lemonade_models", lambda base_url: pytest.fail("not reached")
     )
     agent = _ModelSwitchAgent()
     previous_client = agent.chat.llm_client = _FollowingClient(
@@ -1317,7 +1320,7 @@ def test_model_switch_survives_alongside_history_and_skills(monkeypatch, stub_le
     flagship agent stateful (see test_the_agent_survives_between_turns)."""
     from gaiapy import stdio as stdio_mod
 
-    monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: object())
+    monkeypatch.setattr(model_switch, "create_client", lambda **kwargs: object())
     agent = _ModelSwitchAgent()
     agent.conversation_history = [{"role": "user", "content": "hello"}]
     agent.loaded_skills["github-triage"] = object()
@@ -1482,11 +1485,11 @@ def test_the_rollback_restores_an_absent_model_id(monkeypatch, stub_lemonade):
     from gaiapy import stdio as stdio_mod
 
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "_lemonade_models",
         lambda base_url: _listed("Qwen3-4B-Instruct-2507-GGUF"),
     )
-    monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: object())
+    monkeypatch.setattr(model_switch, "create_client", lambda **kwargs: object())
     agent = _ModelSwitchAgent()
     agent.config.model_id = "Gemma-4-E4B-it-GGUF"
 
@@ -1537,6 +1540,7 @@ def stub_lemonade(monkeypatch):
     _FakeLemonadeClient.error = None
     _FakeLemonadeClient.catalog = {"data": []}
     monkeypatch.setattr(stdio, "LemonadeClient", _FakeLemonadeClient)
+    monkeypatch.setattr(model_switch, "LemonadeClient", _FakeLemonadeClient)
     return _FakeLemonadeClient
 
 
@@ -1562,6 +1566,7 @@ def test_lemonade_models_excludes_embedding_and_image_and_not_downloaded(monkeyp
     }
     fake.error = None
     monkeypatch.setattr(stdio_mod, "LemonadeClient", fake)
+    monkeypatch.setattr(model_switch, "LemonadeClient", fake)
 
     models = stdio_mod._lemonade_models("http://127.0.0.1:13305/api/v1")
 
@@ -1573,8 +1578,9 @@ def test_lemonade_models_unreachable_names_url_and_fix(monkeypatch):
     from gaiapy import stdio as stdio_mod
 
     fake = _FakeLemonadeClient
-    fake.error = stdio_mod.LemonadeClientError("connection refused")
+    fake.error = model_switch.LemonadeClientError("connection refused")
     monkeypatch.setattr(stdio_mod, "LemonadeClient", fake)
+    monkeypatch.setattr(model_switch, "LemonadeClient", fake)
     monkeypatch.setattr(
         "gaia.llm.lemonade_launcher.describe_start_hint",
         lambda *a, **k: StartHint(instruction="Run: lemond --port 13305"),
@@ -1603,7 +1609,7 @@ def test_cloud_model_switch_preserves_session_and_reports_remote(
         "data": [{"id": model, "recipe": "cloud", "downloaded": False}]
     }
     client = object()
-    monkeypatch.setattr(stdio, "create_client", lambda **kwargs: client)
+    monkeypatch.setattr(model_switch, "create_client", lambda **kwargs: client)
     agent = _ModelSwitchAgent()
     history = [{"role": "user", "content": "remember this"}]
     agent.chat.history = history
@@ -1761,7 +1767,9 @@ def test_a_client_that_cannot_classify_still_completes_the_switch(
         def cloud_model_provider(self, model_id):
             return None
 
-    monkeypatch.setattr(stdio, "create_client", lambda **kwargs: _UnclassifyingClient())
+    monkeypatch.setattr(
+        model_switch, "create_client", lambda **kwargs: _UnclassifyingClient()
+    )
 
     answer = _events(_model_run(_ModelSwitchAgent(), f"/model {model}"))[-1]["answer"]
 
@@ -1820,7 +1828,9 @@ def test_model_list_names_the_command_that_connects_a_missing_provider(
 def test_undiscovered_cloud_model_is_refused_without_changing_session(
     monkeypatch, stub_lemonade
 ):
-    monkeypatch.setattr(stdio, "probe_model_present", lambda base, model_id: False)
+    monkeypatch.setattr(
+        model_switch, "probe_model_present", lambda base, model_id: False
+    )
     agent = _ModelSwitchAgent()
     previous = agent.chat.llm_client
     events = _events(_model_run(agent, "/model fireworks.not-discovered"))
@@ -1839,7 +1849,7 @@ def test_model_switch_rolls_back_when_rebuild_system_prompt_fails(monkeypatch):
     with the client already swapped. Caught in review; this pins the fix."""
     from gaiapy import stdio as stdio_mod
 
-    monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: object())
+    monkeypatch.setattr(model_switch, "create_client", lambda **kwargs: object())
     agent = _ModelSwitchAgent()
     previous_client = agent.chat.llm_client
 
@@ -2676,6 +2686,7 @@ def test_model_list_offers_only_models_that_chat(monkeypatch):
             return {"data": catalog}
 
     monkeypatch.setattr(stdio, "LemonadeClient", _Client)
+    monkeypatch.setattr(model_switch, "LemonadeClient", _Client)
     assert list(stdio._lemonade_models(None)) == [
         "Gemma-4-E4B-it-GGUF",
         "Qwen2.5-Omni-3B-GGUF",

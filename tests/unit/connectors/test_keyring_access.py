@@ -553,23 +553,39 @@ def test_mcp_server_configure_refuses_before_writing(refused):
     assert refused.calls == []
 
 
-def _long_marker_items(monkeypatch) -> dict:
-    """Store items holding a chunked recovery marker that belongs to ``acct-b``."""
-    writer = StrongKeyring()
-    _activate(monkeypatch, writer)
-    snapshot = {
-        store._provider_credentials_username("google"): "c" * 1500,
-        store._connection_username("google", "acct-b"): None,
+def _long_marker_items() -> dict:
+    """Legacy chunked recovery marker belonging to ``acct-b`` directly in keyring."""
+    import json
+
+    username = store._forward_recovery_username("google")
+    payload = json.dumps(
+        {
+            "version": 2,
+            "account_slot": "acct-b",
+            "slots": {
+                store._provider_credentials_username("google"): "c" * 1500,
+                store._connection_username("google", "acct-b"): None,
+            },
+        },
+        sort_keys=True,
+    )
+    chunks = [
+        payload[i : i + store._CHUNK_CHARS]
+        for i in range(0, len(payload), store._CHUNK_CHARS)
+    ]
+    items = {
+        (SERVICE, store._chunk_username(username, idx)): part
+        for idx, part in enumerate(chunks)
     }
-    store.write_forward_recovery("google", snapshot, slot="acct-b")
-    marker = writer.items[(SERVICE, store._forward_recovery_username("google"))]
-    assert marker.startswith(store._CHUNK_SENTINEL), "marker must be chunked"
-    return dict(writer.items)
+    items[(SERVICE, username)] = (
+        f"{store._CHUNK_SENTINEL}{len(chunks)}:{store._payload_crc(payload)}"
+    )
+    return items
 
 
 @pytest.mark.parametrize("kind", ["strong", "weak"])
 def test_deleting_one_account_keeps_another_accounts_chunked_marker(kind, monkeypatch):
-    items = _long_marker_items(monkeypatch)
+    items = _long_marker_items()
     backend = StrongKeyring() if kind == "strong" else PlaintextKeyring()
     backend.items.update(items)
     _activate(monkeypatch, backend)
