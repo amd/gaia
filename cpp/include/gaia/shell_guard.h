@@ -33,7 +33,8 @@ class Workspace;
 struct ShellJudgement {
     /// A place outside the folders, as the command wrote it. "" = none found.
     std::string outsideWord;
-    /// Where that leads, for asking the user. "" when it is no one place (a wildcard).
+    /// Where that leads, for asking the user: for a wildcard, the folder it is read from.
+    /// "" when it is no one place.
     std::string outsidePath;
     /// The whole refusal, when the standard wording would mislead (a hard link). Usually "".
     std::string refusal;

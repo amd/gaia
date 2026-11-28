@@ -1205,11 +1205,14 @@ private:
                 place(text, base, text, true, write);
                 continue;
             }
-            // The folder the wildcard is read from, then everything it matches now.
+            // The folder the wildcard is read from, then everything it matches now. That folder is one
+            // place, so a folder outside can be asked about as it is without the wildcard.
             std::string prefix = field.pattern.substr(0, field.pattern.find_first_of("*?["));
             const size_t slash = prefix.rfind('/');
             prefix = slash == std::string::npos ? std::string(".") : unescaped(prefix.substr(0, slash + 1));
-            place(prefix, base, text, false, false);
+            // A root (/, C:\) is no one place to ask about: the card never offers a whole disk.
+            const fs::path prefixPath = fs::u8path(prefix);
+            place(prefix, base, text, !(prefixPath.has_root_path() && prefixPath.relative_path().empty()), false);
             std::vector<std::string> found;
             if (!glob(base, field.pattern, found)) {
                 opaque("a wildcard in it matches too many files to check");

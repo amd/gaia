@@ -276,12 +276,23 @@ TEST(WorkspaceTest, JudgeNamesThePlaceToAskAboutAndAddRootOpensIt) {
     EXPECT_FALSE(command.refusal.empty());
     EXPECT_EQ(command.askPath, fs::canonical(d.other).u8string());
     EXPECT_TRUE(ws.judgeCommand("ls //server/share").askPath.empty()) << "a network share is not asked about";
+    // A wildcard is read from one folder: that folder is asked about, as without the wildcard.
+    const Workspace::Outside listing = ws.judgeCommand("ls " + (d.other / "*.h").string());
+    EXPECT_FALSE(listing.refusal.empty());
+    EXPECT_EQ(listing.askPath, fs::canonical(d.other).u8string());
+    EXPECT_TRUE(ws.judgeCommand("ls /*").askPath.empty()) << "a wildcard in the root asks about no whole disk";
+#ifdef _WIN32
+    for (const char* root : {"ls C:/*", "ls C:\\*", "ls /c/*"}) {
+        EXPECT_TRUE(ws.judgeCommand(root).askPath.empty()) << root;
+    }
+#endif
 
     ws.addRoot(file.askPath);
     EXPECT_TRUE(ws.checkPath(outside).empty());
     EXPECT_FALSE(ws.checkPath((d.other / "y").string()).empty()) << "only the path that was added opens";
     ws.addRoot(command.askPath);
     EXPECT_TRUE(ws.checkCommand("ls " + d.other.string()).empty());
+    EXPECT_TRUE(ws.checkCommand("ls " + (d.other / "*.h").string()).empty()) << "the folder it was asked about is open";
 }
 
 TEST(WorkspaceTest, RemedyReplacesTheAllowDirAdvice) {
