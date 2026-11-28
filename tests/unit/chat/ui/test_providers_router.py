@@ -976,8 +976,15 @@ def test_active_restore_fails_without_a_working_key(client, lemonade, keys, db):
     _write_config({"last_model": "fireworks.glm-5p3-flash"})
     keys["ensure_result"] = False
     body = client.get("/api/providers/active").json()
-    assert body["restore"]["status"] == "failed"
-    assert "Fireworks AI has no working key" in body["restore"]["message"]
+    restore = body["restore"]
+    assert restore["status"] == "failed"
+    # Names the provider once, and sends the parts the Agent UI words itself.
+    assert restore["message"] == (
+        "Couldn't restore your last model, glm-5p3-flash · Fireworks AI: "
+        "it has no working key. Pick a model to continue."
+    )
+    assert restore["model"] == "glm-5p3-flash · Fireworks AI"
+    assert restore["reason_code"] == "no_key"
     assert db.get_setting("custom_model") is None
 
 
@@ -1046,7 +1053,7 @@ def test_restore_stops_waiting_for_a_key_that_never_lists_models(
     clock["now"] += providers.KEY_SETTLE_SECONDS + 1
     late = client.get("/api/providers/active").json()["restore"]
     assert late["status"] == "failed"
-    assert "Fireworks AI has no working key" in late["message"]
+    assert "it has no working key" in late["message"]
 
 
 def test_a_key_whose_models_are_listed_fails_at_once(client, lemonade, keys, db):
@@ -1059,7 +1066,7 @@ def test_a_key_whose_models_are_listed_fails_at_once(client, lemonade, keys, db)
     keys["ensure_result"] = False
     late = client.get("/api/providers/active").json()["restore"]
     assert late["status"] == "failed"
-    assert "Fireworks AI has no working key" in late["message"]
+    assert "it has no working key" in late["message"]
 
 
 def test_the_settle_window_ends_exactly_at_its_limit(

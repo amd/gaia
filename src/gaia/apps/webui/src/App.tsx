@@ -26,6 +26,7 @@ import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
 import { useUiAuthStore } from './stores/uiAuthStore';
 import { useModelStore } from './stores/modelStore';
+import { restoreFailedText } from './utils/restoreNotice';
 import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
 import { useGoalHealthStore } from './stores/goalHealthStore';
@@ -998,7 +999,7 @@ function App() {
                 )}
                 {restoreNotice && !restoreNotice.ok && (
                     <div className="app-notice is-warning" role="status">
-                        <span>{restoreNotice.message}</span>
+                        <span>{restoreFailedText(t, restoreNotice)}</span>
                         <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
                             {t('model.restore.pick')}
                         </button>

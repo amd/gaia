@@ -4,8 +4,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AddSkillsFromLink } from '../AddSkillsFromLink';
+import { useEscapeToClose } from '../../../hooks/useEscapeToClose';
 import * as api from '../../../services/api';
-import type { LinkSkill } from '../../../types';
+import type { LinkPreview, LinkSkill } from '../../../types';
 
 vi.mock('../../../services/api');
 
@@ -14,6 +15,11 @@ const LINK = 'https://github.com/owner/library';
 
 function found(name: string, extra: Partial<LinkSkill> = {}): LinkSkill {
     return { name, description: `${name} does a job`, path: `skills/${name}`, has_code: false, permissions: [], permissions_unreadable: false, verdict: 'ALLOW', findings: [], installed: false, update: false, error: null, ...extra };
+}
+
+function InDialog({ onClose }: { onClose: () => void }) {
+    useEscapeToClose(true, onClose);
+    return <AddSkillsFromLink onAdded={vi.fn()} />;
 }
 
 beforeEach(() => {
@@ -123,6 +129,62 @@ describe('AddSkillsFromLink', () => {
         fireEvent.change(screen.getByLabelText('Link to a skill or skills library'), { target: { value: 'owner/missing' } });
         fireEvent.click(screen.getByRole('button', { name: 'Read' }));
         expect(await screen.findByRole('alert')).toHaveTextContent('Nothing found at the link');
+    });
+
+    it('leaves the link alone on Escape while it is being read', async () => {
+        let done: (p: LinkPreview) => void = () => {};
+        mockedApi.previewSkillLink.mockReturnValue(new Promise((resolve) => { done = resolve; }));
+        render(<AddSkillsFromLink onAdded={vi.fn()} />);
+        const box = screen.getByLabelText('Link to a skill or skills library');
+        fireEvent.change(box, { target: { value: LINK } });
+        fireEvent.click(screen.getByRole('button', { name: 'Read' }));
+        await screen.findByText('Reading…');
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(box).toHaveValue(LINK);
+        done({ link: LINK, source: 'owner/library', pin: 'commit:abc', warning: 'w', skills: [found('deslop')] });
+        expect(await screen.findByText('deslop')).toBeInTheDocument();
+    });
+
+    it('dismisses the preview on Escape in the link box instead of closing Settings', async () => {
+        const onClose = vi.fn();
+        render(<InDialog onClose={onClose} />);
+        const box = screen.getByLabelText('Link to a skill or skills library');
+        fireEvent.change(box, { target: { value: LINK } });
+        fireEvent.click(screen.getByRole('button', { name: 'Read' }));
+        await screen.findByText('deslop');
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(screen.queryByText('deslop')).not.toBeInTheDocument();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(box).toHaveValue(LINK);
+        // The box still holds the link, so the next Escape clears it; the one after closes Settings.
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(box).toHaveValue('');
+        expect(onClose).not.toHaveBeenCalled();
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the cursor in the link box while it reads, so a wrong link can be fixed', async () => {
+        let fail: (e: Error) => void = () => {};
+        mockedApi.previewSkillLink.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+        render(<AddSkillsFromLink onAdded={vi.fn()} />);
+        const box = screen.getByLabelText('Link to a skill or skills library');
+        box.focus();
+        fireEvent.change(box, { target: { value: 'owner/missing' } });
+        fireEvent.submit(box.closest('form')!);
+        await screen.findByText('Reading…');
+        expect(box).not.toBeDisabled();
+        expect(box).toHaveFocus();
+        expect(box).toHaveAttribute('aria-busy', 'true');
+        // A paste while reading neither changes the link nor starts a second read.
+        fireEvent.paste(box, { clipboardData: { getData: () => 'owner/other' } });
+        expect(box).toHaveValue('owner/missing');
+        expect(mockedApi.previewSkillLink).toHaveBeenCalledTimes(1);
+        fail(new Error('Nothing found at the link'));
+        await screen.findByRole('alert');
+        expect(box).toHaveFocus();
+        expect(box).not.toHaveAttribute('readonly');
+        expect(box).toHaveAttribute('aria-busy', 'false');
     });
 
     it('lets you read a cut-off description before adding the skill', async () => {

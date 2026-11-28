@@ -1678,7 +1678,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDropCapture={() => setIsDragOver(false)}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            aria-label={shownTitle(session?.title) || 'Chat'}
+            aria-label={shownTitle(t, session) || 'Chat'}
         >
             <TurnAnnouncer busy={busy} />
             <header className="task-header">
@@ -1701,7 +1701,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         />
                     ) : (
                         <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
-                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(session?.title)}</span>
+                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(t, session)}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}

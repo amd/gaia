@@ -42,6 +42,20 @@ describe('the model server log on a failed turn', () => {
         expect(screen.queryByRole('button', { name: 'Model server log' })).toBeNull();
     });
 
+    it("follows the turn's own model, not the one picked since", () => {
+        place.mockReturnValue({ remote: false, label: 'Local', description: null });
+        const where = { provider: 'fireworks', provider_name: 'Fireworks AI', name: 'deepseek-v4p1-flash' };
+        const ranInCloud = { cost: { kind: 'no_reply' }, model: { ...where, remote: true } };
+        const { unmount } = render(<MessageBubble message={{ ...failed, turnSummary: ranInCloud }} />);
+        expect(screen.queryByRole('button', { name: 'Model server log' })).toBeNull();
+        unmount();
+
+        place.mockReturnValue({ remote: true, label: 'Cloud', description: null });
+        const ranLocally = { cost: { kind: 'no_reply' }, model: { ...where, remote: false } };
+        render(<MessageBubble message={{ ...failed, turnSummary: ranLocally }} />);
+        expect(screen.getByRole('button', { name: 'Model server log' })).toBeInTheDocument();
+    });
+
     it('is offered under the answer an agent saves when the model call failed', () => {
         place.mockReturnValue({ remote: false, label: 'Local', description: null });
         // Word for word what the agent wrote in the desktop app with the model server down.

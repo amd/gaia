@@ -1011,6 +1011,9 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
         await expect(page.locator('.render-calc')).toBeVisible();
         expect(await audit(page)).toEqual([]);
+        const boxDrop = await page.locator('.render-calc__field').evaluateAll((fields) =>
+            fields.map((f) => Math.round(f.querySelector('.render-calc__box')!.getBoundingClientRect().top - f.getBoundingClientRect().top)));
+        expect(new Set(boxDrop).size, `every field puts its box in the same place, got ${boxDrop}`).toBe(1);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
     });
@@ -4881,6 +4884,19 @@ for (const locale of ['ar', 'en']) {
             expect(await meta.evaluate((el) => getComputedStyle(el).flexWrap)).toBe('wrap');
         });
 
+        if (locale === 'en') {
+            test('a short Arabic prompt sits on the same edge as the card name', async ({ page }) => {
+                await openSchedules(page, [{ ...SCHEDULE_ROW, id: 's7', name: 'ملخص الصباح', prompt: 'لخّص ملاحظاتي غير المقروءة.' }]);
+                const card = page.locator('.schedule-card').first();
+                const textLeft = (selector: string) => card.locator(selector).evaluate((el) => {
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    return range.getBoundingClientRect().left;
+                });
+                expect(Math.abs((await textLeft('.schedule-card-prompt')) - (await textLeft('.schedule-card-name'))), 'the prompt jumped to the far side of the card').toBeLessThan(2);
+            });
+        }
+
         test('new schedule, nothing typed yet', async ({ page }) => {
             await openSchedules(page, []);
             await page.locator('.schedule-modal .btn-primary').click();
@@ -7030,6 +7046,17 @@ for (const locale of ['en', 'ar']) {
         expect(await composerOverlaps(page)).toEqual([]);
         expect(await audit(page)).toEqual([]);
     });
+
+    test(`a narrow new chat keeps the run mode readable beside the memory chip (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 600 });
+        await open(page, '', locale);
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `run mode cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(full);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 for (const locale of ['en', 'ar']) {
@@ -7820,7 +7847,7 @@ const CRASHES: Record<'main' | 'sidebar' | 'window', { hash: string; before: (pa
     window: {
         hash: '',
         before: (page) => page.route((url) => url.pathname === '/api/providers/active', (route) =>
-            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN } } })),
+            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN, model: BROKEN, reason: 'it has no working key' } } })),
     },
 };
 

@@ -885,6 +885,19 @@ def _listed_as_cloud(model_id: str) -> bool:
     )
 
 
+# Reasons the Agent UI words itself, keyed by the code it reads.
+_LOCAL_ONLY = "Local only is on, so cloud models can't run"
+_NO_KEY = "it has no working key"
+_NOT_LISTED = "the model is no longer listed"
+_NOT_DOWNLOADED = "the model is not downloaded"
+_REASON_CODES = {
+    _LOCAL_ONLY: "local_only",
+    _NO_KEY: "no_key",
+    _NOT_LISTED: "not_listed",
+    _NOT_DOWNLOADED: "not_downloaded",
+}
+
+
 def _check_model_available(model_id: str) -> Optional[str]:
     """None when *model_id* can run now, else why not.
 
@@ -896,7 +909,7 @@ def _check_model_available(model_id: str) -> Optional[str]:
     provider = provider_of(model_id)
     cloud = _is_cloud(model_id)
     if cloud and cloud_blocked():
-        return "Local only is on, so cloud models can't run"
+        return _LOCAL_ONLY
     if cloud and provider == LOCAL:
         # A provider GAIA has no tab for: Lemonade listed it and relays it.
         return None
@@ -916,20 +929,20 @@ def _check_model_available(model_id: str) -> Optional[str]:
                         f"{_NAMES[provider]} hasn't listed its models yet; "
                         "try again in a few seconds"
                     )
-                return f"{_NAMES[provider]} has no working key"
+                return _NO_KEY
         models = _list_models(provider)
         found = _listed(models, model_id)
         if found is None:
             # The local list leaves out cloud entries from a provider with no tab.
             if provider == LOCAL and _listed_as_cloud(model_id):
                 if cloud_blocked():
-                    return "Local only is on, so cloud models can't run"
+                    return _LOCAL_ONLY
                 return None
-            return "the model is no longer listed"
+            return _NOT_LISTED
         if provider != LOCAL:
             return None
         if not found["downloaded"]:
-            return "the model is not downloaded"
+            return _NOT_DOWNLOADED
         # Refuse only what nothing here can run; a memory estimate stays a caveat.
         return _local_unavailable(models, model_id)
     except ProviderError as e:
@@ -1006,12 +1019,16 @@ def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
                 "message": None if unchanged else "Restored your last model.",
             }
         else:
+            label = model_label(last)
             _restore_result = {
                 "status": "failed",
                 "message": (
-                    f"Couldn't restore your last model, {model_label(last)}: {reason}. "
+                    f"Couldn't restore your last model, {label}: {reason}. "
                     "Pick a model to continue."
                 ),
+                "model": label,
+                "reason": reason,
+                "reason_code": _REASON_CODES.get(reason),
                 "retry": provider_of(last) != LOCAL and not cloud_blocked(),
             }
         return _restore_result
