@@ -1397,6 +1397,30 @@ TEST_F(GaiacppSidecar, AChatThatSaysItCantAnswerIsRefusedInServiceWords) {
     EXPECT_FALSE(fs::exists(target));
 }
 
+TEST_F(GaiacppSidecar, AnAgentUiUnattendedRunExplainsApprovalInPlainWords) {
+    const fs::path target = work_ / "unapproved.txt";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-schedule", "write it",
+                            {{"surface", "agent_ui"}, {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(20))) << t.describe();
+
+    const auto final = t.waitType("final");
+    ASSERT_TRUE(final) << t.describe();
+    EXPECT_EQ((*final)["failed"], true);
+    const std::string answer = (*final)["answer"].get<std::string>();
+    EXPECT_NE(answer.find("GAIA stopped this unattended run at \"Writing file\""), std::string::npos) << answer;
+    EXPECT_NE(answer.find("scheduled tasks and autonomous goals"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("Ask GAIA in a chat instead"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("session_id"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("needs_confirmation"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("gaia -p"), std::string::npos) << answer;
+    EXPECT_FALSE(fs::exists(target));
+    for (const auto& e : t.events()) EXPECT_NE(e.value("type", ""), "needs_confirmation") << e.dump();
+}
+
 TEST_F(GaiacppSidecar, ATurnWithoutASessionIsAddressedByItsRunIdWhileItRuns) {
     Hold& held = hold();
     ASSERT_NO_FATAL_FAILURE(startSidecar());
