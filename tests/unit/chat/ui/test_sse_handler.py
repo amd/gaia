@@ -2195,6 +2195,17 @@ class TestSummarizeToolResult:
         result = _summarize_tool_result(data)
         msg_part = result.split(": ", 1)[1]
         assert len(msg_part) == 200
+        assert msg_part.endswith("…")
+
+    def test_status_error_truncates_on_word_boundary_with_ellipsis(self):
+        words = " ".join(f"word{i}" for i in range(60))
+        data = {"status": "error", "error": words}
+        result = _summarize_tool_result(data)
+        msg_part = result.split(": ", 1)[1]
+        assert len(msg_part) <= 200
+        assert msg_part.endswith("…")
+        body = msg_part[:-1]
+        assert words.startswith(body + " ")
 
     # --- Generic fallback ---
 

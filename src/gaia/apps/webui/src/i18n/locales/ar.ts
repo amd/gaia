@@ -669,6 +669,7 @@ const messages: Messages = {
     'modelMenu.addFromLinkNote': 'أي نموذج محادثة GGUF على Hugging Face',
     'modelMenu.providers': 'المزوّدون والمفاتيح…',
     'modelMenu.downloadModel': 'تنزيل {name}',
+    'modelMenu.aboutModel': 'حول {name}',
     'modelMenu.ready': 'جاهز',
     'media.showFull': 'عرض بالحجم الكامل',
     'media.showSmaller': 'عرض بحجم أصغر',
@@ -1726,6 +1727,8 @@ const messages: Messages = {
     'settings.title': 'الإعدادات',
     'settings.sections': 'أقسام الإعدادات',
     'chat.loadingTools': 'جارٍ تحميل المزيد من الأدوات',
+    'chat.reasoningWords.one': 'جارٍ الاستدلال — كلمة واحدة حتى الآن',
+    'chat.reasoningWords.other': 'جارٍ الاستدلال — الكلمات حتى الآن: {n}',
     'chat.loadingMessages': 'جارٍ تحميل الرسائل',
     'chat.empty.title': 'هذه المحادثة فارغة',
     'chat.empty.hint': 'أرسل رسالة في الأسفل لتبدأ.',
@@ -2126,6 +2129,7 @@ const messages: Messages = {
     'settings.automations.cancel': 'إلغاء',
     'settings.automations.removeTitle': 'إزالة «{name}»؟',
     'settings.automations.removeBody': 'سيتوقف GAIA عن تشغيلها. لاستعادتها، اطلب من GAIA في المحادثة إعدادها مرة أخرى.',
+    'settings.automations.removeBodyNative': 'سيتوقف GAIA عن تشغيلها. لا يستطيع «سريع وخفيف» إعدادها مرة أخرى؛ انتقل إلى «كامل الميزات» من قسم الوكيل والنموذج لإعادة إنشائها في المحادثة.',
     'modelNeeded.dialog': 'تنزيل نموذج',
     'modelNeeded.title.chat': 'تحتاج المحادثة إلى نموذج',
     'modelNeeded.title.vision': 'تحتاج قراءة هذه الصورة إلى نموذج رؤية',
@@ -2321,6 +2325,10 @@ const messages: Messages = {
     'setup.agent.hint': 'يمكنك التبديل لاحقًا من الإعدادات › الوكيل والنموذج.',
     'setup.agent.loadFailed': 'تعذّرت معرفة الوكيل المستخدَم: {error}',
     'setup.agent.saveFailed': 'تعذّر تبديل الوكيل: {error}',
+    'setup.agent.error.chatBusy': 'يجيب GAIA حاليًا في محادثة، وتبديل الوكيل الآن سيقطع تلك الإجابة. دعه ينتهي أو أوقفه، ثم بدّل.',
+    'setup.agent.error.setupBusy': 'ما زال GAIA يكمِل الإعداد ويختبر الوكيل. بدّل بعد انتهاء الإعداد.',
+    'setup.agent.error.notInstalled': 'gaiacpp غير مثبّت على هذا الجهاز بعد. نزّله أولًا.',
+    'setup.agent.error.stopFailed': 'تم حفظ اختيار الوكيل كـ {agent}، لكن تعذّر إيقاف الوكيل قيد التشغيل: {error} أعد تشغيل GAIA للتبديل.',
     'setup.npu.notReady': 'في هذا الجهاز وحدة معالجة عصبية Ryzen AI NPU، لكنها غير مهيأة لتشغيل النماذج بعد:',
     'setup.npu.problem.driver': 'برنامج تشغيل الوحدة العصبية (⁦amdxdna⁩) غير محمَّل.',
     'setup.npu.fix.driver': 'يأتي مع ⁦Linux 6.14⁩ وما بعده. حدِّث النواة، أو ثبِّت برنامج تشغيل NPU من AMD لتوزيعتك، ثم أعد تشغيل الجهاز.',
@@ -3159,6 +3167,9 @@ const messages: Messages = {
     // The model chip's status icons
     'modelChip.notDownloaded': 'غير منزَّل',
     'modelChip.switchFailed': 'تعذّر تبديل النموذج',
+    'modelChip.next': 'التالي',
+    'modelChip.queuedTitle': 'يُستخدم {model} بدءًا من رسالتك التالية.',
+    'modelChip.notDownloadedTitle': 'لم يُنزَّل {name} بعد. افتح القائمة لتنزيله.',
 
     // The update chip
 

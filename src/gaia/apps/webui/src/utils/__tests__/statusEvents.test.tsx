@@ -4,8 +4,9 @@
 /** A warning status the agent raises is a row of its own while the turn runs. */
 
 import { render, screen } from '@testing-library/react';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AgentActivity } from '../../components/AgentActivity';
+import { stripIsolates } from '../../i18n/registry';
 import { useChatStore } from '../../stores/chatStore';
 import type { StreamEvent } from '../../types';
 import { applyStatusEvent, selectToolStatus } from '../statusEvents';
@@ -15,6 +16,7 @@ vi.mock('../../services/api');
 const notice = 'MCP servers that could not start: weatherbox (not found).';
 
 beforeEach(() => useChatStore.getState().resetStreaming());
+afterEach(() => useChatStore.setState({ locale: 'en' }));
 
 it('shows a warning while the turn runs', () => {
     const ids = { current: 0 };
@@ -99,4 +101,31 @@ it('says where the turn stands in line', () => {
     applyStatusEvent(queued({ event: 'queued', holder: 'gaia', position: 2, queue_length: 3, waited_s: 4 }), { current: 0 });
 
     expect(useChatStore.getState().liveStatus).toBe('Waiting for another chat to finish, #2 of 3 in line (4s)');
+});
+
+it('translates gaiacpp reasoning progress and uses singular for 1 word', () => {
+    const oneWord = {
+        type: 'status',
+        phase: 'reasoning',
+        words: 1,
+        message: 'Reasoning - 1 words so far',
+    } as StreamEvent;
+
+    applyStatusEvent(oneWord, { current: 0 });
+    expect(useChatStore.getState().liveStatus).toBe('Reasoning — 1 word so far');
+
+    useChatStore.setState({ locale: 'ar' });
+    applyStatusEvent(oneWord, { current: 0 });
+    const arOne = stripIsolates(useChatStore.getState().liveStatus ?? '');
+    expect(arOne).toBe('جارٍ الاستدلال — كلمة واحدة حتى الآن (Reasoning — 1 word so far)');
+    expect(arOne).not.toContain('1 words');
+
+    applyStatusEvent({
+        type: 'status',
+        phase: 'reasoning',
+        words: 1234,
+        message: 'Reasoning - 1234 words so far',
+    } as StreamEvent, { current: 0 });
+    expect(stripIsolates(useChatStore.getState().liveStatus ?? ''))
+        .toBe('جارٍ الاستدلال — الكلمات حتى الآن: 1,234 (Reasoning — 1,234 words so far)');
 });

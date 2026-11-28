@@ -1245,10 +1245,13 @@ def _set_flagship_agent(choice: str) -> None:
         looked = ", ".join(str(p) for p in fetch.native_flagship_candidates())
         raise HTTPException(
             status_code=422,
-            detail=(
-                "gaiacpp is not installed on this PC, so it cannot be the agent "
-                f"yet (looked in: {looked}). Download it first."
-            ),
+            detail={
+                "status": "gaiacpp_not_installed",
+                "message": (
+                    "gaiacpp is not installed on this PC, so it cannot be the agent "
+                    f"yet (looked in: {looked}). Download it first."
+                ),
+            },
         )
     if saved is None and choice == fetch.PYTHON_FLAGSHIP:
         # Already what runs here; saving it makes the terminal UI use it too.
@@ -1261,18 +1264,24 @@ def _set_flagship_agent(choice: str) -> None:
         # Setup's own test chat runs on the agent; stopping it fails setup.
         raise HTTPException(
             status_code=409,
-            detail=(
-                "GAIA is still setting up and testing the agent. Switch once "
-                "setup has finished."
-            ),
+            detail={
+                "status": "agent_switch_setup_busy",
+                "message": (
+                    "GAIA is still setting up and testing the agent. Switch once "
+                    "setup has finished."
+                ),
+            },
         )
     if run_manager.active_sessions():
         raise HTTPException(
             status_code=409,
-            detail=(
-                "GAIA is answering in a chat, and switching agents now would cut "
-                "that answer off. Let it finish or stop it, then switch."
-            ),
+            detail={
+                "status": "agent_switch_chat_busy",
+                "message": (
+                    "GAIA is answering in a chat, and switching agents now would cut "
+                    "that answer off. Let it finish or stop it, then switch."
+                ),
+            },
         )
     GaiaConfig.save_key("flagship_agent", choice)
     logger.info("Flagship agent set: %s", choice)
@@ -1281,10 +1290,15 @@ def _set_flagship_agent(choice: str) -> None:
     except SidecarError as e:
         raise HTTPException(
             status_code=500,
-            detail=(
-                f"The agent choice was saved as {choice}, but the agent that is "
-                f"running could not be stopped: {e} Restart GAIA to switch."
-            ),
+            detail={
+                "status": "agent_stop_failed",
+                "agent": choice,
+                "error": str(e),
+                "message": (
+                    f"The agent choice was saved as {choice}, but the agent that is "
+                    f"running could not be stopped: {e} Restart GAIA to switch."
+                ),
+            },
         ) from e
 
 

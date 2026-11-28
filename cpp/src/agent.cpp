@@ -1086,10 +1086,12 @@ std::optional<std::string> strandedCallNote(const std::string& reply, const Tool
             onlyCallKeys = onlyCallKeys && (key == "tool" || key == "tool_args" || key == "thought" ||
                                             key == "goal" || key == "plan");
         }
-        if (!onlyCallKeys) return std::nullopt;
+        const bool namesTool = call.contains("tool") && call["tool"].is_string();
+        // Arguments written beside "tool" still make it a call, when the tool is a real one.
+        const bool flatCall = namesTool && !call.contains("tool_args") && tools.hasTool(call["tool"].get<std::string>());
+        if (!onlyCallKeys && !flatCall) return std::nullopt;
         const bool whole = reply.find_first_not_of(kSpace) == at &&
                            reply.find_first_not_of(kSpace, at + candidate.size()) == std::string::npos;
-        const bool namesTool = call.contains("tool") && call["tool"].is_string();
         if (!namesTool) {
             if (whole && call.contains("plan")) {
                 return "Your reply held a plan but no tool call and no answer. Send the tool call for the "
@@ -1099,8 +1101,19 @@ std::optional<std::string> strandedCallNote(const std::string& reply, const Tool
         }
         const std::string name = call["tool"].get<std::string>();
         const std::string after = reply.substr(at + candidate.size());
+        if (!tools.hasTool(name)) return std::nullopt;
+        // More calls to real tools after it: a whole run written out in one reply, results and all.
+        for (size_t next = after.find('{'); next != std::string::npos; next = after.find('{', next + 1)) {
+            const json later = json::parse(extractFirstJsonObject(after.substr(next)), nullptr, false);
+            if (later.is_object() && later.contains("tool") && later["tool"].is_string() &&
+                tools.hasTool(later["tool"].get<std::string>())) {
+                return "Your reply held several tool calls and none of them ran: a reply holds one tool call, "
+                       "with nothing after it. Send the first call again on its own, wait for its result, and "
+                       "do not describe results you have not seen.";
+            }
+        }
         // A long passage after it is an answer that shows an example; a short tail is a call that was meant.
-        if (!tools.hasTool(name) || after.size() > 240 || after.find('{') != std::string::npos) return std::nullopt;
+        if (after.size() > 240 || after.find('{') != std::string::npos) return std::nullopt;
         return "Your call to " + name + " was not run: a tool call must be the last thing in a reply, and "
                "this one had text after it. Send the call again with nothing after it, or give your final answer.";
     }
@@ -2176,7 +2189,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             if (const std::optional<std::string> note = announcedStepNote(answer)) {
                 ++announcePushes;
                 if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
-                console_->printWarning("Answer sent back: " + *note);
+                console_->printAnswerRetracted("Answer sent back: " + *note);
                 Message m;
                 m.role = MessageRole::USER;
                 m.content = "[Not done yet] " + *note;
@@ -2189,7 +2202,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             const std::optional<std::string> still = unresolvedClaims(answer);
             if (!still || still->empty()) return std::nullopt;
             if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *still}});
-            console_->printWarning("Answer sent back: " + *still);
+            console_->printAnswerRetracted("Answer sent back: " + *still);
             Message m;
             m.role = MessageRole::USER;
             m.content = "[Not done yet] " + *still +
@@ -2202,7 +2215,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         if (!note) return std::nullopt;
         answerSentBack = true;
         if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
-        console_->printWarning("Answer sent back: " + *note);
+        console_->printAnswerRetracted("Answer sent back: " + *note);
         Message m;
         m.role = MessageRole::USER;
         m.content = "[Check before answering] " + *note;
@@ -2577,7 +2590,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         messages.push_back(assistantMsg);
 
         // Parse response
-        ParsedResponse parsed = parseLlmResponse(response);
+        ParsedResponse parsed =
+            parseLlmResponse(response, [this](const std::string& name) { return tools_.hasTool(name); });
 
         // Tool-call text repeated from the request or from a file read this turn is a quote, not a call.
         bool quotedCall = false;
@@ -2619,7 +2633,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             if (const std::optional<std::string> note = strandedCallNote(response, tools_)) {
                 strandedCallSentBack = true;
                 if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
-                console_->printWarning("Reply sent back: " + *note);
+                console_->printAnswerRetracted("Reply sent back: " + *note);
                 Message retry;
                 retry.role = MessageRole::USER;
                 retry.content = "[Not done yet] " + *note;

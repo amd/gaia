@@ -670,6 +670,7 @@ export const enMessages = {
     'modelMenu.addFromLinkNote': 'Any GGUF chat model on Hugging Face',
     'modelMenu.providers': 'Providers and keys…',
     'modelMenu.downloadModel': 'Download {name}',
+    'modelMenu.aboutModel': 'About {name}',
     'modelMenu.ready': 'Ready',
     'media.showFull': 'Show full size',
     'media.showSmaller': 'Show smaller',
@@ -1729,6 +1730,8 @@ export const enMessages = {
     'settings.close': 'Close settings',
     'settings.backTo': 'Back to {section}',
     'chat.loadingTools': 'Loading more tools',
+    'chat.reasoningWords.one': 'Reasoning — {n} word so far',
+    'chat.reasoningWords.other': 'Reasoning — {n} words so far',
     'chat.loadingMessages': 'Loading messages',
     'chat.empty.title': 'This chat is empty',
     'chat.empty.hint': 'Send a message below to start it.',
@@ -2127,6 +2130,7 @@ export const enMessages = {
     'settings.automations.cancel': 'Cancel',
     'settings.automations.removeTitle': 'Remove “{name}”?',
     'settings.automations.removeBody': 'GAIA stops running it. To get it back, ask GAIA in chat to set it up again.',
+    'settings.automations.removeBodyNative': 'GAIA stops running it. Fast and light can’t set it up again; switch to Full-featured under Agent & model to recreate it in chat.',
     'modelNeeded.dialog': 'Download a model',
     'modelNeeded.title.chat': 'Chatting needs a model',
     'modelNeeded.title.vision': 'Reading this image needs a vision model',
@@ -2322,6 +2326,10 @@ export const enMessages = {
     'setup.agent.hint': 'You can switch later in Settings › Agent & model.',
     'setup.agent.loadFailed': "Couldn't read which agent is in use: {error}",
     'setup.agent.saveFailed': "Couldn't switch the agent: {error}",
+    'setup.agent.error.chatBusy': 'GAIA is answering in a chat, and switching agents now would cut that answer off. Let it finish or stop it, then switch.',
+    'setup.agent.error.setupBusy': 'GAIA is still setting up and testing the agent. Switch once setup has finished.',
+    'setup.agent.error.notInstalled': 'gaiacpp is not installed on this PC yet. Download it first.',
+    'setup.agent.error.stopFailed': 'The agent choice was saved as {agent}, but the agent that is running could not be stopped: {error} Restart GAIA to switch.',
     'setup.npu.notReady': "This PC has a Ryzen AI NPU, but it isn't set up to run models yet:",
     'setup.npu.problem.driver': "The NPU driver (amdxdna) isn't loaded.",
     'setup.npu.fix.driver': "It comes with Linux 6.14 and later. Update the kernel, or install AMD's NPU driver for your distribution, then restart the PC.",
@@ -3162,6 +3170,9 @@ export const enMessages = {
     // The model chip's status icons
     'modelChip.notDownloaded': 'Not downloaded',
     'modelChip.switchFailed': 'Model switch failed',
+    'modelChip.next': 'next',
+    'modelChip.queuedTitle': '{model} is used from your next message.',
+    'modelChip.notDownloadedTitle': "{name} isn't downloaded yet. Open the list to download it.",
 
     // The update chip
 
