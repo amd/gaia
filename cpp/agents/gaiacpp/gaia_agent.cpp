@@ -149,7 +149,10 @@ void GaiaAgent::registerTools() {
                                                       [ws](const std::string& p) { return ws->checkPath(p); })
                                                 : std::function<std::string(const std::string&)>());
     }
-    if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
+    if (skills_ && !skills_->skills().empty()) {
+        skills_->registerTools(toolRegistry());
+        skillToolsRegistered_ = true;
+    }
     if (memory_) memory_->registerTools(toolRegistry());
     // The model means the script's own $; the shell would blank it and the script would still exit 0.
     toolRegistry().setArgRewrite([this](const ToolInfo& tool, json& args) {
@@ -375,7 +378,7 @@ std::string GaiaAgent::getSystemPrompt() const {
 
 ## How to work
 1. Look before you answer. If the request names files or a folder, list and read them first. Never say a file or fact does not exist without checking.
-2. Use tools to do the work, not to describe it. A request to create, fix, convert or save something is done only when the file exists on disk; write it with file_write or a program, then confirm it is there.
+2. Use tools to do the work, not to describe it. A request to create, fix, convert or save a file is done only when the file exists on disk; write it with file_write or a program, then confirm it is there. Writing for the user to read (a story, poem, essay, letter or explanation) goes in your reply, not in a file, unless they ask for a file or name a place to save it.
 3. For formats you cannot read as text (PDF, Word, Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with pypdf/pdfplumber, python-docx, openpyxl/pandas or python-pptx, or pdftotext. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
 4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source. A sum the user states outright, with no file or data behind it (17 times 23), is not data work: answer it yourself, with no tool.
 5. Verify. After a change, re-read the file, run the test or the program, and look at the output.
@@ -629,6 +632,21 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
 void GaiaAgent::onTurnStart() {
     // A page read last turn may have changed, and fetching it again is the user's call.
     webPages_->clear();
+    // Rescan installed skills so skills added or removed mid-chat take effect immediately.
+    if (skills_) {
+        skills_->refresh();
+        const bool hasSkills = !skills_->skills().empty();
+        if (hasSkills && !skillToolsRegistered_) {
+            skills_->registerTools(toolRegistry());
+            skillToolsRegistered_ = true;
+        }
+        for (const char* name : {"list_skills", "load_skill"}) {
+            if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != hasSkills) {
+                toolRegistry().setEnabled(name, hasSkills);
+            }
+        }
+        rebuildSystemPrompt();
+    }
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
     for (const auto& name : compactWithheldTools()) {

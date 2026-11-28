@@ -128,6 +128,26 @@ TEST(SkillLibraryTest, LoaderSeamPutsBodyInPrompt) {
     EXPECT_EQ(lib.renderPrompt().find("Always run the tests."), std::string::npos);
 }
 
+TEST(SkillLibraryTest, RefreshDiscoversAddedSkillsAndPrunesRemovedLoadedSkills) {
+    TempTree t;
+    t.skill("user", "alpha", "Alpha skill.", "Alpha body.");
+    SkillLibrary lib({t.root("user", "user")});
+    ASSERT_TRUE(lib.loadSkill("alpha"));
+    EXPECT_TRUE(lib.isLoaded("alpha"));
+
+    // Add a new skill and remove the previously loaded skill on disk.
+    t.skill("user", "beta", "Beta skill.", "Beta body.");
+    fs::remove_all(t.path() / "user" / "alpha");
+
+    lib.refresh();
+    EXPECT_EQ(lib.skills().count("beta"), 1u);
+    EXPECT_EQ(lib.skills().count("alpha"), 0u);
+    EXPECT_FALSE(lib.isLoaded("alpha")) << "removed skill should be pruned from loaded_";
+    const std::string prompt = lib.renderPrompt();
+    EXPECT_NE(prompt.find("- beta: Beta skill."), std::string::npos);
+    EXPECT_EQ(prompt.find("Alpha body."), std::string::npos);
+}
+
 TEST(SkillLibraryTest, RealHubSkillsParse) {
     // The skills GAIA ships must load in the native runtime unchanged.
     const fs::path hub = fs::path(GAIA_CPP_SOURCE_DIR) / ".." / "hub" / "skills";

@@ -3271,6 +3271,8 @@ def _dispatch_sidecar_query(
         session_id
         and record_followup is not None
         and followups_supported(profile, handle.api_version)
+        # gaiacpp returns 409 on /followup, so tell the UI up front.
+        and not (agent_type == FLAGSHIP_AGENT_ID and _native_flagship_chosen())
     ):
 
         def _followup_taken(text: str) -> None:

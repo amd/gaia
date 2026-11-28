@@ -128,6 +128,24 @@ TEST(GaiaAgentTest, ExistingFileInASubfolderIsAccepted) {
     EXPECT_EQ(mock.receivedBodies().size(), 1u);
 }
 
+TEST(GaiaAgentTest, AStoryIsAnsweredInChatWithoutAFile) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    const std::string story =
+        "The Keeper of Thorn Point\n\nElias had kept the light for thirty-one years. Every evening he climbed "
+        "the one hundred and twelve steps, trimmed the wick and watched the beam sweep 19 miles out to sea.";
+    mock.pushResponse(answer(story));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("Write a 400-word story about a lighthouse keeper.");
+
+    // The story is the answer: it is not sent back for a file or for its figures.
+    EXPECT_EQ(r["result"], story);
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(system.find("a story, poem, essay, letter or explanation) goes in your reply, not in a file"),
+              std::string::npos);
+}
+
 TEST(GaiaAgentTest, ToolsAreConfinedByDefault) {
     Workdir w;
     bench::MockLlmServer mock;
@@ -2523,4 +2541,53 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
         EXPECT_NE(r.value("error", "").find("internet is off"), std::string::npos) << c << ": " << r.dump();
     }
     EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
+}
+
+TEST(GaiaAgentTest, NewlyInstalledSkillIsDiscoveredOnTheNextTurn) {
+    Workdir w;
+    Workdir home;
+    auto putHome = [](const std::string& v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_HOME", v.c_str());
+#else
+        if (!v.empty()) setenv("GAIA_HOME", v.c_str(), 1);
+        else unsetenv("GAIA_HOME");
+#endif
+    };
+    const std::string prevHome = getEnvVar("GAIA_HOME");
+    putHome(home.path.u8string());
+    struct RestoreEnv {
+        std::string prev;
+        decltype(putHome) fn;
+        ~RestoreEnv() { fn(prev); }
+    } restore{prevHome, putHome};
+
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Turn one done."));
+    mock.pushResponse(answer("Turn two done."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    GaiaAgent agent(cfgFor(mock), o);
+
+    // Turn 1: no user skills installed yet.
+    agent.processQuery("hello");
+
+    // Install a new skill on disk while the agent already exists.
+    const fs::path skillDir = home.path / "skills" / "fresh-skill";
+    fs::create_directories(skillDir);
+    std::ofstream(skillDir / "SKILL.md")
+        << "---\nname: fresh-skill\ndescription: Handle fresh skill requests.\n---\n\nAlways reply FRESH_OK.\n";
+
+    // Turn 2: the existing agent must see the new skill in its prompt and load_skill tool.
+    agent.processQuery("use fresh-skill");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_EQ(bodies[0].find("fresh-skill"), std::string::npos);
+    EXPECT_NE(bodies[1].find("fresh-skill"), std::string::npos) << "system prompt did not refresh skills";
+    ASSERT_TRUE(agent.tools().hasTool("load_skill")) << "load_skill not registered after first skill appeared";
+    EXPECT_TRUE(agent.tools().isEnabled("load_skill"));
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "fresh-skill"}});
+    EXPECT_EQ(loaded.value("status", ""), "success") << loaded.dump();
+    EXPECT_NE(loaded.value("instructions", "").find("FRESH_OK"), std::string::npos) << loaded.dump();
 }

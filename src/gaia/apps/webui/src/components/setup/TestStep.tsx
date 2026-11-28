@@ -9,6 +9,7 @@ import * as api from '../../services/api';
 import { requestErrorParam } from '../../utils/requestErrors';
 import { displayModelName } from '../../stores/modelStore';
 import type { SetupCatalogEntry, SetupRunStatus, SetupTest } from '../../types';
+import { AgentRecovery } from '../AgentRecovery';
 import { ConfirmSheet } from './ConfirmSheet';
 import { formatSize } from './format';
 import { SetupFooter } from './SetupFooter';
@@ -87,7 +88,10 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
     const modelAtFault = required.some((r) => r.subject && r.kind !== 'missing' && !onNative(r));
     // The model passed its own tests and the chat failed on gaiacpp: the way on is the other agent.
     const nativeFailed = stopped && run.state === 'failed' && required.some(onNative);
+    // gaiacpp is missing or damaged: the new-chat screen's two fixes, download it or use the Python agent.
+    const recovery = nativeFailed ? required.find((r) => onNative(r) && r.agent_problem)?.agent_problem ?? null : null;
     const [switching, setSwitching] = useState(false);
+    const [recoveryBusy, setRecoveryBusy] = useState(false);
     const [switchError, setSwitchError] = useState<Param | null>(null);
     const finishOnPython = async () => {
         setSwitching(true);
@@ -134,7 +138,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                                         ? t('setup.test.why.agentNative', { name: NATIVE })
                                         : t(r.kind === 'broken' && !onDownloadAgain ? 'setup.test.why.brokenYours' : WHY[r.kind ?? ''] ?? 'setup.test.why.other')}</p>
                                     {/* The agent's own words, in view: they say what to fix. */}
-                                    {onNative(r) && r.agent_error && (
+                                    {onNative(r) && r.agent_error && !r.agent_problem && (
                                         <p className="setup-result-error-said">{t('setup.test.agentSaid', { name: NATIVE })} <bdi dir="ltr">{r.agent_error}</bdi></p>
                                     )}
                                     <details className="dl-details">
@@ -174,9 +178,11 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
             )}
             {stopped && (
                 <div className="setup-failure" role="alert">
-                    <p>{run.state === 'cancelled' ? t('setup.test.cancelled')
-                        : nativeFailed ? t('setup.test.failedNative', { name: NATIVE })
-                            : required.some((r) => r.kind === 'memory') ? t('setup.test.failedMemory') : t('setup.test.failedHelp')}</p>
+                    {recovery ? <AgentRecovery problem={recovery} onRetry={onRetry} onBusy={setRecoveryBusy} nested /> : (
+                        <p>{run.state === 'cancelled' ? t('setup.test.cancelled')
+                            : nativeFailed ? t('setup.test.failedNative', { name: NATIVE })
+                                : required.some((r) => r.kind === 'memory') ? t('setup.test.failedMemory') : t('setup.test.failedHelp')}</p>
+                    )}
                     {nativeFailed && <p className="setup-failure-hint">{t('setup.agent.hint')}</p>}
                     {switchError && <p className="setup-result-error">{t('newChat.agent.switchFailed', { error: switchError })}</p>}
                     {/* The way on sits in the bar like every step's; a damaged file's fix is downloading it again. */}
@@ -184,8 +190,8 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                         {modelAtFault && onChooseAnother && (
                             <button type="button" className="btn-secondary" onClick={onChooseAnother} disabled={busy}>{t('setup.test.chooseAnother')}</button>
                         )}
-                        <button type="button" className={broken.length || nativeFailed ? 'btn-secondary' : 'btn-primary'} onClick={onRetry} disabled={busy || switching}>{t('setup.test.tryAgain')}</button>
-                        {nativeFailed && (
+                        <button type="button" className={broken.length || nativeFailed ? 'btn-secondary' : 'btn-primary'} onClick={onRetry} disabled={busy || switching || (recovery !== null && recoveryBusy)}>{t('setup.test.tryAgain')}</button>
+                        {nativeFailed && !recovery && (
                             <button type="button" className="btn-primary setup-wrap-btn" onClick={() => void finishOnPython()} disabled={busy || switching}>
                                 {switching && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('setup.test.finishOnPython')}
                             </button>

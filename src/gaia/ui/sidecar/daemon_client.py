@@ -39,7 +39,11 @@ from gaia.daemon.sidecars.errors import (
     KIND_SERVICE_UNREACHABLE,
     SidecarError,
 )
-from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir, resolve_caller_mode
+from gaia.daemon.sidecars.spec import (
+    dev_mode_applies,
+    resolve_caller_dev_src_dir,
+    resolve_caller_mode,
+)
 from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.logger import get_logger
 
@@ -194,7 +198,7 @@ def _ensure(inst: DaemonInstance, agent_id: str) -> SidecarHandle:
     url = f"{inst.base_url}/daemon/v1/agents/{agent_id}/ensure"
     mode = resolve_caller_mode(agent_id)
     payload = {"mode": mode}
-    if mode == "dev":
+    if mode == "dev" and dev_mode_applies(agent_id):
         # This process's own checkout (issue #2588) — compared, never
         # executed, against the daemon's own configured source.
         payload["dev_src_dir"] = str(resolve_caller_dev_src_dir(agent_id))

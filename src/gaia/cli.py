@@ -9361,6 +9361,7 @@ def _handle_daemon_start_agent(args):
     from gaia.daemon.errors import DaemonError
     from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
     from gaia.daemon.sidecars.spec import (
+        dev_mode_applies,
         repo_root_from_agent_dev_src_dir,
         resolve_caller_binary_lock,
         resolve_caller_dev_src_dir,
@@ -9372,7 +9373,7 @@ def _handle_daemon_start_agent(args):
     # checkout, neither of which reflect the caller's (issue #2588).
     resolved_mode = resolve_caller_mode(args.agent_id, override=args.mode)
     dev_src_dir = None
-    if resolved_mode == "dev":
+    if resolved_mode == "dev" and dev_mode_applies(args.agent_id):
         try:
             dev_src_dir = resolve_caller_dev_src_dir(
                 args.agent_id, explicit=args.dev_src_dir

@@ -213,6 +213,60 @@ class TestActivityLines:
         assert handler.events[0]["tool"] == "run_shell_command"
         assert handler.events[0]["narration"] == "Running command: pytest -q"
         assert handler.events[-1]["summary"] == "3 passed"
+        assert handler.events[-1]["success"] is True
+
+    @pytest.mark.parametrize(
+        "data,summary",
+        [
+            (
+                {
+                    "stdout": "",
+                    "stderr": "ls: missing: No such file or directory",
+                    "exit_code": 1,
+                    "timed_out": False,
+                    "cwd": "/tmp",
+                },
+                "Command failed (exit 1): ls: missing: No such file or directory",
+            ),
+            (
+                {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": True,
+                    "cwd": "/tmp",
+                },
+                "Command timed out",
+            ),
+            (
+                {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": False,
+                    "cancelled": True,
+                    "cwd": "/tmp",
+                },
+                "Command stopped",
+            ),
+        ],
+    )
+    def test_a_failed_command_step_is_marked_unsuccessful(self, data, summary):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "bash_execute",
+                "args": {"command": "ls missing"},
+            },
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": data,
+            },
+        )
+        result = handler.events[-1]
+        assert result["success"] is False
+        assert result["summary"] == summary
 
     def test_a_search_result_is_named_as_its_call_was(self):
         handler = _relay(
