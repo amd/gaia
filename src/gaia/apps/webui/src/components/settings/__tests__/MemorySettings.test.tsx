@@ -5,6 +5,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemorySettings } from '../MemorySettings';
 import * as memoryApi from '../../../services/memoryApi';
+import { useActiveAgentStore } from '../../../stores/activeAgentStore';
+import { useChatStore } from '../../../stores/chatStore';
 
 vi.mock('../../../services/memoryApi');
 
@@ -17,6 +19,8 @@ function memory(enabled: boolean): memoryApi.MemorySettings {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    useActiveAgentStore.setState({ current: null });
+    useChatStore.setState({ settingsSection: null });
     mockedApi.getMemorySettings.mockResolvedValue(memory(true));
     mockedApi.updateMemorySettings.mockResolvedValue(memory(false));
     // The embedding-model card has its own tests.
@@ -72,5 +76,18 @@ describe('MemorySettings', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent('Memory service is down');
         expect(toggle).toBeChecked();
         expect(mockedApi.updateMemorySettings).toHaveBeenCalledExactlyOnceWith({ memory_enabled: false });
+    });
+
+    it('explains Fast and light separate memory, omits the embedder card, and links to Agent & model', async () => {
+        useActiveAgentStore.setState({ current: 'gaiacpp' });
+        render(<MemorySettings />);
+        const notice = screen.getByRole('status');
+        expect(notice.textContent).toMatch(/Fast and light/i);
+        expect(notice.textContent).toMatch(/Full-featured/i);
+        expect(mockedApi.getEmbedder).not.toHaveBeenCalled();
+        expect(screen.queryByRole('region', { name: 'Embedding model' })).toBeNull();
+        expect(await screen.findByRole('checkbox', { name: REMEMBER })).toBeEnabled();
+        fireEvent.click(screen.getByRole('button', { name: /Agent & model/i }));
+        expect(useChatStore.getState().settingsSection).toBe('model');
     });
 });

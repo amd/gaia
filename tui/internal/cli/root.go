@@ -11,6 +11,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
@@ -304,6 +305,11 @@ func init() {
 	// its own full-screen TUI, so an Explorer launch is a supported entry point,
 	// not a mistake. root_test.go pins this.
 	cobra.MousetrapHelpText = ""
+
+	daemon.SavedFlagshipHarness = func() (string, error) {
+		saved, err := preflight.ReadFlagshipAgent()
+		return saved.Choice, err
+	}
 
 	rootCmd.Flags().StringVar(&resumeArg, "resume", "",
 		"reopen a past session: bare --resume lists recent sessions (ones waiting "+

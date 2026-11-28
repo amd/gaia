@@ -46,8 +46,8 @@ export function useSessionProgram(sessionId: string, wanted: boolean): Program |
 /** The Python names the UI shows for tools that write files or run commands. */
 const CHANGING_TOOLS = new Set(['write_file', 'edit_file', 'run_shell_command']);
 
-/** Whether a turn ran a tool that can change files: one that was declined or failed changed nothing. */
+/** Whether a turn ran a tool that can change files: a stopped, declined or failed call changed nothing. */
 export function ranChangingTool(steps: AgentStep[] | undefined): boolean {
     return (steps ?? []).some((s) => s.type === 'tool' && !!s.tool && CHANGING_TOOLS.has(s.tool)
-        && !s.declined && !s.timedOut && !s.refused && s.success !== false);
+        && !s.active && !s.declined && !s.autoDeclined && !s.timedOut && !s.refused && s.success === true);
 }

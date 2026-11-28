@@ -179,13 +179,19 @@ public:
     }
     void printReasoningProgress(size_t words) override {
         emit({{"type", "status"}, {"phase", "reasoning"}, {"words", words},
-              {"message", "Reasoning - " + std::to_string(words) + " words so far"}});
+              {"message", "Reasoning - " + std::to_string(words) + (words == 1 ? " word so far" : " words so far")}});
     }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
     void printCompletion(int, int) override {}
     void printStreamToken(const std::string& token) override { emit({{"type", "token"}, {"delta", token}}); }
+    void printAnswerRetracted(const std::string&) override {
+        emit({{"type", "status"},
+              {"phase", "answer_check"},
+              {"message", "Checking the answer"},
+              {"retracts_answer", true}});
+    }
 
     void emit(const json& ev) {
         std::shared_ptr<Run> run;
@@ -222,12 +228,20 @@ struct Session {
     std::shared_ptr<std::atomic<bool>> internetOff = std::make_shared<std::atomic<bool>>(false);
     std::shared_ptr<std::atomic<bool>> memoryOff = std::make_shared<std::atomic<bool>>(false);
     std::shared_ptr<std::atomic<bool>> memoryPrivate = std::make_shared<std::atomic<bool>>(false);
-    std::set<std::string> roots;      // allowed folders and attached files
-    std::set<std::string> builtWith;  // roots the agent was built with
-    std::set<std::string> approved;   // outside paths the user let in at a card, or full access opened
-    std::set<std::string> declined;   // paths the user said no to in declinedRun
+    std::set<std::string> folderRoots;  // allowed folders (grow-only per chat)
+    std::set<std::string> docRoots;     // currently attached files (synced each turn)
+    std::set<std::string> builtWith;    // combined roots the agent was built with
+    std::set<std::string> approved;     // outside paths the user let in at a card, or full access opened
+    std::set<std::string> declined;     // paths the user said no to in declinedRun
     std::string declinedRun;
-    std::set<std::string> indexed;    // attached documents already indexed
+    std::set<std::string> indexed;      // attached documents already indexed
+    bool scoped = false;                // ever given a folder or file: never falls back to home
+
+    std::set<std::string> effectiveRoots() const {
+        std::set<std::string> out = folderRoots;
+        out.insert(docRoots.begin(), docRoots.end());
+        return out;
+    }
     std::string workingDirectory;
     // A one-shot run's gaia -p flags, applied when its agent is built.
     bool noWeb = false;
@@ -506,10 +520,11 @@ private:
 
     std::string defaultModel() const { return opts_.defaultModel.empty() ? resolveGaiaModel() : opts_.defaultModel; }
 
-    // Build (or rebuild, when the chat's folders grew) the session's agent.
+    // Build (or rebuild, when the chat's folders or attached documents changed) the session's agent.
     // Only called while the session holds its busy flag.
     void ensureAgent(Session& s, const ModelServer& server) {
-        if (s.agent && s.builtWith == s.roots) {
+        const std::set<std::string> roots = s.effectiveRoots();
+        if (s.agent && s.builtWith == roots) {
             AgentConfig cfg = s.agent->config();
             cfg.baseUrl = server.baseUrl;
             cfg.apiKey = server.apiKey;
@@ -533,7 +548,11 @@ private:
         if (const std::string tier = getEnvVar("GAIA_FEATURE_TIER"); !tier.empty()) cfg.featureTier = tier;
         GaiaAgent::Options o;
         o.maxHelpers = opts_.maxHelpers;
-        if (s.roots.empty()) {
+        if (roots.empty() && s.scoped) {
+            // Detaching a chat's last file must not widen it to home: a folder GAIA owns grants nothing else.
+            const std::string own = gaiaHome();
+            o.workspaceRoots = {((own.empty() ? fs::temp_directory_path() : fs::u8path(own)) / "gaiacpp-no-folders").u8string()};
+        } else if (roots.empty()) {
             // Roots are UTF-8; the environment's narrow strings are the code page on Windows.
 #ifdef _WIN32
             const wchar_t* profile = _wgetenv(L"USERPROFILE");
@@ -543,7 +562,7 @@ private:
 #endif
             o.workspaceRoots = {(home.empty() ? fs::current_path() : home).u8string()};
         } else {
-            o.workspaceRoots.assign(s.roots.begin(), s.roots.end());
+            o.workspaceRoots.assign(roots.begin(), roots.end());
         }
         o.workspaceRoots.insert(o.workspaceRoots.end(), s.approved.begin(), s.approved.end());
         // As gaiacpp -p applies the same flags.
@@ -577,7 +596,7 @@ private:
         std::lock_guard<std::mutex> lock(s.agentMu);
         s.agent = std::move(agent);
         s.console = consolePtr;
-        s.builtWith = s.roots;
+        s.builtWith = roots;
         s.indexed.clear();  // a new agent has a new document index
     }
 
@@ -948,6 +967,20 @@ private:
         });
     }
 
+    // Plain-English action names for agent_ui unattended refusals, matching relay.py's labels.
+    static std::string unattendedActionLabel(const std::string& action) {
+        if (action == "file_write") return "Writing file";
+        if (action == "file_edit") return "Editing file";
+        if (action == "bash_execute") return "Running a shell command";
+        if (action == "web_fetch") return "Reading web page";
+        if (action == "take_screenshot") return "Taking screenshot";
+        if (action == "generate_image") return "Generating image";
+        if (action == kPathAccessPrompt) return "Accessing a folder or file";
+        std::string label = action;
+        std::replace(label.begin(), label.end(), '_', ' ');
+        return label.empty() ? "tool" : label;
+    }
+
     // The turn's last word when it stopped at a gated tool nobody could approve.
     static json unattendedRefusal(const Run& run) {
         const bool path = run.refusedAction == kPathAccessPrompt;
@@ -961,6 +994,13 @@ private:
                        "asking, or --full-access to also turn the shell guardrails off.";
             answer = "I stopped before running '" + run.refusedAction +
                      "' because it needs your approval, and gaia -p has nobody to ask. " + remedy;
+        } else if (run.surface == "agent_ui") {
+            // Worded as relay.py's _unattended_approval_text() words it for the Python agent.
+            answer = "GAIA stopped this unattended run at \"" + unattendedActionLabel(run.refusedAction) +
+                     "\": that step needs your approval, and nobody is there to give it. "
+                     "Unattended runs, such as scheduled tasks and autonomous goals, "
+                     "can't use steps that ask first, such as writing files or running commands. "
+                     "Ask GAIA in a chat instead, where you can approve it.";
         } else {
             answer = "I stopped before running '" + run.refusedAction +
                      "' because it needs your explicit approval, and this request has nobody to ask: it "
@@ -1146,6 +1186,7 @@ private:
         const std::string sid = body.contains("session_id") && body["session_id"].is_string()
                                     ? body["session_id"].get<std::string>() : "";
         if (!sid.empty() && !validSessionId(sid)) throw BadRequest(400, "Invalid session_id");
+        const bool hasDocuments = body.contains("documents") && !body["documents"].is_null();
         const auto documents = absolutePaths(body, "documents");
         const auto allowed = absolutePaths(body, "allowed_paths");
         std::string workdir;
@@ -1268,9 +1309,21 @@ private:
                           << std::endl;
             }
         }
-        // Folder scope only grows within a chat; an attached file is granted as that file.
-        for (const auto& p : allowed) s->roots.insert(p);
-        for (const auto& d : documents) s->roots.insert(d);
+        // Folder scope only grows within a chat; attached files follow the current list so detaching revokes access.
+        const std::set<std::string> currentAllowed(allowed.begin(), allowed.end());
+        const std::set<std::string> currentDocs(documents.begin(), documents.end());
+        if (hasDocuments) {
+            for (const auto& prev : s->docRoots) {
+                if (!currentDocs.count(prev) && !currentAllowed.count(prev)) {
+                    s->folderRoots.erase(prev);
+                }
+            }
+            s->docRoots = currentDocs;
+        }
+        for (const auto& p : allowed) {
+            if (!currentDocs.count(p)) s->folderRoots.insert(p);
+        }
+        if (!s->folderRoots.empty() || !s->docRoots.empty()) s->scoped = true;
         if (!workdir.empty()) s->workingDirectory = workdir;
         if (!memory.empty()) {
             s->memoryOff->store(memory == "off");
@@ -1281,15 +1334,15 @@ private:
         }
         {
             json folders = json::array();
-            for (const auto& r : s->roots) folders.push_back(r);
+            for (const auto& r : s->effectiveRoots()) folders.push_back(r);
             std::cerr << "turn " << runId << " session " << s->id << " folders=" << dumps(folders)
                       << " cwd=" << dumps(s->workingDirectory) << " memory_off=" << s->memoryOff->load()
                       << " internet_off=" << s->internetOff->load() << std::endl;
         }
 
         try {
-        std::thread([this, s, run, history = std::move(history), text, model, maxSteps, documents, reasoning,
-                     undoRequested, hasTurns]() mutable {
+        std::thread([this, s, run, history = std::move(history), text, model, maxSteps, documents, hasDocuments,
+                     reasoning, undoRequested, hasTurns]() mutable {
             // One chat works at a time: the working folder is process-wide. A
             // chat waiting on its user lets go of it (see confirm()).
             std::unique_lock<std::timed_mutex> turnLock(turnsMu_, std::defer_lock);
@@ -1349,7 +1402,7 @@ private:
                     s->console->emit({{"type", "status"},
                                       {"message", "Undo may not work for this turn: gaiacpp doesn't record file changes yet."}});
                 }
-                const std::string unreadable = indexDocuments(*s, documents);
+                const std::string unreadable = indexDocuments(*s, documents, hasDocuments);
                 if (!unreadable.empty()) throw UnreadableAttachment(unreadable);
                 AgentConfig cfg = s->agent->config();
                 if (!model.empty()) cfg.modelId = model;
@@ -1523,7 +1576,7 @@ private:
     static std::string chatFolder(const Session& s) {
         std::string dir = s.workingDirectory;
         if (dir.empty()) {
-            for (const auto& r : s.roots) {
+            for (const auto& r : s.folderRoots) {
                 std::error_code ec;
                 if (fs::is_directory(r, ec)) {
                     dir = r;
@@ -1555,9 +1608,21 @@ private:
         return "";
     }
 
-    // Attached documents are indexed before the turn, each once per agent. Returns what to tell the
-    // user when one can't be read on this PC at all; the model would only guess its way around that.
-    std::string indexDocuments(Session& s, const std::vector<std::string>& documents) {
+    // Attached documents are synced before the turn: detached files leave the index and new ones
+    // are indexed once per agent. Returns what to tell the user when one can't be read on this PC
+    // at all; the model would only guess its way around that.
+    std::string indexDocuments(Session& s, const std::vector<std::string>& documents, bool hasDocuments) {
+        if (hasDocuments) {
+            const std::set<std::string> current(documents.begin(), documents.end());
+            for (auto it = s.indexed.begin(); it != s.indexed.end();) {
+                if (!current.count(*it)) {
+                    if (DocumentIndex* docs = s.agent->documents()) docs->removeFile(*it);
+                    it = s.indexed.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
         std::vector<std::string> pending;
         for (const auto& d : documents) {
             if (!s.indexed.count(d)) pending.push_back(d);
