@@ -795,6 +795,11 @@ TEST_F(GaiacppCli, PrintModeAcceptsDashPrefixedPromptsAndEndOfOptions) {
         EXPECT_EQ(badFlag.exitCode, 2) << badFlag.stderr_output;
         EXPECT_NE(badFlag.stderr_output.find("--bogus-flag"), std::string::npos) << badFlag.stderr_output;
 
+        // `--name=value` is option-shaped too: a mistyped flag is refused, not sent to the model.
+        const gaia::ProcessResult eqFlag = runRaw("-p --output-format=json " + base);
+        EXPECT_EQ(eqFlag.exitCode, 2) << eqFlag.stderr_output;
+        EXPECT_NE(eqFlag.stderr_output.find("--output-format=json"), std::string::npos) << eqFlag.stderr_output;
+
         const gaia::ProcessResult extra = runRaw(base + "-p -- \"first\" \"second\"");
         EXPECT_EQ(extra.exitCode, 2) << extra.stderr_output;
         EXPECT_NE(extra.stderr_output.find("second"), std::string::npos) << extra.stderr_output;

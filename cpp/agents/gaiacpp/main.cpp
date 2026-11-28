@@ -266,7 +266,7 @@ double toTemperature(const std::string& flag, const std::string& v) {
     return t;
 }
 
-// True when a token looks like a CLI option (`-x`, `--flag`, or `--`), so `-p`
+// True when a token looks like a CLI option (`-x`, `--flag`, `--flag=value`, or `--`), so `-p`
 // leaves it to the flag parser instead of consuming it as a prompt.
 bool looksLikeOption(const std::string& s) {
     if (s == "--") return true;
@@ -274,6 +274,7 @@ bool looksLikeOption(const std::string& s) {
     if (s.size() >= 3 && s[0] == '-' && s[1] == '-' && std::isalpha(static_cast<unsigned char>(s[2]))) {
         for (size_t i = 3; i < s.size(); ++i) {
             const unsigned char c = static_cast<unsigned char>(s[i]);
+            if (c == '=') return true;
             if (!std::isalnum(c) && c != '-' && c != '_') return false;
         }
         return true;
