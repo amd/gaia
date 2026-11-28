@@ -220,7 +220,7 @@ const RUN_NATIVE_AGENT_FAILED = {
     ],
 };
 // The chosen gaiacpp isn't on this PC: the same two fixes a new chat offers (#8772).
-const NATIVE_MISSING = 'gaiacpp is chosen as the agent but it is not installed on this PC (looked in: C:\Users\you\.gaia\bin\gaiacpp.exe).';
+const NATIVE_MISSING = 'gaiacpp is chosen as the agent but it is not installed on this PC (looked in: C:\\Users\\you\\.gaia\\bin\\gaiacpp.exe).';
 const NATIVE_MISSING_FAILED = `The test chat couldn't run: ${NATIVE_MISSING.slice(0, -1)}. Download gaiacpp again, or finish setup on the Python agent. The setup report has the details.`;
 const RUN_NATIVE_AGENT_MISSING = {
     ...RUN, state: 'failed', error: NATIVE_MISSING_FAILED, models: DONE_ROWS,

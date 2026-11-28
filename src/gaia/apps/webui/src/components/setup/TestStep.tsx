@@ -91,6 +91,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
     // gaiacpp is missing or damaged: the new-chat screen's two fixes, download it or use the Python agent.
     const recovery = nativeFailed ? required.find((r) => onNative(r) && r.agent_problem)?.agent_problem ?? null : null;
     const [switching, setSwitching] = useState(false);
+    const [recoveryBusy, setRecoveryBusy] = useState(false);
     const [switchError, setSwitchError] = useState<Param | null>(null);
     const finishOnPython = async () => {
         setSwitching(true);
@@ -177,7 +178,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
             )}
             {stopped && (
                 <div className="setup-failure" role="alert">
-                    {recovery ? <AgentRecovery problem={recovery} onRetry={onRetry} /> : (
+                    {recovery ? <AgentRecovery problem={recovery} onRetry={onRetry} onBusy={setRecoveryBusy} nested /> : (
                         <p>{run.state === 'cancelled' ? t('setup.test.cancelled')
                             : nativeFailed ? t('setup.test.failedNative', { name: NATIVE })
                                 : required.some((r) => r.kind === 'memory') ? t('setup.test.failedMemory') : t('setup.test.failedHelp')}</p>
@@ -189,7 +190,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                         {modelAtFault && onChooseAnother && (
                             <button type="button" className="btn-secondary" onClick={onChooseAnother} disabled={busy}>{t('setup.test.chooseAnother')}</button>
                         )}
-                        <button type="button" className={broken.length || nativeFailed ? 'btn-secondary' : 'btn-primary'} onClick={onRetry} disabled={busy || switching}>{t('setup.test.tryAgain')}</button>
+                        <button type="button" className={broken.length || nativeFailed ? 'btn-secondary' : 'btn-primary'} onClick={onRetry} disabled={busy || switching || (recovery !== null && recoveryBusy)}>{t('setup.test.tryAgain')}</button>
                         {nativeFailed && !recovery && (
                             <button type="button" className="btn-primary setup-wrap-btn" onClick={() => void finishOnPython()} disabled={busy || switching}>
                                 {switching && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('setup.test.finishOnPython')}
