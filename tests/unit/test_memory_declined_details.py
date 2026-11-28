@@ -369,3 +369,23 @@ def test_a_decline_with_no_save_is_not_nudged_to_save():
 
     assert host._unsaved_memory_request(set()) is None
     assert host.answer_problems("Okay, I left your phone number out.") == []
+
+
+def test_stored_both_when_one_refused_is_flagged_and_repaired():
+    STORED = {"status": "stored", "stored": 1, "knowledge_id": "k1"}
+    host = _checked(ISSUE, (STORED, REFUSED))
+
+    problems = host.answer_problems("Stored both.")
+    assert problems == ["This was not saved to memory: you asked to leave it out."]
+    repair = host.answer_repair_prompt(problems)
+    assert "Say plainly what was saved and that you left the other out" in repair
+    assert "Do not call remember" in repair
+
+
+def test_honest_partial_save_answer_passes():
+    STORED = {"status": "stored", "stored": 1, "knowledge_id": "k1"}
+    host = _checked(ISSUE, (STORED, REFUSED))
+
+    honest = "I saved your dog's name and left your phone number out."
+    assert host.answer_problems(honest) == []
+
