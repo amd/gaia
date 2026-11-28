@@ -497,8 +497,23 @@ TEST(WebToolsTest, RefusesLocalAndPrivateAddresses) {
                             "http://[::1]:8080/"}) {
         json r = reg.executeTool("web_fetch", json{{"url", url}});
         EXPECT_EQ(r["status"], "error") << url;
-        EXPECT_NE(r["error"].get<std::string>().find("Refused"), std::string::npos) << url << r.dump();
+        const std::string err = r["error"].get<std::string>();
+        EXPECT_NE(err.find("Refused"), std::string::npos) << url << r.dump();
+        EXPECT_EQ(err.find("web_fetch"), std::string::npos) << url << r.dump();
+        EXPECT_EQ(err.find("GAIA_WEB_FETCH_ALLOW_PRIVATE"), std::string::npos) << url << r.dump();
     }
+}
+
+TEST(WebToolsTest, DnsFailureUsesPlainWordingWithoutEnvVarHint) {
+    ToolRegistry reg;
+    WebTools::registerAll(reg);
+    reg.setConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    json r = reg.executeTool("web_fetch", json{{"url", "https://nonexistent.invalid/demo"}});
+    EXPECT_EQ(r["status"], "error");
+    const std::string err = r["error"].get<std::string>();
+    EXPECT_NE(err.find("nonexistent.invalid"), std::string::npos) << err;
+    EXPECT_EQ(err.find("web_fetch"), std::string::npos) << err;
+    EXPECT_EQ(err.find("GAIA_WEB_FETCH_ALLOW_PRIVATE"), std::string::npos) << err;
 }
 
 TEST(AgentResilience, EmptyReplyIsRetriedOnce) {
