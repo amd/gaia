@@ -770,10 +770,12 @@ def test_base_agent_calls_the_task_start_hook_before_composing_the_prompt():
     assert called.index("_on_task_start") < called.index("_refresh_active_tool_filter")
 
 
-def test_base_agent_hook_is_a_no_op_so_agents_without_the_mixin_are_unaffected():
+def test_base_agent_hook_needs_nothing_from_the_mixin():
+    from types import SimpleNamespace
+
     from gaia.agents.base.agent import Agent
 
-    assert Agent._on_task_start(object(), "anything") is None
+    assert Agent._on_task_start(SimpleNamespace(), "anything") is None
 
 
 def test_the_agents_own_source_tree_is_never_the_project(monkeypatch):

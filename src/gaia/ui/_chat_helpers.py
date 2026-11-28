@@ -2884,6 +2884,10 @@ def _refuse_internet_off(
     )
 
 
+class ModelServerDownError(RuntimeError):
+    """A relayed run failed because the model server did not answer."""
+
+
 def relay_one_prompt(
     handler,
     prompt: str,
@@ -2930,7 +2934,10 @@ def relay_one_prompt(
         return None
     content = str(answer.get("content") or "")
     if answer.get("failed"):
-        raise RuntimeError(content or "The GAIA agent's run failed.")
+        message = content or "The GAIA agent's run failed."
+        if answer.get("failure") == MODEL_SERVER_DOWN:
+            raise ModelServerDownError(message)
+        raise RuntimeError(message)
     return content
 
 
@@ -3921,12 +3928,12 @@ def _failed_turn_program(
     """``gaiacpp`` when a failed turn ran on the native agent, else None.
 
     The UI then says which agent the chat runs on and how to switch; it never
-    switches by itself. *failure* is the turn's named cause: those are the
-    model server's, which the Python agent would hit too, so none is named.
+    switches by itself. A model-server outage is not the agent's fault, so it
+    names no program.
     """
     from gaia.daemon.sidecars import fetch
 
-    if agent_type != FLAGSHIP_AGENT_ID or failure:
+    if agent_type != FLAGSHIP_AGENT_ID or failure == MODEL_SERVER_DOWN:
         return None
     if fetch.saved_flagship() != fetch.NATIVE_FLAGSHIP:
         return None

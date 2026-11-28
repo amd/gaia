@@ -10,7 +10,7 @@
 #
 # Runs on Ubuntu: every assertion here is deterministic (no Lemonade, no
 # hardware). The on-hardware golden path (UI -> daemon -> sidecar -> Lemonade)
-# lives in tests/integration/eval/test_sidecar_eval.py and runs on the
+# lives in tests/integration/eval/test_sidecar_eval_gaia.py and runs on the
 # self-hosted strix-halo runner (see Agent Behavior E2E), not here.
 
 name: Distributed Seams

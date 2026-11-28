@@ -68,6 +68,24 @@ class QueryOutcome:
     usage: Optional[Dict[str, Any]] = None
     # The turn's model messages; the agent sends them only when ``turns`` was sent.
     model_messages: Optional[List[Dict[str, Any]]] = None
+    # The run's time limit stopped the turn (contract >= 2.32).
+    time_limit_reached: bool = False
+    # Tools the run's restrictions withheld (contract >= 2.32).
+    withheld_tools: Optional[List[str]] = None
+
+
+#: The flagship contract that applies the one-shot run fields below.
+RUN_SCOPED_MIN_API = (2, 32)
+
+#: ``run_query`` keyword -> the ``gaia -p`` flag that asks for it.
+RUN_SCOPED_FLAGS = {
+    "time_limit": "--time-limit",
+    "disallowed_tools": "--disallowed-tools",
+    "no_web": "--no-web",
+    "no_skills": "--no-skills",
+    "skip_permissions": "--dangerously-skip-permissions",
+    "full_access": "--full-access",
+}
 
 
 class ConsoleRenderer:
@@ -92,6 +110,8 @@ class ConsoleRenderer:
         self.final_failed = False
         self.final_usage: Optional[Dict[str, Any]] = None
         self.final_model_messages: Optional[List[Dict[str, Any]]] = None
+        self.final_time_limit_reached = False
+        self.final_withheld_tools: Optional[List[str]] = None
         self.error_detail: Optional[str] = None
 
     # -- dispatch ----------------------------------------------------------
@@ -148,6 +168,8 @@ class ConsoleRenderer:
         self.final_failed = bool(event.get("failed"))
         self.final_usage = event.get("usage")
         self.final_model_messages = event.get("model_messages")
+        self.final_time_limit_reached = bool(event.get("time_limit_reached"))
+        self.final_withheld_tools = event.get("withheld_tools")
         if self._answer_streamed:
             # Tokens already printed the answer live — just end the line cleanly.
             if answer:
@@ -342,6 +364,14 @@ def run_query(
     working_directory: Optional[str] = None,
     allowed_paths: Optional[List[str]] = None,
     turns: Optional[List[List[Dict[str, Any]]]] = None,
+    surface: Optional[str] = None,
+    can_answer_questions: Optional[bool] = None,
+    time_limit: Optional[int] = None,
+    disallowed_tools: Optional[List[str]] = None,
+    no_web: bool = False,
+    no_skills: bool = False,
+    skip_permissions: bool = False,
+    full_access: bool = False,
 ) -> QueryOutcome:
     """Ensure the daemon + *agent_id* sidecar, stream ``POST /v1/<agent>/query``
     through the relay, and render the canonical SSE events.
@@ -366,6 +396,16 @@ def run_query(
     ``turns`` is the earlier turns as the model saw them; sent, even as ``[]``,
     it makes the ``final`` carry this turn's ``model_messages``. Omitted, likewise.
 
+    ``surface`` names the front-end (``"cli"`` for ``gaia -p``) so the agent
+    words its remedies for it; ``can_answer_questions=False`` says nobody will
+    answer a mid-run question. Omitted, likewise.
+
+    ``time_limit``, ``disallowed_tools``, ``no_web``, ``no_skills``,
+    ``skip_permissions`` and ``full_access`` are the ``gaia -p`` flags, applied
+    by the agent to this one run (contract >= 2.32). They need a one-shot run
+    (no ``session_id``), and an agent that predates them is refused with a
+    :class:`DaemonError` before the turn starts, never run without them.
+
     The CLI presents ONLY the daemon client token; it never learns the sidecar's
     port or bearer. Returns a :class:`QueryOutcome` whose ``exit_code`` is 0 on a
     terminal ``final``, 1 on a terminal ``error`` (or a stream that ends without
@@ -376,8 +416,28 @@ def run_query(
 
     renderer = renderer or ConsoleRenderer(verbose=verbose)
 
+    run_scoped: Dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("time_limit", time_limit),
+            ("disallowed_tools", list(disallowed_tools or [])),
+            ("no_web", no_web),
+            ("no_skills", no_skills),
+            ("skip_permissions", skip_permissions),
+            ("full_access", full_access),
+        )
+        if value
+    }
+    if run_scoped and session_id:
+        raise ValueError(
+            f"{_flag_names(run_scoped)} apply to one run only and can't be sent "
+            "with a session_id."
+        )
+
     # Ensure the daemon is up and the sidecar is running (loud on failure).
     inst = client.ensure_agent(agent_id)
+    if run_scoped:
+        _require_run_scoped_support(inst, agent_id, run_scoped)
 
     run_id = str(uuid.uuid4())
     payload: Dict[str, Any] = {
@@ -397,6 +457,11 @@ def run_query(
         payload["allowed_paths"] = list(allowed_paths)
     if turns is not None:
         payload["turns"] = list(turns)
+    if surface:
+        payload["surface"] = surface
+    if can_answer_questions is not None:
+        payload["can_answer_questions"] = can_answer_questions
+    payload.update(run_scoped)
 
     url = f"{inst.base_url}/v1/{agent_id}/query"
     headers = {
@@ -479,6 +544,65 @@ def run_query(
         trace_path=_trace(terminal_type=terminal_type),
         usage=renderer.final_usage,
         model_messages=renderer.final_model_messages,
+        time_limit_reached=renderer.final_time_limit_reached,
+        withheld_tools=renderer.final_withheld_tools,
+    )
+
+
+def _flag_names(run_scoped: Dict[str, Any]) -> str:
+    return ", ".join(RUN_SCOPED_FLAGS[key] for key in run_scoped)
+
+
+def _require_run_scoped_support(
+    inst, agent_id: str, run_scoped: Dict[str, Any]
+) -> None:
+    """Refuse the run before it starts if *agent_id* can't apply its flags.
+
+    An agent applies them when it speaks contract 2.32, or names them in
+    ``capabilities.one_shot_fields`` (gaiacpp, whose contract is older). One
+    that does neither would reject the fields or run the turn unrestricted.
+    """
+    import requests
+
+    url = f"{inst.base_url}/v1/{agent_id}/version"
+    try:
+        response = requests.get(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            timeout=_CONNECT_TIMEOUT,
+        )
+        response.raise_for_status()
+        body = response.json()
+        api = str(body.get("apiVersion") or "")
+        capabilities = body.get("capabilities")
+    except (requests.exceptions.RequestException, ValueError, AttributeError) as e:
+        raise DaemonError(
+            f"could not read the '{agent_id}' agent's version through the daemon "
+            f"at {inst.base_url}: {e}. Check `gaia daemon status` and the daemon "
+            f"log at {paths.log_path()}."
+        ) from e
+    try:
+        have = tuple(int(part) for part in api.split(".")[:2])
+    except ValueError:
+        have = ()
+    if len(have) == 2 and have >= RUN_SCOPED_MIN_API:
+        return
+    fields = (
+        capabilities.get("one_shot_fields") if isinstance(capabilities, dict) else None
+    )
+    applied = set(fields) if isinstance(fields, list) else set()
+    missing = {key: True for key in run_scoped if key not in applied}
+    if not missing:
+        return
+    need = ".".join(str(n) for n in RUN_SCOPED_MIN_API)
+    raise DaemonError(
+        f"{_flag_names(missing)} needs a GAIA agent that speaks contract {need} "
+        "or newer or lists the flag, and the one GAIA's background service runs "
+        f"speaks {api or 'an unknown version'} and doesn't, so it would run the "
+        "turn without it. Update GAIA. Or, if `flagship_agent` is `gaiacpp` in "
+        "~/.gaia/config.json, run the turn on the Python agent: `gaia config set "
+        "flagship_agent gaiapy`, then `gaia daemon stop-agent gaia` once nothing "
+        "else is answering, and run gaia -p again."
     )
 
 

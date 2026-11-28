@@ -31,10 +31,13 @@ import pytest
 
 from gaia.connectors.activations import (
     ACTIVATIONS_FILE,
+    FLAGSHIP_AGENT_ID,
     SCHEMA_VERSION,
     activate_agent,
     deactivate_agent,
+    effective_activations,
     is_agent_active,
+    is_mcp_server_active,
     list_agent_activations,
     load_activations,
     revoke_all_activations_for,
@@ -87,11 +90,15 @@ class TestRoundTrip:
             "custom:abc:inbox": True,
         }
 
-    def test_deactivate_removes_only_target(self, fake_home):
+    def test_deactivate_turns_off_only_target(self, fake_home):
         activate_agent("github", "builtin:chat")
         activate_agent("github", "custom:abc:inbox")
         deactivate_agent("github", "builtin:chat")
-        assert list_agent_activations("github") == {"custom:abc:inbox": True}
+        # The off switch is stored, so a server that defaults to on stays off.
+        assert list_agent_activations("github") == {
+            "builtin:chat": False,
+            "custom:abc:inbox": True,
+        }
 
     def test_deactivate_unknown_is_idempotent(self, fake_home):
         deactivate_agent("github", "nobody")  # must not raise
@@ -235,5 +242,56 @@ class TestNamespacedAgentIds:
         activate_agent("github", "custom:abc:chat")
         deactivate_agent("github", "custom:abc:chat")
         listing = list_agent_activations("github")
-        assert "builtin:chat" in listing
-        assert "custom:abc:chat" not in listing
+        assert listing == {"builtin:chat": True, "custom:abc:chat": False}
+
+
+class TestUserAddedServerDefault:
+    """A server the user added to mcp_servers.json is on for the flagship (#8668)."""
+
+    def test_on_for_the_flagship_until_decided(self, fake_home):
+        assert is_mcp_server_active("toy", FLAGSHIP_AGENT_ID) is True
+        assert effective_activations("toy") == {FLAGSHIP_AGENT_ID: True}
+        # Nothing is written for a default.
+        assert load_activations() == {}
+
+    def test_off_for_every_other_agent(self, fake_home):
+        assert is_mcp_server_active("toy", "custom:abc:inbox") is False
+        assert is_mcp_server_active("toy", "builtin:chat") is False
+
+    def test_turning_it_off_is_remembered(self, fake_home):
+        deactivate_agent("toy", FLAGSHIP_AGENT_ID)
+        assert is_mcp_server_active("toy", FLAGSHIP_AGENT_ID) is False
+        assert load_activations() == {"toy": {FLAGSHIP_AGENT_ID: False}}
+        activate_agent("toy", FLAGSHIP_AGENT_ID)
+        assert is_mcp_server_active("toy", FLAGSHIP_AGENT_ID) is True
+
+    def test_a_catalog_server_stays_opt_in(self, fake_home):
+        assert is_mcp_server_active("mcp-github", FLAGSHIP_AGENT_ID) is False
+        assert effective_activations("mcp-github") == {}
+        activate_agent("mcp-github", FLAGSHIP_AGENT_ID)
+        assert is_mcp_server_active("mcp-github", FLAGSHIP_AGENT_ID) is True
+
+    def test_a_catalog_server_stays_opt_in_whatever_keyring_reports(
+        self, fake_home, monkeypatch
+    ):
+        # An access check must not fail open: a catalog id is never mistaken
+        # for a user-added server, whatever the import machinery says.
+        import importlib.util
+
+        real_find_spec = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util,
+            "find_spec",
+            lambda name, *a, **kw: (
+                None if name == "keyring" else real_find_spec(name, *a, **kw)
+            ),
+        )
+        assert is_mcp_server_active("mcp-github", FLAGSHIP_AGENT_ID) is False
+        assert effective_activations("mcp-github") == {}
+
+    @pytest.mark.parametrize("agent", ["", "installed:gaia ", "INSTALLED:GAIA"])
+    def test_only_the_exact_flagship_id_gets_the_default(self, fake_home, agent):
+        assert is_mcp_server_active("toy", agent) is False
+
+    def test_the_ledger_alone_never_reports_the_default(self, fake_home):
+        assert is_agent_active("toy", FLAGSHIP_AGENT_ID) is False

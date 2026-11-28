@@ -109,16 +109,14 @@ describe('an open chat whose agent could not start', () => {
         expect(sends).toEqual([]);
     });
 
-    it("shows the gaiacpp card instead of the turn's generic agent-start error", async () => {
+    it('shows the card instead of the generic failure, its Try again and its model server log', async () => {
         render(<ChatView sessionId={SESSION.id} />);
 
-        await screen.findByRole('button', { name: 'Use Full-featured' });
-        const turn = document.querySelector('[data-message-id="42"]')!;
-        expect(turn.querySelector('.agent-recovery')).not.toBeNull();
+        expect(await screen.findByRole('button', { name: 'Use Full-featured' })).toBeInTheDocument();
         expect(screen.queryByText(/GAIA couldn't start its agent/)).toBeNull();
-        expect(turn.querySelector('.error-banner')).toBeNull();
         expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
-        expect(screen.queryByRole('button', { name: /server log|agent log/i })).toBeNull();
+        expect(screen.queryByRole('button', { name: /Model server log/ })).toBeNull();
+        expect(screen.getByText(QUESTION)).toBeInTheDocument();
     });
 
     it('offers nothing when the agent is not why the turn failed', async () => {

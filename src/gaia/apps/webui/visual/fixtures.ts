@@ -228,6 +228,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /setup/check': { ready: true, steps: [] },
     'GET /setup/status': { state: 'idle' },
     'GET /setup/needs/chat': { job: 'chat', needed: false, model: null, disk_free_gb: null },
+    'GET /setup/needs/embedding': { job: 'embedding', needed: false, model: null, disk_free_gb: null },
     'GET /settings': SETTINGS,
     'GET /agent-programs': AGENT_PROGRAMS,
     'GET /providers': {
@@ -271,7 +272,7 @@ const ROUTES: Record<string, unknown> = {
     },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
-    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
+    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /goals/health': { error: null },

@@ -22,6 +22,7 @@
 #include <optional>
 #include <random>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -658,6 +659,34 @@ TEST_F(GaiacppSidecar, PlainQueryStreamsTokensThenFinalWithUsage) {
     EXPECT_EQ(unknown->status, 404);
 }
 
+// The app sets the reply limit itself, so its user is never told to pass --max-tokens.
+TEST_F(GaiacppSidecar, AReplyThatRunsOutWhileReasoningNamesSomethingAnAppUserCanDo) {
+    mock().enableSseStreaming(true);
+    mock().pushSseStream("data: " + json{{"choices", json::array({{{"index", 0},
+                                                                  {"delta", {{"reasoning_content", "thinking for a long time"}}},
+                                                                  {"finish_reason", "length"}}})}}
+                                           .dump() +
+                              "\n\ndata: [DONE]\n\n");
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-limit", "refactor everything", {{"session_id", "chat-limit"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    const json& final = events.back();
+    EXPECT_TRUE(final.value("failed", false)) << t.describe();
+    const std::string answer = final.value("answer", "");
+    EXPECT_NE(answer.find("reply limit of"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("Break the request into smaller steps"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("--max-tokens"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("LLM error"), std::string::npos) << answer;
+    bool progress = false;
+    for (const auto& e : events) {
+        progress = progress || (e.value("type", "") == "status" && e.value("phase", "") == "reasoning" &&
+                                e.value("words", 0) == 5);
+    }
+    EXPECT_TRUE(progress) << "no reasoning progress was reported: " << t.describe();
+}
+
 TEST_F(GaiacppSidecar, TheHelperSettingReachesAChatsAgent) {
     ASSERT_NO_FATAL_FAILURE(startSidecar({{"GAIA_MAX_HELPERS", std::string("0")}}));
     mock().pushResponse(answerReply("hi"));
@@ -690,6 +719,43 @@ TEST_F(GaiacppSidecar, AChatsAgentHasDelegateTaskByDefault) {
         if (tool["name"] == "delegate_task") offered = true;
     }
     EXPECT_TRUE(offered);
+}
+
+// A thinking model on a large window must not spend its whole reply reasoning.
+TEST_F(GaiacppSidecar, TheReplyLimitFollowsTheWindowTheModelIsLoadedWith) {
+    const auto loadedAt = [](int ctx) {
+        return R"({"status":"ok","all_models_loaded":[{"model_name":"mock-model","recipe_options":{"ctx_size":)" +
+               std::to_string(ctx) + "}}]}";
+    };
+    mock().setHealth(loadedAt(131072));
+    mock().pushResponse(answerReply("one"));
+    mock().pushResponse(answerReply("two"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    {
+        Turn t(port_, queryBody("run-window-1", "hi", {{"session_id", "chat-window"}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+    }
+    mock().setHealth(loadedAt(65536));
+    {
+        Turn t(port_, queryBody("run-window-2", "hi again", {{"session_id", "chat-window"}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+    }
+    auto sent = modelRequests();
+    ASSERT_EQ(sent.size(), 2u);
+    EXPECT_EQ(sent[0].value("max_tokens", 0), 32768) << "a quarter of a 128K window";
+    EXPECT_EQ(sent[1].value("max_tokens", 0), 16384) << "a quarter of a 64K window";
+}
+
+TEST_F(GaiacppSidecar, GaiaMaxTokensStillSetsTheReplyLimit) {
+    mock().setHealth(
+        R"({"status":"ok","all_models_loaded":[{"model_name":"mock-model","recipe_options":{"ctx_size":131072}}]})");
+    mock().pushResponse(answerReply("one"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"GAIA_MAX_TOKENS", std::string("5000")}}));
+    Turn t(port_, queryBody("run-window-env", "hi", {{"session_id", "chat-window-env"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto sent = modelRequests();
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_EQ(sent[0].value("max_tokens", 0), 5000);
 }
 
 // ---- 4. a tool turn ----
@@ -890,6 +956,59 @@ TEST_F(GaiacppSidecar, AlwaysOnAFileWriteAllowsOnlyThatWrite) {
     EXPECT_TRUE(json::parse(send("GET", "/v1/gaia/sessions/chat-write/grants", bearer())->body)["grants"].empty());
 }
 
+#ifndef _WIN32
+// The desktop card for "mkdir a && rm -rf b" must not offer "Always allow Run `mkdir b`".
+TEST_F(GaiacppSidecar, ALineOfSeveralCommandsIsNotOfferedAlways) {
+    const std::string chained = "mkdir " + (work_ / "made1").string() + " && rm -rf " + (work_ / "made3").string();
+    for (int i = 0; i < 2; ++i) {
+        mock().pushResponse(toolReply("bash_execute", {{"command", chained}}));
+        mock().pushResponse(answerReply("ok"));
+    }
+    mock().pushResponse(toolReply("bash_execute", {{"command", "mkdir 'one && two'"}}));
+    mock().pushResponse(answerReply("ok"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json allowed = json::array({work_.string()});
+    fs::create_directories(work_ / "made3");
+
+    // "always" is sent anyway, as a host that still drew the button would.
+    auto card = runTurn(*this, port_, "run-ch1", "chat-chain", allowed, "always");
+    ASSERT_TRUE(card);
+    EXPECT_EQ((*card)["args"]["command"], chained) << "the card shows the whole line";
+    EXPECT_FALSE(card->contains("always_scope")) << card->dump();
+    EXPECT_FALSE(card->contains("always_label")) << card->dump();
+    EXPECT_TRUE(json::parse(send("GET", "/v1/gaia/sessions/chat-chain/grants", bearer())->body)["grants"].empty());
+
+    // Nothing was granted: the same line asks again.
+    fs::remove_all(work_ / "made1");
+    ASSERT_TRUE(runTurn(*this, port_, "run-ch2", "chat-chain", allowed, "deny")) << "the same chained line must ask again";
+
+    // One command whose words hold an operator in quotes keeps its offer.
+    auto single = runTurn(*this, port_, "run-ch3", "chat-chain", allowed, "deny");
+    ASSERT_TRUE(single);
+    EXPECT_EQ((*single)["always_scope"], "bash_execute:exact:mkdir 'one && two'") << single->dump();
+}
+
+// A command the check can't read carries that warning as the card's risk note.
+TEST_F(GaiacppSidecar, AnUncheckedShellCommandCarriesARiskNote) {
+    mock().pushResponse(toolReply("bash_execute", {{"command", "python3 report.py"}}));
+    mock().pushResponse(answerReply("ok"));
+    mock().pushResponse(toolReply("bash_execute", {{"command", "mkdir reports"}}));
+    mock().pushResponse(answerReply("ok"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json allowed = json::array({work_.string()});
+
+    auto unchecked = runTurn(*this, port_, "run-un1", "chat-note", allowed, "deny");
+    ASSERT_TRUE(unchecked);
+    const std::string note = (*unchecked)["prompt_context"].value("risk_note", "");
+    EXPECT_NE(note.find("GAIA can't check where this command reads or writes"), std::string::npos) << unchecked->dump();
+    EXPECT_NE(note.find("It can reach files outside the folders this chat may use"), std::string::npos) << note;
+
+    auto checked = runTurn(*this, port_, "run-un2", "chat-note", allowed, "deny");
+    ASSERT_TRUE(checked);
+    EXPECT_FALSE(checked->contains("prompt_context") && (*checked)["prompt_context"].contains("risk_note")) << checked->dump();
+}
+#endif
+
 TEST_F(GaiacppSidecar, AlwaysOnAShellCommandCoversThatScopeInThatChatOnly) {
     // mkdir changes the disk, so it asks on every shell (bash, Git Bash, cmd.exe), and its grant is "mkdir commands".
     for (const char* command : {"mkdir sub1", "mkdir sub2", "rmdir sub1", "mkdir sub3", "mkdir sub4"}) {
@@ -945,6 +1064,39 @@ TEST_F(GaiacppSidecar, AlwaysOnAShellCommandCoversThatScopeInThatChatOnly) {
 }
 
 // ---- 6. cancel ----
+
+#ifndef _WIN32
+// "Always allow mkdir commands" holds for the way a coding turn writes them: cd first, 2>&1 last.
+TEST_F(GaiacppSidecar, AlwaysOnACommandHoldsWhenTheNextOneStartsWithCdAndStillAsksForAChain) {
+    const std::string cd = "cd " + work_.string() + " && ";
+    for (const std::string& command : {cd + "mkdir one", cd + "mkdir two 2>&1", std::string("mkdir three 2>&1"),
+                                       cd + "mkdir four && rmdir one"}) {
+        mock().pushResponse(toolReply("bash_execute", {{"command", command}}));
+        mock().pushResponse(answerReply("ok"));
+    }
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json allowed = json::array({work_.string()});
+
+    auto card = runTurn(*this, port_, "run-cd1", "chat-cd", allowed, "always");
+    ASSERT_TRUE(card);
+    EXPECT_EQ((*card)["always_scope"], "bash_execute:cmd:mkdir") << card->dump();
+    EXPECT_EQ((*card)["always_label"], "Run mkdir commands") << card->dump();
+    EXPECT_TRUE(fs::is_directory(work_ / "one"));
+
+    EXPECT_FALSE(runTurn(*this, port_, "run-cd2", "chat-cd", allowed, "")) << "asked again for mkdir";
+    EXPECT_TRUE(fs::is_directory(work_ / "two"));
+    EXPECT_FALSE(runTurn(*this, port_, "run-cd3", "chat-cd", allowed, "")) << "asked again for mkdir";
+    EXPECT_TRUE(fs::is_directory(work_ / "three"));
+
+    auto chain = runTurn(*this, port_, "run-cd4", "chat-cd", allowed, "deny");
+    ASSERT_TRUE(chain) << "a chain of two commands ran on a grant for one";
+    // A chain is never offered the one program's grant; at most the line as written, or none.
+    const json chainScope = (*chain)["always_scope"];
+    EXPECT_TRUE(chainScope.is_null() || chainScope.get<std::string>().rfind("bash_execute:exact:", 0) == 0) << chain->dump();
+    EXPECT_FALSE(fs::exists(work_ / "four"));
+    EXPECT_TRUE(fs::is_directory(work_ / "one"));
+}
+#endif
 
 TEST_F(GaiacppSidecar, CancelWhileWaitingForApprovalEndsTheTurnAndTheChatGoesOn) {
     const fs::path target = work_ / "never.txt";
@@ -1437,6 +1589,94 @@ TEST_F(GaiacppSidecar, FileInsideTheChatsFoldersRaisesNoFolderCard) {
 }
 
 #ifndef _WIN32
+// A PC with no pdftotext: a Mac reads the PDF itself; elsewhere the turn ends with what to do.
+TEST_F(GaiacppSidecar, AnAttachedPdfIsReadOrTheTurnSaysWhyNot) {
+    const fs::path pdf = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "northwind_annual_report.pdf";
+    ASSERT_TRUE(fs::exists(pdf)) << pdf;
+    fs::create_directories(root_ / "home" / "chat" / "uploads");
+    const fs::path attached = root_ / "home" / "chat" / "uploads" / "report.pdf";
+    fs::copy_file(pdf, attached);
+    mock().pushResponse(answerReply("Reservoir B holds 18.4."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"PATH", std::string("/nonexistent-gaia-test")}}));
+
+    Turn t(port_, queryBody("run-pdf", "what does the report say?",
+                            {{"session_id", "chat-pdf"}, {"documents", json::array({attached.string()})},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    const json& final = events.back();
+#ifdef __APPLE__
+    EXPECT_FALSE(final.value("failed", false)) << t.describe();
+    const int indexed = indexOf(events, "tool_result");
+    ASSERT_GE(indexed, 0) << t.describe();
+    EXPECT_EQ(events[indexed]["data"][0]["result"].value("status", ""), "success") << t.describe();
+    EXPECT_GT(events[indexed]["data"][0]["result"].value("chunks", 0), 20) << t.describe();
+#else
+    EXPECT_TRUE(final.value("failed", false)) << t.describe();
+    const std::string answer = final.value("answer", "");
+    for (const char* part : {"report.pdf", "pdftotext", "not installed", "Full-featured", "Agent & model"}) {
+        EXPECT_NE(answer.find(part), std::string::npos) << part << " in: " << answer;
+    }
+    EXPECT_EQ(answer.find("Tell the user"), std::string::npos) << "a note for the model, not the user";
+    EXPECT_EQ(mock().requestCount(), 0) << "the model was asked to guess";
+#endif
+}
+
+TEST_F(GaiacppSidecar, ReadingAnAttachedFileThroughTheShellAsksNothingButItsNeighboursStillAsk) {
+    // Not under the temp folder: commands may always read system folders.
+    struct Scratch {
+        fs::path dir = fs::canonical(fs::current_path()) / ("gaiacpp-sidecar-up-" + std::to_string(std::random_device{}()));
+        ~Scratch() {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+        }
+    } scratch;
+    const fs::path uploads = scratch.dir / "uploads";
+    fs::create_directories(uploads);
+    std::ofstream(uploads / "report.txt") << "revenue 4471\n";
+    std::ofstream(uploads / "theirs.txt") << "another chat 9932\n";
+    const fs::path report = uploads / "report.txt";
+    const std::string write = "echo more >> " + report.string();
+    mock().pushResponse(toolReply("bash_execute", {{"command", write}}));
+    const std::string cdAndRead = "cd " + uploads.string() + " && grep -n revenue report.txt";
+    mock().pushResponse(toolReply("bash_execute", {{"command", cdAndRead}}));
+    mock().pushResponse(toolReply("bash_execute", {{"command", "wc -l report.txt"}}));
+    mock().pushResponse(toolReply("bash_execute", {{"command", "cat theirs.txt"}}));
+    mock().pushResponse(toolReply("bash_execute", {{"command", "rm theirs.txt"}}));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-attached", "what does the report say?",
+                            {{"session_id", "chat-attached"}, {"documents", json::array({report.string()})},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    // The write asks as it always did; standing in the uploads folder opens nothing else there.
+    std::set<std::string> answered;
+    for (int n = 1; n <= 2; ++n) {
+        auto card = t.waitEvent([&](const json& e) {
+            return e.value("type", "") == "needs_confirmation" && !answered.count(e.value("confirm_id", ""));
+        });
+        ASSERT_TRUE(card) << "card " << n << " missing: " << t.describe();
+        if (n == 1) EXPECT_EQ((*card)["args"].value("command", ""), write) << card->dump();
+        answered.insert((*card)["confirm_id"].get<std::string>());
+        auto deny = decide("run-attached", "deny", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(deny);
+        ASSERT_EQ(deny->status, 200) << deny->body;
+    }
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    int cards = 0;
+    for (const auto& e : events) cards += e.value("type", "") == "needs_confirmation" ? 1 : 0;
+    EXPECT_EQ(cards, 2) << "the declined folder also refuses the rm: " << t.describe();
+    const std::string all = json(events).dump();
+    EXPECT_NE(all.find("1:revenue 4471"), std::string::npos) << t.describe();
+    EXPECT_NE(all.find("1 report.txt"), std::string::npos) << "wc ran without a card: " << t.describe();
+    EXPECT_TRUE(fs::exists(uploads / "theirs.txt")) << "the denied rm ran";
+    EXPECT_EQ(all.find("9932"), std::string::npos) << "a neighbour was read: " << t.describe();
+    EXPECT_EQ(readFile(report), "revenue 4471\n") << "the denied write ran";
+}
+
 TEST_F(GaiacppSidecar, ShellCommandNamingAnOutsideFolderRaisesTheFolderCard) {
     // Not under the temp folder: commands may always read system folders.
     struct Scratch {
@@ -1880,6 +2120,202 @@ TEST_F(GaiacppSidecar, MalformedBodiesAndUnknownRoutesGet4xxAndTheServerKeepsSer
     ASSERT_EQ(t.status(), 200) << t.describe();
     ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
     EXPECT_EQ(t.events().back()["answer"], "Still here.");
+}
+
+
+// ---- gaia -p's one-shot flags (contract 2.32's fields, advertised by capability) ----
+
+TEST_F(GaiacppSidecar, VersionAdvertisesTheOneShotFieldsWithoutClaimingContract232) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const std::vector<std::string> want = {"time_limit", "disallowed_tools", "no_web",
+                                           "no_skills", "skip_permissions", "full_access"};
+    for (const char* path : {"/v1/gaia/version", "/version"}) {
+        auto r = client().Get(path);
+        ASSERT_TRUE(r) << path;
+        ASSERT_EQ(r->status, 200) << path;
+        const json v = json::parse(r->body);
+        EXPECT_EQ(v["apiVersion"], "2.27") << path;
+        ASSERT_TRUE(v.contains("capabilities")) << path << " " << r->body;
+        EXPECT_EQ(v["capabilities"]["one_shot_fields"].get<std::vector<std::string>>(), want) << path;
+    }
+}
+
+TEST_F(GaiacppSidecar, OneShotFieldsBesideASessionOrOfTheWrongTypeAre422) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const std::vector<json> withSession = {
+        {{"time_limit", 60}},         {{"disallowed_tools", {"file_write"}}}, {{"no_web", true}},
+        {{"no_skills", true}},        {{"skip_permissions", true}},           {{"full_access", true}},
+    };
+    for (const auto& field : withSession) {
+        json body = queryBody("r-one", "hi", {{"session_id", "chat-one"}});
+        body.update(field);
+        auto r = send("POST", "/v1/gaia/query", bearer(), body.dump());
+        ASSERT_TRUE(r);
+        EXPECT_EQ(r->status, 422) << field.dump() << " -> " << r->body;
+        const std::string detail = json::parse(r->body).value("detail", "");
+        EXPECT_NE(detail.find(field.begin().key()), std::string::npos) << detail;
+        EXPECT_NE(detail.find("session_id"), std::string::npos) << detail;
+    }
+    const std::vector<json> badTypes = {
+        {{"time_limit", 0}},           {{"time_limit", "60"}},   {{"time_limit", 1.5}},
+        {{"disallowed_tools", "x"}},   {{"disallowed_tools", {""}}}, {{"disallowed_tools", {5}}},
+        {{"no_web", "yes"}},           {{"skip_permissions", 1}},    {{"full_access", "true"}},
+    };
+    for (const auto& field : badTypes) {
+        json body = queryBody("r-bad", "hi");
+        body.update(field);
+        auto r = send("POST", "/v1/gaia/query", bearer(), body.dump());
+        ASSERT_TRUE(r);
+        EXPECT_EQ(r->status, 422) << field.dump() << " -> " << r->body;
+    }
+    EXPECT_EQ(mock().requestCount(), 0) << "a refused request never reaches the model";
+}
+
+TEST_F(GaiacppSidecar, SkipPermissionsRunsAGatedToolUnaskedForThatRunOnly) {
+    const fs::path target = work_ / "haiku.md";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "old pond")));
+    mock().pushResponse(answerReply("Wrote it."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    {
+        Turn t(port_, queryBody("run-skip", "write a haiku",
+                                {{"surface", "cli"},
+                                 {"can_answer_questions", false},
+                                 {"skip_permissions", true},
+                                 {"working_directory", work_.string()},
+                                 {"allowed_paths", json::array({work_.string()})}}));
+        ASSERT_TRUE(t.waitDone(seconds(30))) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+        EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << t.describe();
+        EXPECT_FALSE(events.back().value("failed", false)) << t.describe();
+        EXPECT_EQ(events.back()["answer"], "Wrote it.");
+    }
+    EXPECT_EQ(readFile(target), "old pond");
+
+    // The next one-shot without the flag is refused again, naming it.
+    const fs::path second = work_ / "second.md";
+    mock().pushResponse(toolReply("file_write", writeArgs(second, "x")));
+    Turn again(port_, queryBody("run-noskip", "write another",
+                                {{"surface", "cli"}, {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(again.waitDone(seconds(30))) << again.describe();
+    const auto final = again.waitType("final");
+    ASSERT_TRUE(final) << again.describe();
+    EXPECT_EQ((*final)["failed"], true);
+    EXPECT_NE((*final)["answer"].get<std::string>().find("--dangerously-skip-permissions"), std::string::npos);
+    EXPECT_FALSE(fs::exists(second));
+}
+
+TEST_F(GaiacppSidecar, SkipPermissionsStillRefusesAPathOutsideAndNamesFullAccess) {
+    const fs::path secret = root_ / "outside" / "secret.txt";
+    mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
+    mock().pushResponse(answerReply("Read it."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-skip-out", "read the secret",
+                            {{"surface", "cli"},
+                             {"skip_permissions", true},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(30))) << t.describe();
+    const auto final = t.waitType("final");
+    ASSERT_TRUE(final) << t.describe();
+    EXPECT_EQ((*final)["failed"], true) << t.describe();
+    const std::string answer = (*final)["answer"].get<std::string>();
+    EXPECT_NE(answer.find("--full-access"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("gaia config set"), std::string::npos) << "the flag works here now: " << answer;
+    EXPECT_EQ(t.raw().find("outside secret 4471"), std::string::npos);
+}
+
+TEST_F(GaiacppSidecar, FullAccessWritesOutsideTheFoldersWithoutAsking) {
+    const fs::path target = root_ / "outside" / "out.md";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "far away")));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-full-shot", "write outside",
+                            {{"surface", "cli"},
+                             {"full_access", true},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(30))) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << t.describe();
+    EXPECT_FALSE(events.back().value("failed", false)) << t.describe();
+    EXPECT_EQ(readFile(target), "far away");
+}
+
+TEST_F(GaiacppSidecar, TimeLimitStopsATurnStillRunningAtItsLimit) {
+    hold();  // the model never answers until the test is over
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    const auto t0 = std::chrono::steady_clock::now();
+    Turn t(port_, queryBody("run-limit", "think forever", {{"surface", "cli"}, {"time_limit", 2}}));
+    ASSERT_TRUE(t.waitDone(seconds(20))) << "the limit didn't stop the turn: " << t.describe();
+    const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    EXPECT_LT(took, 15.0);
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(events.back()["time_limit_reached"], true) << t.describe();
+    EXPECT_FALSE(events.back().value("failed", false)) << "stopped by the limit is not a failure";
+    EXPECT_NE(events.back()["answer"].get<std::string>().find("2-second time limit"), std::string::npos);
+}
+
+TEST_F(GaiacppSidecar, ATurnInsideItsTimeLimitAnswersNormally) {
+    mock().pushResponse(answerReply("Quick."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-quick", "be quick", {{"time_limit", 60}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(events.back()["answer"], "Quick.");
+    EXPECT_FALSE(events.back().contains("time_limit_reached")) << t.describe();
+}
+
+TEST_F(GaiacppSidecar, DisallowedToolsAreWithheldAndNamedOnTheFinal) {
+    const fs::path target = work_ / "blocked.md";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
+    mock().pushResponse(answerReply("Could not write."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    {
+        Turn t(port_, queryBody("run-deny", "write it",
+                                {{"skip_permissions", true},
+                                 {"disallowed_tools", {"file_w*", "bash_execute"}},
+                                 {"allowed_paths", json::array({work_.string()})}}));
+        ASSERT_TRUE(t.waitDone(seconds(30))) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+        const auto withheld = events.back()["withheld_tools"].get<std::vector<std::string>>();
+        EXPECT_NE(std::find(withheld.begin(), withheld.end(), "file_write"), withheld.end()) << t.describe();
+        EXPECT_NE(std::find(withheld.begin(), withheld.end(), "bash_execute"), withheld.end()) << t.describe();
+    }
+    EXPECT_FALSE(fs::exists(target)) << "a withheld tool never runs";
+    const auto bodies = mock().receivedBodies();
+    ASSERT_FALSE(bodies.empty());
+    EXPECT_EQ(bodies.front().find("- bash_execute("), std::string::npos) << "the model isn't offered it";
+    EXPECT_NE(bodies.front().find("- file_read("), std::string::npos) << "the rest still are";
+
+    Turn bad(port_, queryBody("run-deny-bad", "hi", {{"disallowed_tools", {"no_such_tool*"}}}));
+    ASSERT_TRUE(bad.waitDone(seconds(30))) << bad.describe();
+    auto events = bad.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "error")) << bad.describe();
+    EXPECT_EQ(events.back()["status"], 400);
+    EXPECT_NE(events.back()["detail"].get<std::string>().find("No tool matches no_such_tool*"), std::string::npos);
+}
+
+TEST_F(GaiacppSidecar, NoWebLeavesOutWebFetchAndTellsTheModel) {
+    mock().pushResponse(answerReply("Offline."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-noweb", "look it up", {{"no_web", true}, {"no_skills", true}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    const auto withheld = events.back()["withheld_tools"].get<std::vector<std::string>>();
+    EXPECT_NE(std::find(withheld.begin(), withheld.end(), "web_fetch"), withheld.end()) << t.describe();
+    const auto bodies = mock().receivedBodies();
+    ASSERT_FALSE(bodies.empty());
+    EXPECT_EQ(bodies.front().find("- web_fetch("), std::string::npos) << "the model isn't offered it";
+    EXPECT_NE(bodies.front().find("Web access is off for this run"), std::string::npos);
 }
 
 }  // namespace

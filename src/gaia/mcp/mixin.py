@@ -31,6 +31,30 @@ def _summary_error(error: str) -> str:
     return first
 
 
+def _web_search_connector_ids() -> set:
+    """Catalog connector ids whose MCP tools make web search calls."""
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+    from gaia.connectors.spec import WEB_SEARCH
+
+    return {spec.id for spec in REGISTRY if WEB_SEARCH in spec.provides}
+
+
+def _mcp_web_search_refusal(server_name: str, tool_name: str) -> Optional[Dict]:
+    """A Local only refusal for a registered web-search MCP tool, if any."""
+    from gaia.agents.base.verification import NOT_EXECUTED
+    from gaia.llm.local_only import cloud_blocked, web_call_refusal
+
+    if not cloud_blocked() or server_name not in _web_search_connector_ids():
+        return None
+    return {
+        **NOT_EXECUTED,
+        "status": "error",
+        "error": web_call_refusal(f"MCP tool {tool_name}"),
+        "retryable": False,
+    }
+
+
 class MCPClientMixin:
     """Mixin to add MCP client capabilities to agents.
 
@@ -431,10 +455,16 @@ class MCPClientMixin:
             # Create base wrapper function
             base_wrapper = client.create_tool_wrapper(tool)
             tool_name = tool.name
+            server_name = client.name
 
             # Create enhanced wrapper that formats responses in GAIA style
-            def create_enhanced_wrapper(base_wrapper=base_wrapper, tool_name=tool_name):
+            def create_enhanced_wrapper(
+                base_wrapper=base_wrapper, tool_name=tool_name, server_name=server_name
+            ):
                 def enhanced_wrapper(**kwargs):
+                    refusal = _mcp_web_search_refusal(server_name, tool_name)
+                    if refusal is not None:
+                        return refusal
                     result = base_wrapper(**kwargs)
                     if not isinstance(result, dict):
                         # Strings and other non-dict responses pass through.

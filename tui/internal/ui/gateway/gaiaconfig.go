@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/amd/gaia/tui/internal/filelock"
 	"github.com/amd/gaia/tui/internal/lemonade"
@@ -26,7 +24,10 @@ func setDefaultModel(modelID string) error {
 		return fmt.Errorf("Local only is on, so GAIA did not make %s the default model. %s",
 			modelID, lemonade.LocalOnlyHint)
 	}
-	path := gaiaConfigPath()
+	path, err := gaiaConfigPath()
+	if err != nil {
+		return err
+	}
 
 	// The Python side and the preflight writers use this same lock. Hold it for
 	// the complete read-modify-write so a concurrent save cannot lose a key, and
@@ -61,19 +62,12 @@ func setDefaultModel(modelID string) error {
 	return nil
 }
 
-// gaiaConfigPath mirrors gaia.config's resolution order: GAIA_CONFIG_FILE wins
-// outright, then GAIA_CONFIG_DIR, then ~/.gaia.
-func gaiaConfigPath() string {
-	if override := strings.TrimSpace(os.Getenv("GAIA_CONFIG_FILE")); override != "" {
-		return override
+// gaiaConfigPath is the config.json Python reads (lemonade.ConfigPathFrom).
+func gaiaConfigPath() (string, error) {
+	path := lemonade.ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	if path == "" {
+		return "", fmt.Errorf("could not find GAIA's config folder: no home directory, " +
+			"and none of GAIA_CONFIG_FILE, GAIA_CONFIG_DIR or GAIA_HOME is set. Set GAIA_HOME and try again")
 	}
-	dir := strings.TrimSpace(os.Getenv("GAIA_CONFIG_DIR"))
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "config.json"
-		}
-		dir = filepath.Join(home, ".gaia")
-	}
-	return filepath.Join(dir, "config.json")
+	return path, nil
 }

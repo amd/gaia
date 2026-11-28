@@ -83,7 +83,7 @@ from gaia.skills.tiers import (
     effective_tier,
     enforce_tier_ceiling,
 )
-from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 from gaia.utils.file_lock import replace_retrying
 
 log = get_logger(__name__)
@@ -304,9 +304,13 @@ def install_skill(
             # honored the claim is left byte-identical and still verifiable; a
             # downgraded one records its verified provenance in the lock instead.
             if tier != claimed:
-                skill.gaia.security_tier = tier
-                skill.path = target / SKILL_FILENAME
-                skill.write(staged / SKILL_FILENAME)
+                signed_md = staged / SKILL_FILENAME
+                restamped = parse_skill(
+                    signed_md.read_text(encoding="utf-8"), source=str(signed_md)
+                )
+                restamped.gaia.security_tier = tier
+                restamped.path = target / SKILL_FILENAME
+                restamped.write(signed_md)
                 log.info(
                     "Re-stamped '%s' %s from claimed tier '%s' to enforced '%s'; the "
                     "bundled %s no longer matches the rewritten %s (its verified "
@@ -570,11 +574,27 @@ def _assert_matches_bundle(
         )
 
 
+#: Unpacked-size caps for a skill bundle; real skills are under 1 MB.
+BUNDLE_MAX_MEMBER_BYTES = 100 * 1024 * 1024
+BUNDLE_MAX_TOTAL_BYTES = 500 * 1024 * 1024
+
+
 def _unpack_bundle(archive: Path, destination: Path, *, name: str) -> Path:
     """Extract a skill bundle, refusing unsafe entries, and return its root."""
     destination = Path(destination)
     try:
-        safe_extract(archive, destination, kind="zip")
+        safe_extract(
+            archive,
+            destination,
+            kind="zip",
+            max_member_bytes=BUNDLE_MAX_MEMBER_BYTES,
+            max_total_bytes=BUNDLE_MAX_TOTAL_BYTES,
+        )
+    except ArchiveSizeError as exc:
+        raise SkillValidationError(
+            f"Refusing to extract the bundle for '{name}': {exc}. The bundle is "
+            "larger than GAIA allows for a skill; nothing was installed."
+        ) from exc
     except ArchiveError as exc:
         raise SkillValidationError(
             f"Refusing to extract the bundle for '{name}': {exc}. The bundle is "

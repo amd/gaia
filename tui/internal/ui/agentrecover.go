@@ -56,7 +56,8 @@ func savedNativeBroken(choice AgentChoice, loadErr error) (why, detail string, o
 }
 
 // recoverSavedAgent asks what to do about a saved gaiacpp that cannot run and
-// returns the catalog for the pick. The Python agent runs only if it is picked.
+// returns the catalog for the pick. Full-featured, the Python agent, runs only
+// if it is picked.
 func recoverSavedAgent(why, detail string, loadErr error, dev bool, ctrl *control.Options) (*catalog.Catalog, string, error) {
 	if ctrl == nil && !interactive() {
 		return nil, "", loadErr

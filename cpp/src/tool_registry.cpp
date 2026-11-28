@@ -542,6 +542,16 @@ std::string lowered(std::string s) {
     return s;
 }
 
+// Whether *phrase* stands as whole words in *text*: "again" is not in "against".
+bool hasPhrase(const std::string& text, const std::string& phrase) {
+    const auto wordChar = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0; };
+    for (size_t at = text.find(phrase); at != std::string::npos; at = text.find(phrase, at + 1)) {
+        const size_t end = at + phrase.size();
+        if ((at == 0 || !wordChar(text[at - 1])) && (end >= text.size() || !wordChar(text[end]))) return true;
+    }
+    return false;
+}
+
 json notRun(const std::string& shown, const std::string& error) {
     return json{{"status", "error"},
                 {"not_executed", true},
@@ -569,12 +579,12 @@ void ToolRegistry::beginTurn(const std::string& userMessage) {
     if (declinedCalls_.empty()) return;
     const std::string text = lowered(collapseSpaces(userMessage));
     // "Don't run it again" is not a request to run it.
-    for (const char* no : {"don't", "do not", "dont ", "never "}) {
-        if (text.find(no) != std::string::npos) return;
+    for (const char* no : {"don't", "do not", "dont", "never"}) {
+        if (hasPhrase(text, no)) return;
     }
     bool retry = false;
     for (const char* again : {"try again", "retry", "run it", "do it", "go ahead", "again"}) {
-        if (text.find(again) != std::string::npos) retry = true;
+        if (hasPhrase(text, again)) retry = true;
     }
     // A wrong guess only puts the call to the user again; it never runs anything.
     for (auto it = declinedCalls_.begin(); it != declinedCalls_.end();) {

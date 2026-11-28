@@ -14,6 +14,13 @@
 #include <memory>
 #include <random>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using namespace gaia;
 namespace fs = std::filesystem;
 
@@ -117,6 +124,10 @@ TEST(WorkspaceTest, CommandChecks) {
         << "division in inline code is not the root folder";
     EXPECT_NE(ws.checkCommand("sudo find / -name x"), "");
     EXPECT_NE(ws.checkCommand("cd /tmp && rm -rf / "), "");
+    // "Always allow rm" covers `cd folder && rm x`; the folder must still be one this chat may use.
+    EXPECT_NE(ws.checkCommand("cd " + d.other.string() + " && rm notes.txt"), "");
+    EXPECT_NE(ws.checkCommand("cd " + d.other.string() + " && gcc -c a.c 2>&1"), "");
+    EXPECT_EQ(ws.checkCommand("cd " + d.work.string() + " && gcc -c a.c 2>&1"), "");
     // The shell expands an unquoted wildcard in the top folder into real folders.
     for (const char* globbed : {"rm -rf /*", "cat /h*/me/.ssh/id_rsa", "rm -rf /{home,x}/me", "ls /[a-z]*"}) {
         EXPECT_NE(ws.checkCommand(globbed), "") << globbed;
@@ -128,6 +139,35 @@ TEST(WorkspaceTest, CommandChecks) {
 #ifndef _WIN32
     EXPECT_EQ(ws.checkCommand("cat /etc/hosts 2>/dev/null; ls /tmp"), "") << "system dirs pass";
 #endif
+}
+
+TEST(WorkspaceTest, DoubleSlashInCodeIsNotAPlace) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    for (const char* fine : {
+             "cat > ipmask.go << 'EOF'\npackage pflag\n\n// -- net.IPMask value\nfunc f() {} // trailing\nEOF",
+             "sed -i '' '3s/$/ \\/\\/ x/; 4a\\\n// Reject pure IPv6 masks' ipmask.go",
+             "python3 -c \"print(7 // 2)  # floor\"",
+             "grep -rn \"// TODO\" src",
+             "grep -c '//' ipmask.go",
+             "grep -rn // src",
+             "echo \"// generated\" > gen.js",
+             "node -e \"fetch('https://example.com//x')\"",
+         }) {
+        EXPECT_EQ(ws.checkCommand(fine), "") << fine;
+    }
+#ifndef _WIN32
+    for (const char* fine : {"cat > a.go <<'EOF'\n//go:build linux\n//TODO later\nEOF", "sed -e '//d' a.txt",
+                             "curl -s \"https://example.com/a?next=//c\""}) {
+        EXPECT_EQ(ws.checkCommand(fine), "") << fine;
+    }
+    EXPECT_NE(ws.checkCommand("cat //Users/Shared/x"), "") << "//Users is /Users";
+#endif
+    // The root, however many slashes spell it.
+    for (const char* root : {"ls //", "find // -name x", "ls \"//\"", "rm -rf ///", "grep -r secret //",
+                             "grep -re secret //", "grep -r -f pats //", "cd /tmp && ls // ; echo done"}) {
+        EXPECT_NE(ws.checkCommand(root), "") << root;
+    }
 }
 
 TEST(WorkspaceTest, NetworkSharesAreOutside) {
@@ -175,6 +215,41 @@ TEST(WorkspaceTest, ReadsStayInside) {
     EXPECT_TRUE(staysInside(ws, "cat /etc/hosts", cwd)) << "system folders are readable";
     EXPECT_FALSE(staysInside(ws, "cat /proc/1/environ", cwd));
 #endif
+}
+
+// An attached file is granted alone: reading it from its folder is fine, its neighbours are not.
+TEST(WorkspaceTest, ReadsOfAGrantedFileStayInsideFromItsFolder) {
+    Dirs d;
+    const fs::path uploads = d.other / "uploads";
+    fs::create_directories(uploads / "nested");
+    std::ofstream(uploads / "report.txt") << "revenue";
+    std::ofstream(uploads / "theirs.txt") << "another chat's upload";
+    const std::string report = fs::canonical(uploads / "report.txt").generic_string();
+    const std::string theirs = fs::canonical(uploads / "theirs.txt").generic_string();
+    Workspace ws({d.work.string(), report});
+    const std::string up = uploads.string(), work = d.work.string();
+    for (const std::string& ok : std::vector<std::string>{
+             "grep -n revenue report.txt", "wc -l report.txt", "head -5 " + report,
+          "cat report.txt | grep -n revenue | head -3", "grep -c 'net income' report.txt", "pwd"}) {
+        EXPECT_TRUE(staysInside(ws, ok, up)) << ok;
+    }
+    EXPECT_TRUE(staysInside(ws, "grep -n revenue " + report, work));
+    // A POSIX shell reads a backslash as an escape, so the cd names the folder with forward slashes.
+    const std::string upSlash = uploads.generic_string();
+    EXPECT_TRUE(staysInside(ws, "cd " + upSlash + " && grep -n revenue report.txt && wc -l report.txt", work));
+    for (const std::string& no : std::vector<std::string>{
+             "grep -n revenue theirs.txt", "wc -l theirs.txt", "cat " + theirs, "ls", "ls .", "find . -name x",
+          "find -name x", "grep -rn revenue", "grep -rn revenue nested", "cat *.txt", "cat report.txt theirs.txt",
+          "du -sh", "cd nested && cat x", "ls --ignore=report.txt", "du -a --exclude=report.txt",
+          "grep -r -f report.txt", "grep -rn revenue " + report}) {
+        EXPECT_FALSE(staysInside(ws, no, up)) << no;
+    }
+    for (const std::string& no : std::vector<std::string>{
+             "cd " + up + " && cat theirs.txt", "cd " + up + " && ls", "cd " + up + " && grep -rn revenue",
+          "cd " + up + " && cat *"}) {
+        EXPECT_FALSE(staysInside(ws, no, work)) << no;
+    }
+    EXPECT_FALSE(staysInside(ws, "ls", d.other.string())) << "an outside folder is not listed";
 }
 
 TEST(WorkspaceTest, TerminalRefusalNamesAllowDir) {
@@ -310,6 +385,30 @@ TEST(WorkspaceTest, NetworkAndDevicePathsAreRefusedByTheirSpelling) {
         EXPECT_FALSE(ws.contains(path)) << path;
         EXPECT_NE(ws.checkPath(path), "") << path;
     }
+}
+#endif
+
+#ifdef _WIN32
+// An 8.3 alias names the same folder as its long name, so it is refused the same way.
+TEST(WorkspaceTest, AShortNameForAnOutsideFolderIsRefused) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const fs::path outside = d.base / "outside-folder-with-a-long-name";
+    fs::create_directories(outside);
+    std::ofstream(outside / "secret.txt") << "CANARY";
+    wchar_t buf[MAX_PATH];
+    const DWORD n = GetShortPathNameW((outside / "secret.txt").wstring().c_str(), buf, MAX_PATH);
+    ASSERT_GT(n, 0u);
+    ASSERT_LT(n, static_cast<DWORD>(MAX_PATH));
+    const std::string shortPath = fs::path(buf).u8string();
+    EXPECT_FALSE(ws.contains(shortPath)) << shortPath;
+    EXPECT_NE(ws.checkPath(shortPath), "") << shortPath;
+    EXPECT_NE(ws.checkCommand("type \"" + shortPath + "\""), "") << shortPath;
+    // checkCommand leaves `..` to the read check, which judges a relative short name like its long name.
+    const std::string up = (fs::path("..") / fs::path(buf).parent_path().filename() / "secret.txt").generic_u8string();
+    const std::string upLong = (fs::path("..") / outside.filename() / "secret.txt").generic_u8string();
+    EXPECT_FALSE(staysInside(ws, "cat " + up, d.work.string())) << up;
+    EXPECT_FALSE(staysInside(ws, "cat " + upLong, d.work.string())) << upLong;
 }
 #endif
 

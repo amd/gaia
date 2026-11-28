@@ -491,6 +491,10 @@ class _StubAgent:
         self.drained = True
         return True
 
+    def close(self):
+        assert self.drained, "closed before the memory pass finished"
+        self.closed = True
+
 
 class _StubConfig:
     def __init__(self, **kwargs):
@@ -1345,9 +1349,19 @@ def test_the_relayed_turn_does_not_run_after_a_failed_download(
     assert list(relay) == []
 
 
+def _server_owner(monkeypatch, chosen, gaia_runs):
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.configured_lemonade_url", lambda: chosen
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda base_url=None: gaia_runs
+    )
+
+
 def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
-    stub_env, capsys
+    stub_env, monkeypatch, capsys
 ):
+    _server_owner(monkeypatch, chosen=None, gaia_runs=True)
     stub_env.return_value = (False, None)
     assert print_mode.run("q", model="m") == 1
     captured = capsys.readouterr()
@@ -1356,6 +1370,28 @@ def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
     assert "gaia daemon status" in captured.err
     assert "gaia init" in captured.err
     assert _StubAgent.instances == []
+
+
+@pytest.mark.parametrize(
+    "env_url, base_url, shown",
+    [
+        ("http://127.0.0.1:4328", None, "http://127.0.0.1:4328"),
+        (None, "http://box:8000/api/v1", "http://box:8000/api/v1"),
+    ],
+)
+def test_a_stopped_server_the_user_chose_is_named_not_started(
+    stub_env, monkeypatch, capsys, env_url, base_url, shown
+):
+    _server_owner(monkeypatch, chosen=env_url, gaia_runs=False)
+    stub_env.return_value = (False, None)
+    assert print_mode.run("q", model="m", base_url=base_url, output_format="json") == 1
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error == (
+        f"The model server at {shown} isn't answering. GAIA doesn't start a "
+        "model server at an address you chose, so start it the way you "
+        "usually do, then try again."
+    )
+    assert "gaia init" not in error and "gaia daemon" not in error
 
 
 def test_run_reads_the_prompt_from_stdin(stub_env, monkeypatch, capsys):
@@ -1379,6 +1415,19 @@ def test_run_with_no_prompt_on_a_terminal_starts_nothing(stub_env, monkeypatch, 
     stub_env.assert_not_called()
 
 
+def test_the_agent_is_closed_before_the_process_exits(stub_env):
+    # Left to __del__ at interpreter exit, MCP servers can't be stopped cleanly.
+    assert print_mode.run("say pong", model="m1") == 0
+    assert getattr(_agent(), "closed", False)
+
+
+def test_a_failure_names_gaia_p_once(stub_env, capsys):
+    assert print_mode.run("   ", model="m") == 1
+    err = capsys.readouterr().err
+    assert "empty prompt" in err
+    assert err.count("gaia -p") == 1
+
+
 def test_memory_is_drained_even_when_the_turn_raises(stub_env):
     class _Boom(_StubAgent):
         def process_query(self, text):
@@ -1398,6 +1447,8 @@ class _Outcome:
         failed=False,
         usage=None,
         model_messages=None,
+        time_limit_reached=False,
+        withheld_tools=None,
     ):
         self.terminal_type = terminal_type
         self.final_answer = final_answer
@@ -1405,6 +1456,8 @@ class _Outcome:
         self.failed = failed
         self.usage = usage
         self.model_messages = model_messages
+        self.time_limit_reached = time_limit_reached
+        self.withheld_tools = withheld_tools
 
 
 @pytest.fixture
@@ -1531,8 +1584,9 @@ def test_a_relayed_refusal_of_a_gated_tool_exits_1_and_keeps_the_remedy(relay, c
     """gaiacpp ends an unattended turn at a gated tool with a failed final (never a wait)."""
     refusal = (
         "I stopped before running 'file_write' because it needs your approval, and "
-        "gaia -p has nobody to ask. gaia -p can't pass --dangerously-skip-permissions "
-        "or --full-access to gaiacpp, the agent this PC is set to use."
+        "gaia -p has nobody to ask. Re-run with --dangerously-skip-permissions to let "
+        "this run use gated tools without asking, or --full-access to also turn the "
+        "shell guardrails off."
     )
     relay.outcome = _Outcome("final", final_answer=refusal, failed=True)
     assert print_mode.run("write x", model="m", output_format="json") == 1
@@ -1548,20 +1602,70 @@ def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):
     assert "model failed to load" in capsys.readouterr().err
 
 
+def test_base_url_is_refused_on_the_agent_binary(relay, capsys):
+    # The service always uses the model server GAIA is set up with.
+    assert print_mode.run("q", model="m", base_url="http://h:1/api/v1") == 1
+    err = capsys.readouterr().err
+    assert "--base-url" in err and "gaia lemonade connect" in err
+    assert relay == []
+
+
 @pytest.mark.parametrize(
-    "flags, named",
+    "flags, sent",
     [
-        ({"skip_permissions": True}, "--dangerously-skip-permissions"),
-        ({"full_access": True}, "--full-access"),
-        ({"base_url": "http://h:1/api/v1"}, "--base-url"),
-        # The relay has no way to stop the binary's turn at a deadline.
-        ({"time_limit": 60}, "--time-limit"),
+        ({"time_limit": 60}, {"time_limit": 60}),
+        (
+            {"disallowed_tools": ("write_file", "run_shell_*")},
+            {"disallowed_tools": ["write_file", "run_shell_*"]},
+        ),
+        ({"no_web": True}, {"no_web": True}),
+        ({"no_skills": True}, {"no_skills": True}),
+        ({"skip_permissions": True}, {"skip_permissions": True}),
+        ({"full_access": True}, {"full_access": True}),
     ],
 )
-def test_flags_the_agent_binary_cannot_honour_are_refused(relay, capsys, flags, named):
-    assert print_mode.run("q", model="m", **flags) == 1
-    assert named in capsys.readouterr().err
-    assert relay == []
+def test_each_print_flag_reaches_the_agent_binary(relay, flags, sent):
+    assert print_mode.run("q", model="m", **flags) == 0
+    [(_, _, kwargs)] = relay
+    for key, value in sent.items():
+        assert kwargs[key] == value
+    # A one-shot, so an override can't land on any chat's session.
+    assert "session_id" not in kwargs
+
+
+def test_a_relayed_turn_is_headless_and_worded_for_the_cli(relay):
+    assert print_mode.run("q", model="m") == 0
+    [(_, _, kwargs)] = relay
+    assert kwargs["surface"] == "cli"
+    assert kwargs["can_answer_questions"] is False
+    assert not kwargs["skip_permissions"] and not kwargs["full_access"]
+
+
+def test_a_relayed_full_access_run_warns_on_stderr(relay, capsys):
+    assert print_mode.run("q", model="m", full_access=True) == 0
+    assert "full access is on" in capsys.readouterr().err
+
+
+def test_a_relayed_turn_stopped_by_its_time_limit_is_incomplete(relay, capsys):
+    relay.outcome = _Outcome(
+        "final",
+        final_answer="Stopped at the 60-second time limit (--time-limit).",
+        time_limit_reached=True,
+    )
+    assert print_mode.run("q", model="m", output_format="json", time_limit=60) == 1
+    record = json.loads(capsys.readouterr().out)
+    assert record["time_limit_reached"] is True
+    assert record["status"] == "incomplete" and record["is_error"]
+    assert "time limit" in record["result"]
+
+
+def test_a_relayed_record_lists_the_withheld_tools(relay, capsys):
+    relay.outcome = _Outcome(
+        "final", final_answer="ok", withheld_tools=["search_web", "fetch_page"]
+    )
+    assert print_mode.run("q", model="m", output_format="json", no_web=True) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["withheld_tools"] == ["search_web", "fetch_page"]
 
 
 # ---------------------------------------------------------------------------
@@ -1586,6 +1690,52 @@ def test_an_exception_mid_turn_is_reported_not_a_traceback(stub_env, capsys, fmt
         assert "gateway reset" in record["error"]
     else:
         assert captured.out == ""
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_a_bad_setting_reads_as_a_sentence_without_a_class_name(stub_env, capsys, fmt):
+    message = "GAIA_SKILL_AUTOLOAD_TAU must be a float, got 'abc'"
+
+    class _BadSetting(_StubAgent):
+        def process_query(self, text):
+            raise ValueError(message)
+
+    sys.modules["gaiapy.agent"].GaiaAgent = _BadSetting
+    assert print_mode.run("q", model="m", output_format=fmt) == 1
+    captured = capsys.readouterr()
+    assert f"gaia -p: {message}" in captured.err
+    assert "ValueError" not in captured.err
+    if fmt == "json":
+        assert json.loads(captured.out)["error"] == message
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_a_failed_turn_names_the_model_flag_not_the_tui(stub_env, capsys, fmt):
+    from gaia.llm.surface_hints import CLI_MODEL_SWITCH_HINT, TUI_MODEL_SWITCH_HINT
+
+    error = (
+        "fireworks.no-such-model isn't available on Fireworks AI (HTTP 404). "
+        f"Trying again won't help. {TUI_MODEL_SWITCH_HINT}"
+    )
+    _StubAgent.result = {"status": "error", "result": error, "error": error}
+    assert print_mode.run("q", model="m", output_format=fmt) == 1
+    captured = capsys.readouterr()
+    assert "/model in the TUI" not in captured.out + captured.err
+    assert CLI_MODEL_SWITCH_HINT in captured.err
+    if fmt == "json":
+        record = json.loads(captured.out)
+        assert record["error"].endswith(CLI_MODEL_SWITCH_HINT)
+        assert record["result"].endswith(CLI_MODEL_SWITCH_HINT)
+
+
+def test_a_decode_error_keeps_its_class_name(stub_env, capsys):
+    class _BadJson(_StubAgent):
+        def process_query(self, text):
+            json.loads("not json")
+
+    sys.modules["gaiapy.agent"].GaiaAgent = _BadJson
+    assert print_mode.run("q", model="m") == 1
+    assert "JSONDecodeError: " in capsys.readouterr().err
 
 
 def test_a_failed_turn_says_why_on_stderr(stub_env, capsys):
@@ -1629,6 +1779,15 @@ def test_a_successful_empty_answer_still_prints_a_line(stub_env, capsys):
     _StubAgent.result = {"status": "success", "result": ""}
     assert print_mode.run("q", model="m") == 0
     assert capsys.readouterr().out == "\n"
+
+
+def test_a_refusal_that_is_the_answer_prints_once(stub_env, capsys):
+    refusal = "I stopped before running 'file_write' because it needs your approval."
+    _StubAgent.result = {"status": "error", "result": refusal, "error": refusal}
+    assert print_mode.run("q", model="m") == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count(refusal) == 1
 
 
 def test_json_error_record_carries_the_reason(stub_env, capsys):
@@ -2129,20 +2288,6 @@ def test_run_turn_turns_off_the_skill_catalogue_and_withholds(stub_env, capsys):
     config = _agent().config
     assert config.skill_discovery is False and config.skill_suggestions is False
     assert json.loads(capsys.readouterr().out)["withheld_tools"] == ["search_web"]
-
-
-def test_relayed_turn_refuses_tool_restrictions_naming_the_flag():
-    with pytest.raises(RuntimeError, match="--no-web needs the GAIA agent"):
-        print_mode._relay_turn(
-            "q",
-            model=None,
-            verbose=False,
-            max_steps=None,
-            skip_permissions=False,
-            full_access=False,
-            base_url=None,
-            restricted="--no-web",
-        )
 
 
 def test_no_web_tells_the_model_the_shell_is_not_a_way_around(stub_env):

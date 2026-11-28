@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from "vitest";
-import { collectAll, collectReleases, collectRuns, insertMany, SOURCES, unknownSources, type CollectEnv } from "../src/collector";
+import { collectAll, collectReleases, collectRuns, insertMany, nextPageUrl, SOURCES, unknownSources, type CollectEnv } from "../src/collector";
+import { collectItems } from "../src/history";
 
 interface Stmt {
   sql: string;
@@ -92,6 +93,60 @@ const env = (db: D1Database): CollectEnv => ({
 });
 
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+/** A GitHub list served page by page: every page but the last carries a `Link: rel="next"` header, as GitHub sends it. */
+function paged(pages: unknown[], calls: string[] = []) {
+  return async (u: string) => {
+    calls.push(u);
+    const url = new URL(u);
+    const n = Number(url.searchParams.get("page") ?? 1);
+    url.searchParams.set("page", String(n + 1));
+    const last = new URL(u);
+    last.searchParams.set("page", String(pages.length));
+    const link = n < pages.length ? `<${url}>; rel="next", <${last}>; rel="last"` : `<${last}>; rel="prev"`;
+    return new Response(JSON.stringify(pages[n - 1]), { status: 200, headers: { link } });
+  };
+}
+
+describe("GitHub list paging", () => {
+  const item = (number: number) => ({ number, user: { login: "ann" }, created_at: "2026-10-01T00:00:00Z", closed_at: null, author_association: "NONE" });
+  const items = (from: number, n: number) => Array.from({ length: n }, (_, i) => item(from + i));
+
+  it("keeps reading past a short page that still has a next link", async () => {
+    const { db, stmts } = fakeDb();
+    const calls: string[] = [];
+    const detail = await collectItems(env(db), paged([items(1, 100), items(101, 99), items(200, 100), items(300, 5)], calls));
+    expect(detail).toBe("304 issues and PRs (full history)");
+    expect(calls).toHaveLength(4);
+    expect(stmts.filter((s) => s.sql.startsWith("INSERT OR REPLACE INTO items"))).toHaveLength(304);
+  });
+
+  it("stops at a full page with no next link, without asking for another", async () => {
+    const { db } = fakeDb();
+    const calls: string[] = [];
+    expect(await collectItems(env(db), paged([items(1, 100)], calls))).toBe("100 issues and PRs (full history)");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("reads runs past a short page too", async () => {
+    const { db } = fakeDb();
+    const run = (id: number) => ({ id, name: "Unit", head_branch: "main", event: "push", status: "queued", conclusion: null, head_sha: "abc", run_attempt: 1, created_at: "2026-10-26T10:00:00Z", run_started_at: null, updated_at: "2026-10-26T10:00:00Z" });
+    const f = paged([{ total_count: 5, workflow_runs: [run(1), run(2)] }, { total_count: 5, workflow_runs: [run(3), run(4), run(5)] }]);
+    expect(await collectRuns(env(db), f, 1, new Date("2026-10-26T12:00:00Z"))).toBe("5 runs over 1 day(s)");
+  });
+
+  it("fails at the page guard instead of returning part of a list", async () => {
+    const { db, stmts } = fakeDb();
+    const f = async (u: string) => new Response("[]", { headers: { link: `<${u}>; rel="next"` } });
+    await expect(collectReleases(env(db), f, "2026-10-26")).rejects.toThrow(/60-page guard/);
+    expect(stmts).toEqual([]);
+  });
+
+  it("refuses a next link that leads to another host", async () => {
+    const res = new Response("[]", { headers: { link: '<https://evil.example/x?page=2>; rel="next"' } });
+    expect(() => nextPageUrl(res, "https://api.github.com/repos/amd/gaia/issues")).toThrow(/another host/);
+  });
+});
 
 describe("collectReleases", () => {
   it("stores releases and per-asset counts, skipping drafts", async () => {
@@ -183,14 +238,14 @@ describe("collectAll", () => {
       if (new URL(u).host === "api.npmjs.org") return ok({ downloads: 3 });
       if (new URL(u).host === "pypistats.org" && u.includes("/overall")) return ok({ data: [{ category: "without_mirrors", date: "2026-10-25", downloads: 2 }] });
       if (new URL(u).host === "pypistats.org") return ok({ data: { last_week: 4 } });
-      if (u.includes("/stargazers") || u.includes("/forks") || u.includes("/issues") || u.includes("/commits")) return ok([]);
+      if (u.includes("/stargazers") || u.includes("/forks") || u.includes("/issues") || u.includes("/comments") || u.includes("/commits")) return ok([]);
       if (u.includes("/actions/workflows/")) return ok({ workflow_runs: [] });
       if (u.includes("/stats/")) return ok([]);
       return ok({ stargazers_count: 1, forks_count: 2, open_issues_count: 3 });
     };
     await expect(collectAll(env(db), { runDays: 1, fetcher: f, now: new Date("2026-10-26T12:00:00Z") })).rejects.toThrow(/collector:releases/);
     const logs = stmts.filter((s) => s.sql.includes("collect_log")).map((s) => [s.args[1], s.args[2]]);
-    expect(logs).toEqual([["releases", 0], ["repo", 1], ["stars", 1], ["forks", 1], ["issues", 1], ["commits", 1], ["code stats", 1], ["package history", 1], ["runs", 1], ["tests", 1], ["evals", 1]]);
+    expect(logs).toEqual([["releases", 0], ["repo", 1], ["stars", 1], ["forks", 1], ["issues", 1], ["comments", 1], ["commits", 1], ["code stats", 1], ["package history", 1], ["runs", 1], ["tests", 1], ["evals", 1]]);
     // SOURCES is what `only=` is validated against; it must name exactly the sources collected.
     expect(logs.map((l) => l[0])).toEqual([...SOURCES]);
   });

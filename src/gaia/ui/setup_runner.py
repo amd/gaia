@@ -333,7 +333,7 @@ def _agent_turn_problem(model_id: str) -> Optional[str]:
     The turn goes through the assistant's own program, the way chat reaches it.
     """
     from gaia.hub import installer as hub_installer
-    from gaia.ui._chat_helpers import relay_one_prompt
+    from gaia.ui._chat_helpers import ModelServerDownError, relay_one_prompt
     from gaia.ui.sse_handler import SSEOutputHandler
 
     if hub_installer.read_sentinel(_AGENT_ID) is None:
@@ -348,9 +348,15 @@ def _agent_turn_problem(model_id: str) -> Optional[str]:
             max_steps=1,
         )
         why = None if (answer or "").strip() else "it ended without an answer"
+    except ModelServerDownError as e:
+        why = ModelServerDown(str(e))
     except RuntimeError as e:
         why = str(e)
     return why
+
+
+class ModelServerDown(str):
+    """A failed test chat's reason when the model server, not the agent, failed."""
 
 
 def _agent_turn_failure(model_id: str) -> str:
@@ -1918,8 +1924,10 @@ class SetupRunner:
                 problem = why
             elif why is not None:
                 logger.warning("Setup's test chat on %s failed: %s", model, why)
-                # The model's own tests passed before this one, so on gaiacpp the agent is at fault.
-                program = _test_chat_program()
+                # The model passed its test, so gaiacpp failed unless the server did.
+                program = (
+                    None if isinstance(why, ModelServerDown) else _test_chat_program()
+                )
                 if program is not None:
                     agent_error = why
                     problem = _native_agent_failure(model, why)

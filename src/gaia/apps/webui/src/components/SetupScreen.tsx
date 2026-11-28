@@ -443,7 +443,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     // The plan read after setup finished: what is really on disk, for the summary.
     const [finalPlan, setFinalPlan] = useState<SetupPlan | null>(null);
     const [gpu, setGpu] = useState<GpuMemoryStatus | null>(null);
-    const [keepTrying, setKeepTrying] = useState(false);
+    const [keepTrying, setKeepTrying] = useState(true);
     const [confirm, setConfirm] = useState<Confirm | null>(null);
     const [noFitAcked, setNoFitAcked] = useState(false);
     const [busy, setBusy] = useState(false);

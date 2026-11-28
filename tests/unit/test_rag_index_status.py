@@ -3,10 +3,12 @@
 
 """Regression tests for RAG startup/indexing status propagation."""
 
+import threading
 from unittest.mock import Mock, patch
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_monitor_tools import FileToolsMixin
+from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.talk.sdk import TalkSDK
 
@@ -128,13 +130,15 @@ def _file_monitor_agent(rag_result):
     """Build a minimal FileToolsMixin host with just enough state to drive
     add_watch_directory's auto-indexing loop."""
 
-    class _Host(FileToolsMixin):
+    class _Host(RAGToolsMixin, FileToolsMixin):
         pass
 
     host = _Host()
     host.path_validator = Mock(validate_read=Mock(return_value=(True, "")))
     host.watch_directories = []
     host.indexed_files = set()
+    host._restore_failure_lock = threading.Lock()
+    host._document_restore_failures = {}
     host.rag = Mock(index_document=Mock(return_value=rag_result))
     host._watch_directory = Mock()
     host._auto_save_session = Mock()
@@ -166,3 +170,29 @@ def test_add_watch_directory_counts_real_success(tmp_path):
 
     assert result["files_indexed"] == 1
     assert str(pdf) in host.indexed_files
+
+
+def test_add_watch_directory_success_clears_restore_failure(tmp_path):
+    pdf = tmp_path / "a.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    host, add_watch_directory = _file_monitor_agent({"success": True, "num_chunks": 2})
+    host._document_restore_failures[str(pdf)] = "previous index failure"
+
+    result = add_watch_directory(str(tmp_path))
+
+    assert result["files_indexed"] == 1
+    assert host._document_restore_failures == {}
+
+
+def test_add_watch_directory_reports_watcher_failure(tmp_path):
+    """A watcher that cannot start must not be reported or saved as active."""
+    host, add_watch_directory = _file_monitor_agent({"success": True})
+    host._watch_directory.return_value = False
+
+    result = add_watch_directory(str(tmp_path))
+
+    assert result["status"] == "error"
+    assert "Failed to start watching directory" in result["error"]
+    assert host.watch_directories == []
+    host._auto_save_session.assert_not_called()
+    host.rag.index_document.assert_not_called()

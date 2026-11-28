@@ -184,20 +184,25 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
                             {t('settings.connectors.enable')}
                         </button>
                     )}
-                    <div className="connector-tile-menu-divider" />
-                    <button
-                        role="menuitem"
-                        type="button"
-                        className="connector-tile-menu-item connector-tile-menu-item--danger"
-                        onClick={() =>
-                            void runAction(() =>
-                                api.disconnectConnector(connector.id),
-                            )
-                        }
-                        disabled={busy}
-                    >
-                        {t('settings.connectors.disconnect')}
-                    </button>
+                    {/* A server the user added themselves is removed in their own file. */}
+                    {!connector.custom && (
+                        <>
+                            <div className="connector-tile-menu-divider" />
+                            <button
+                                role="menuitem"
+                                type="button"
+                                className="connector-tile-menu-item connector-tile-menu-item--danger"
+                                onClick={() =>
+                                    void runAction(() =>
+                                        api.disconnectConnector(connector.id),
+                                    )
+                                }
+                                disabled={busy}
+                            >
+                                {t('settings.connectors.disconnect')}
+                            </button>
+                        </>
+                    )}
                     {err && (
                         <div className="connector-tile-menu-error">{err}</div>
                     )}

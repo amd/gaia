@@ -766,7 +766,8 @@ jobs:
       - name: npm install + build + vitest
         working-directory: ${{ env.PKG_DIR }}
         run: |
-          npm ci
+          # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+          npx -y npm@11 ci
           npm run build
           npm test
 
@@ -1240,7 +1241,8 @@ jobs:
       - name: Build npm package
         working-directory: ${{ env.PKG_DIR }}
         run: |
-          npm ci
+          # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+          npx -y npm@11 ci
           npm run build
 
       - name: Upgrade npm (trusted publishing support)

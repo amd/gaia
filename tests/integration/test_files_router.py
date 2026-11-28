@@ -50,7 +50,7 @@ def app(isolated_gaia_home):
 @pytest.fixture
 def client(app):
     """Create test client for the app."""
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 @pytest.fixture
@@ -1052,6 +1052,70 @@ class TestFilePreview:
         ), f"Expected line truncated to 500 chars, got {len(data['preview_lines'][0])}"
         assert data["preview_lines"][1] == "short line"
 
+    @pytest.mark.parametrize("name", [".env", "id_rsa", "agent-ui-token", "hmac.key"])
+    def test_preview_refuses_credential_files(self, client, home_tmp_dir, name):
+        secret = home_tmp_dir / name
+        secret.write_text("SECRET_VALUE=abc123\n", encoding="utf-8")
+
+        resp = client.get("/api/files/preview", params={"path": str(secret)})
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == (
+            "This file holds credentials, so GAIA won't preview it."
+        )
+        assert "abc123" not in resp.text
+
+    def test_preview_refuses_files_in_credential_folders(
+        self, client, home_tmp_dir, monkeypatch
+    ):
+        import gaia.security as security_mod
+
+        folder = home_tmp_dir / ".aws"
+        folder.mkdir()
+        (folder / "notes.txt").write_text("aws_secret=abc123\n", encoding="utf-8")
+        monkeypatch.setattr(security_mod, "SECRET_DIRECTORIES", {str(folder)})
+
+        resp = client.get(
+            "/api/files/preview", params={"path": str(folder / "notes.txt")}
+        )
+
+        assert resp.status_code == 403
+        assert "abc123" not in resp.text
+
+
+# ── TestLocalImage ───────────────────────────────────────────────────────────
+
+
+class TestLocalImage:
+    """GET /api/files/image."""
+
+    def test_svg_is_served_sandboxed(self, client, home_tmp_dir):
+        svg = home_tmp_dir / "drawing.svg"
+        svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>',
+            encoding="utf-8",
+        )
+
+        resp = client.get("/api/files/image", params={"path": str(svg)})
+
+        assert resp.status_code == 200
+        assert resp.headers["content-security-policy"] == "sandbox"
+        assert resp.headers["x-content-type-options"] == "nosniff"
+
+    def test_image_in_a_credential_folder_is_refused(
+        self, client, home_tmp_dir, monkeypatch, sample_png_bytes
+    ):
+        import gaia.security as security_mod
+
+        folder = home_tmp_dir / ".gnupg"
+        folder.mkdir()
+        (folder / "shot.png").write_bytes(sample_png_bytes)
+        monkeypatch.setattr(security_mod, "SECRET_DIRECTORIES", {str(folder)})
+
+        resp = client.get("/api/files/image", params={"path": str(folder / "shot.png")})
+
+        assert resp.status_code == 403
+
 
 # ── TestFileOpen ─────────────────────────────────────────────────────────────
 
@@ -1523,3 +1587,11 @@ class TestFileBrowseDenialReason:
         resp = client.get("/api/files/browse", params={"path": outside})
         assert resp.status_code == 403
         assert isinstance(resp.json()["detail"], str)
+
+
+def test_ui_token_file_name_is_read_blocked():
+    """Renaming the Agent UI token file must not drop it out of the read guard."""
+    from gaia.security import SENSITIVE_FILE_NAMES
+    from gaia.ui.api_token import TOKEN_FILE_NAME
+
+    assert TOKEN_FILE_NAME in SENSITIVE_FILE_NAMES

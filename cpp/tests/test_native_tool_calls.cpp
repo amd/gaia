@@ -17,6 +17,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <fstream>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -296,6 +298,91 @@ TEST(NativeToolCallsTest, NonToolCallingModelRequestBodyIsUnchanged) {
               (std::set<std::string>{"model", "max_tokens", "temperature", "messages"}));
     EXPECT_FALSE(body.contains("tools"));
     EXPECT_FALSE(body.contains("tool_choice"));
+}
+
+TEST(NativeToolCallsTest, ModelWithAThinkingSwitchGetsGaiasChoiceSent) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "Qwen3.5-2B-GGUF"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    json body = json::parse(mock.receivedBodies().back());
+    ASSERT_TRUE(body.contains("chat_template_kwargs"));
+    EXPECT_EQ(body["chat_template_kwargs"], (json{{"enable_thinking", false}}));
+}
+
+TEST(NativeToolCallsTest, ModelWithoutAThinkingSwitchSendsNone) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("chat_template_kwargs"));
+}
+
+TEST(NativeToolCallsTest, ALargeThinkingModelKeepsThinkingOn) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "Qwen3.6-35B-A3B-GGUF"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    json body = json::parse(mock.receivedBodies().back());
+    EXPECT_EQ(body["chat_template_kwargs"], (json{{"enable_thinking", true}}));
+}
+
+TEST(NativeToolCallsTest, SwitchingModelMidSessionSwitchesTheThinkingField) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+    mock.pushResponse(kPlainAnswer);
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "Qwen3.5-2B-GGUF"));
+    agent.initForTest();
+    agent.processQuery("first", 1);
+    agent.setModel("Gemma-4-E4B-it-GGUF");
+    agent.processQuery("second", 1);
+    agent.setModel("user.qwen3.5-4b-gguf");
+    agent.processQuery("third", 1);
+
+    const auto& bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 3u);
+    EXPECT_EQ(json::parse(bodies[0])["chat_template_kwargs"], (json{{"enable_thinking", false}}));
+    EXPECT_FALSE(json::parse(bodies[1]).contains("chat_template_kwargs"));
+    EXPECT_EQ(json::parse(bodies[2])["chat_template_kwargs"], (json{{"enable_thinking", false}}));
+}
+
+TEST(NativeToolCallsTest, CloudModelSendsNoThinkingField) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "fireworks.deepseek-v4p1-flash"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("chat_template_kwargs"));
+}
+
+// tests/unit/test_cpp_model_registry_mirror.py checks Python against the same file.
+TEST(ModelRegistryTest, ThinkingMatchesTheSharedProbes) {
+    std::ifstream in(std::string(GAIA_TEST_FIXTURES_DIR) + "/thinking_probes.json");
+    ASSERT_TRUE(in) << "missing cpp/tests/fixtures/thinking_probes.json";
+    const json probes = json::parse(in).at("probes");
+    ASSERT_FALSE(probes.empty());
+    for (auto it = probes.begin(); it != probes.end(); ++it) {
+        const std::optional<bool> want =
+            it.value().is_null() ? std::nullopt : std::optional<bool>(it.value().get<bool>());
+        EXPECT_EQ(knownThinking(it.key()), want) << "model id: \"" << it.key() << "\"";
+    }
 }
 
 TEST(NativeToolCallsTest, NonToolCallingModelKeepsTheResponseFormatTemplate) {
@@ -1583,6 +1670,17 @@ TEST(ModelLoadTest, HealthReportsThisClientsModelNotTheFirstOneListed) {
     // A client asking for a model the server lacks sees the server's chat model.
     LemonadeClient other(LemonadeClientConfig{mock.baseUrl(), "not-loaded", 65536, false});
     EXPECT_EQ(other.healthCheck().modelId, kToolCallingModel);
+}
+
+TEST(ModelLoadTest, AServerWithNothingLoadedIsRunning) {
+    // What Lemonade answers before its first load.
+    bench::MockLlmServer mock;
+    mock.setHealth(R"({"status":"ok","model_loaded":null,"all_models_loaded":[]})");
+    LemonadeClient client(LemonadeClientConfig{mock.baseUrl(), kToolCallingModel, 65536, false});
+    const LemonadeHealth h = client.healthCheck();
+    EXPECT_TRUE(h.running);
+    EXPECT_TRUE(h.error.empty()) << h.error;
+    EXPECT_EQ(h.modelId, "");
 }
 
 TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {

@@ -230,6 +230,60 @@ def is_mcp_server_enabled(connector_id: str) -> bool:
     return not (entry or {}).get("disabled", False)
 
 
+def custom_mcp_specs() -> List[ConnectorSpec]:
+    """
+    Return a spec for each server the user added to ``mcp_servers.json`` themselves.
+
+    These are the entries whose id the catalog doesn't know. They are listed
+    and switched on or off like a catalog server, but GAIA holds no setup form
+    or credentials for them: the user's own entry is the whole configuration.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    specs = []
+    for name, entry in sorted(_read_mcp_servers_json().items()):
+        if name in REGISTRY or not isinstance(entry, dict):
+            continue
+        args = entry.get("args")
+        specs.append(
+            ConnectorSpec(
+                id=name,
+                display_name=name,
+                icon="",
+                category="custom",
+                tier=9,
+                type="mcp_server",
+                description="",
+                mcp_command=str(entry.get("command", "")),
+                mcp_args=tuple(str(a) for a in args) if isinstance(args, list) else (),
+            )
+        )
+    return specs
+
+
+def find_connector_spec(connector_id: str) -> ConnectorSpec:
+    """
+    Return the catalog spec for ``connector_id``, or a user-added server's.
+
+    Raises ``KeyError`` when it is neither.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    if connector_id in REGISTRY:
+        return REGISTRY.get(connector_id)
+    for spec in custom_mcp_specs():
+        if spec.id == connector_id:
+            return spec
+    raise KeyError(connector_id)
+
+
+def is_custom_mcp_server(connector_id: str) -> bool:
+    """True if ``connector_id`` is a server the user added to ``mcp_servers.json``."""
+    return any(spec.id == connector_id for spec in custom_mcp_specs())
+
+
 class McpServerHandler:
     """
     Handles ``type="mcp_server"`` connectors.

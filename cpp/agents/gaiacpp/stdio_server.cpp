@@ -20,15 +20,20 @@
 #include <gaia/http_client.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/shell_guard.h>
 #include <gaia/workspace.h>
 
 #include "gaia_agent.h"
+#include "wire_util.h"
 
 namespace fs = std::filesystem;
 
 namespace gaia {
 
 namespace {
+
+using wire::dumps;
+using wire::randomHex;
 
 const char* const kQueryKey = "gaia_query";
 const char* const kControlKey = "gaia_control";
@@ -41,16 +46,6 @@ constexpr auto kOrphanedConfirmTimeout = std::chrono::minutes(15);
 constexpr int kStatusProbeSeconds = 3;
 constexpr auto kTokenBatch = std::chrono::milliseconds(30);
 constexpr size_t kMaxEventData = 20000;
-
-std::string dumps(const json& j) { return j.dump(-1, ' ', false, json::error_handler_t::replace); }
-
-std::string randomHex(size_t n) {
-    static thread_local std::mt19937_64 rng(std::random_device{}());
-    static const char* hex = "0123456789abcdef";
-    std::string s;
-    for (size_t i = 0; i < n; ++i) s.push_back(hex[rng() & 0xF]);
-    return s;
-}
 
 std::string lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -560,6 +555,10 @@ public:
     void printToolProgress(const std::string& phase, const std::string& m) override {
         server_.write({{"type", "status"}, {"message", m}, {"phase", phase}});
     }
+    void printReasoningProgress(size_t words) override {
+        server_.write({{"type", "status"}, {"phase", "reasoning"}, {"words", words},
+                       {"message", "Reasoning - " + std::to_string(words) + " words so far"}});
+    }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
@@ -696,6 +695,10 @@ StdioServer::StdioServer(GaiaAgent& agent, std::istream& in, std::ostream& out, 
       fullAccess_(options_.fullAccess),
       acceptEdits_(options_.acceptEdits) {
     if (options_.editRoots.empty()) options_.editRoots.push_back(workingFolderUtf8());
+    // The terminal UI starts this program itself, so its user has no --max-tokens to pass.
+    AgentConfig cfg = agent_.config();
+    cfg.replyLimitRemedy = GaiaAgent::kChatReplyLimitRemedy;
+    agent_.setConfig(cfg);
 }
 
 StdioServer::~StdioServer() {
@@ -943,7 +946,15 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     // "Always" is only offered where the grant is narrower than the tool: a
     // write to one file must not approve every later write.
     const ToolInfo* info = agent_.tools().findTool(tool);
-    const std::string key = info && info->grantScope ? tool + ":" + info->grantScope(args) : "";
+    const bool shell = tool == "bash_execute";
+    // A line of several commands gets no "always": a label for it reads as covering less than it does.
+    // One program's grant (`cmd:`) is the exception: `cd folder && one command`, where cd never asks.
+    const std::string scope = info && info->grantScope ? info->grantScope(args) : "";
+    const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
+                         judgeShellCommand(argOf(args, "command"), "", {}, nullptr).compound;
+    const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
+    // Read off the lock: it looks at the files the command names.
+    const std::string unchecked = shell ? agent_.shellApprovalNote(argOf(args, "command")) : "";
     const bool edit = tool == "file_write" || tool == "file_edit";
     // Judged off the lock: it reads the filesystem and PATH.
     const bool acceptable = edit && editIsInside(argOf(args, "path"), options_.editRoots);
@@ -960,7 +971,9 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
         return ToolConfirmResult::UNATTENDED;
     }
     const std::string confirmId = randomHex(16);
-    const std::string summary = promptSummary(tool, args);
+    // The terminal UI shows the summary as the card's body, so the warning goes under the command.
+    const std::string summary =
+        promptSummary(tool, args) + (unchecked.empty() ? "" : "\n\n" + visible(unchecked, Shown::Line));
     json event = {{"type", "needs_confirmation"},
                   {"run_id", runId_},
                   {"action", tool},

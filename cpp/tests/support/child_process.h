@@ -66,6 +66,11 @@ public:
     /// Exit code once the child has exited, else -1.
     int exitCode() const { return exitCode_; }
 
+#ifndef _WIN32
+    /// Ask the child to stop, as a supervisor does (SIGTERM). False when it is already gone.
+    bool terminate() { return !exited_ && pid_ > 0 && ::kill(pid_, SIGTERM) == 0; }
+#endif
+
     /// Kill the child and everything it started, and reap it.
     void kill() {
 #ifdef _WIN32

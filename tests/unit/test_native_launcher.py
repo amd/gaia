@@ -202,6 +202,35 @@ def test_resolve_binary_success(tmp_path):
     assert resolved == target.resolve()
 
 
+def test_resolve_binary_refuses_a_path_outside_the_agent_folder(tmp_path):
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (tmp_path / "elsewhere").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    with pytest.raises(NativeAgentError, match="outside the agent folder"):
+        NativeAgentLauncher.resolve_binary(
+            {"linux-x64": "../elsewhere"}, agent_dir, platform_triple="linux-x64"
+        )
+
+
+def test_start_refuses_a_binary_outside_the_agent_folder(
+    launcher, fake_agent, tmp_path_factory
+):
+    agent_dir, binary = fake_agent
+    other_dir = tmp_path_factory.mktemp("other")
+
+    with pytest.raises(NativeAgentError, match="outside the agent folder"):
+        launcher.start(other_dir, str(agent_dir / binary), handshake=False)
+
+
+def test_start_accepts_an_absolute_binary_inside_the_agent_folder(launcher, fake_agent):
+    agent_dir, binary = fake_agent
+    proc = launcher.start(
+        agent_dir, str(agent_dir / binary), env={"GAIA_FAKE_MODE": "normal"}
+    )
+    launcher.stop(proc)
+
+
 # ---------------------------------------------------------------------------
 # start() + handshake
 # ---------------------------------------------------------------------------

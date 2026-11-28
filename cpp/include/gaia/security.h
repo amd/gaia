@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -62,7 +63,11 @@ struct ToolInfo;
 /// Why `tool` must not run while the internet is off for a chat, or "" when
 /// the call stays on this PC: web_fetch to another host, any MCP tool, a shell
 /// command that goes online, or a fetch of a remote URL.
-GAIA_API std::string internetRefusal(const ToolInfo& tool, const json& args);
+/// `shellEnv` and `shellCwd` are what the shell session holds (exported variables, its folder),
+/// so a program named by `$TOOL` or a script named by a relative path is found.
+GAIA_API std::string internetRefusal(const ToolInfo& tool, const json& args,
+                                     const std::map<std::string, std::string>& shellEnv = {},
+                                     const std::string& shellCwd = "");
 
 /// Why a shell command must not run while web access is off for a run, or ""
 /// when it does not fetch from the web: curl, wget or a PowerShell web request
@@ -70,10 +75,18 @@ GAIA_API std::string internetRefusal(const ToolInfo& tool, const json& args);
 /// heredoc or here-string, or piped in) that makes a network call. Wrappers
 /// such as sudo, timeout and uv run are seen through, and the command string
 /// of sh -c, cmd /c and text piped into a shell are read as command lines.
-/// Package installs and connectors are not judged here. The check is
-/// best-effort: it covers common routes, not every one. OS-level isolation
-/// is tracked in #4609.
-GAIA_API std::string webFetchRefusal(const ToolInfo& tool, const json& args);
+/// Also refused: a program that reaches another computer by any protocol (nc,
+/// ssh, scp, dig, git on a saved remote), found through find -exec, xargs, env,
+/// eval, sh -c and osascript's do shell script; a script file whose text
+/// connects, decodes and runs text, or starts such a program; and a command
+/// whose program is decided while it runs (a name built from variables, text
+/// piped into a shell), since nothing can be said about it.
+/// Package installs and connectors are not judged here, and neither is a
+/// build or test tool or a compiled program. The check reads the command; it
+/// is not a network sandbox. OS-level isolation is tracked in #4609.
+GAIA_API std::string webFetchRefusal(const ToolInfo& tool, const json& args,
+                                     const std::map<std::string, std::string>& shellEnv = {},
+                                     const std::string& shellCwd = "");
 
 /// The folder GAIA keeps this user's files in: $GAIA_HOME when set, else
 /// .gaia under the home folder (USERPROFILE on Windows, HOME elsewhere).

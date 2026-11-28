@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.31"`                  |
+| Contract version   | `API_VERSION = "2.32"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -298,7 +298,7 @@ missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
 `documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
-`changes_turn_id`, `surface`) is optional.
+`changes_turn_id`, `surface`, and the one-shot fields below) is optional.
 
 A `query` that starts with `/research` is a research turn: the agent loads its
 `research-report` skill (or reuses it) and keeps the skill's instructions in the
@@ -435,7 +435,31 @@ server the GAIA host uses (`LEMONADE_BASE_URL`). A failed model request also
 names the `host:port` it went through; on a base URL the user set, a local
 model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
-TUI.
+TUI. With `"cli"`, a gated tool refused on a run nobody can answer names the
+`gaia -p` flag that allows it (`--dangerously-skip-permissions`, or
+`--full-access` for a path outside the run's scope).
+
+**One-shot run fields** (contract ≥ 2.32) are the `gaia -p` flags, for a
+request with no `session_id`; with one they are a `422`, so none of them can
+outlive the run or reach a chat. `time_limit` (seconds, ≥ 1) gives the turn a
+wall-clock budget: the agent wraps up before it, a stop ends the turn at it,
+and a model call still running 5 s later is abandoned; `final.time_limit_reached`
+is `true` when the limit stopped the turn. `disallowed_tools` (tool-name globs),
+`no_web` and `no_skills` withhold tools for the run, as the CLI flags do; a
+glob that matches no tool is a `400`, and `final.withheld_tools` lists what was
+withheld. `skip_permissions` runs confirmation-gated tools without asking, with
+the shell guardrails still on and out-of-scope paths still refused;
+`full_access` also lifts the guardrails and grants out-of-scope paths. Both need
+an authenticated caller (§5.4, a `403` otherwise), apply to this run's handler
+only, and are logged. A chat's full access is the session bypass route.
+Pre-2.32 binaries `422` the fields. The native harness (`gaiacpp`) reports an
+older contract but applies them all, and says so on `/version` as
+`capabilities.one_shot_fields`; there `time_limit` stops the turn at the limit
+without warning the model first, and a `disallowed_tools` glob that matches no
+tool ends the stream with an `error` event of `status` 400, because its tools
+are known only once the run starts. So check `/version`, and refuse the run on
+a binary that neither speaks 2.32 nor lists the field rather than run it
+unrestricted.
 
 `turns` (contract ≥ 2.25) is the conversation so far as the model saw it,
 oldest first. Each entry is one earlier turn's `final.model_messages`, which
@@ -563,6 +587,14 @@ A session on the `hybrid` model id gets `final.route` (contract ≥ 2.29): the
 turn's routing decision, with `model` naming the concrete model it ran on. Bill
 and label the turn by `route.model`, not by `hybrid`.
 
+`final` and `error` carry `session_created: true` (contract ≥ 2.31) when the
+sidecar built a fresh agent for this turn instead of finding a live one: the
+session's first turn, a session evicted from the retention table (§5.2), or a
+sidecar restart. Whatever the client kept for the old agent, such as files
+approved at a prompt, belonged to an agent that no longer exists. Drop only the
+client state from before this turn started, never what this turn's own prompts
+just granted. The field is absent otherwise, and older binaries never send it.
+
 `final` carries `context` (contract ≥ 2.21): what the next model call holds
 if the caller pushes this turn back as history — the same payload the Agent
 UI's Context panel shows. `window` is the model's context window in tokens,
@@ -599,6 +631,11 @@ reached; the turn fails at once instead of retrying, and its `answer` names the
 server, not the provider. Offer to start the server. Only the model server's
 causes are named; the agent's own errors and refusals leave `failure` unset.
 Older binaries never send `failure`, so read it only when present.
+
+A one-shot run's `final` carries `time_limit_reached: true` when its
+`time_limit` stopped the turn (treat the answer as incomplete), and
+`withheld_tools` when `disallowed_tools`, `no_web` or `no_skills` withheld any
+(contract ≥ 2.32).
 
 #### The "not confirmed" note on `final.answer`
 
@@ -701,7 +738,8 @@ never timed out mid-flight. A `/query` that lands on an
 evicted id gets a fresh agent (the conversation is not blocked) but the
 response stream's first event is a `{"type":"status","status":"warning",...}`
 telling the caller that per-turn state — most visibly any loaded skill — did
-not survive and should be reloaded.
+not survive and should be reloaded. That turn's `final` or `error` also carries
+`session_created: true` (§5.1).
 
 A second `/query` reusing a `run_id` that is still in flight gets `409` —
 `run_id` is caller-minted, so mint a fresh UUID per request; reusing one would

@@ -380,7 +380,8 @@ func init() {
 		"which agent program GAIA runs on: "+catalog.NativeAgentBinary+" ("+catalog.NativeAgentName+", Beta), "+
 			catalog.PythonAgentChoice+" or "+catalog.PythonAgentBinary+" ("+catalog.PythonAgentName+"), or a path to either. Unset runs "+
 			"the one saved with /agent ("+preflight.FlagshipAgentKey+" in config.json), else "+
-			catalog.PythonAgentBinary+"; a named one that is missing is an error. Overrides "+catalog.AgentEnv)
+			catalog.PythonAgentBinary+" ("+catalog.HarnessLabel(catalog.PythonAgentChoice)+"); "+
+			"a named one that is missing is an error. Overrides "+catalog.AgentEnv)
 	rootCmd.PersistentFlags().StringVar(&tracePath, "trace", "",
 		"record every agent event — tool calls WITH their arguments, results, errors "+
 			"and timings — to a JSONL file, one event per line, for later inspection. "+

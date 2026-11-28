@@ -43,3 +43,13 @@ func HarnessNamed(name string) (Harness, bool) {
 	}
 	return Harness{}, false
 }
+
+// HarnessLabel is the name both apps show for the harness called name:
+// "Full-featured" or "Fast and light". A name this build does not know is
+// returned unchanged, so a caller still has something to show.
+func HarnessLabel(name string) string {
+	if h, ok := HarnessNamed(name); ok && h.Label != "" {
+		return h.Label
+	}
+	return name
+}

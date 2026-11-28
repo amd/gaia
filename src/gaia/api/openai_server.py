@@ -156,6 +156,28 @@ def _prepare_agent(
         agent.max_output_tokens = request.max_tokens
 
 
+def _close_agent(agent) -> None:
+    """Release the per-request agent's handles now; a failure is logged, not raised."""
+    try:
+        agent.close()
+    except Exception:  # noqa: BLE001 - cleanup must not replace the reply
+        logger.error("Closing the request's agent failed", exc_info=True)
+
+
+def _close_agent_when_done(task, agent) -> None:
+    """Close *agent* once *task*, which is still driving it, has finished."""
+    task.add_done_callback(
+        lambda _t: threading.Thread(
+            target=_close_agent, args=(agent,), daemon=True
+        ).start()
+    )
+
+
+async def _close_agent_now(agent) -> None:
+    """Close *agent* off the event loop; a cancelled caller can't stop the close."""
+    await asyncio.shield(asyncio.to_thread(_close_agent, agent))
+
+
 def _prepend_tool_denials(agent, content: str) -> str:
     """Prefix ``content`` with any confirmation refusals the agent hit.
 
@@ -341,7 +363,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    _prepare_agent(agent, request, history, system_text)
+    try:
+        _prepare_agent(agent, request, history, system_text)
+    except BaseException:
+        await _close_agent_now(agent)
+        raise
 
     # Handle streaming vs non-streaming
     if request.stream:
@@ -365,7 +391,19 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         # Keep synchronous agent work from blocking health checks and other
         # requests handled by the event loop.
-        result = await asyncio.to_thread(agent.process_query, user_message)
+        turn = asyncio.get_running_loop().run_in_executor(
+            None, agent.process_query, user_message
+        )
+        try:
+            # Shielded: a cancelled request must not close the agent mid-turn.
+            result = await asyncio.shield(turn)
+        except asyncio.CancelledError:
+            _close_agent_when_done(turn, agent)
+            raise
+        except BaseException:
+            await _close_agent_now(agent)
+            raise
+        await _close_agent_now(agent)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
@@ -604,6 +642,9 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
             handler_cancelled = getattr(output_handler, "cancelled", None)
             if handler_cancelled is not None:
                 handler_cancelled.set()
+            _close_agent_when_done(task, agent)
+        else:
+            await _close_agent_now(agent)
 
     if failure is not None:
         # Headers are already sent, so the status can't change; say it in-band.

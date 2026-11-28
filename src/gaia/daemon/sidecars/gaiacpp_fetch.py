@@ -74,7 +74,8 @@ def install_target() -> Path:
     return gaia_home() / "bin" / fetch.native_flagship_executable_name()
 
 
-#: ``(path, mtime_ns, size)`` -> the version that file printed, so a listing runs it once.
+#: ``(path, mtime_ns, size)`` -> the version that file printed, or the
+#: :class:`PlatformError` it failed with, so a listing runs it once.
 _printed_versions: dict = {}
 
 
@@ -97,8 +98,14 @@ def installed_version(binary: Path) -> str:
     stat_result = binary.stat()
     key = (str(binary), stat_result.st_mtime_ns, stat_result.st_size)
     if key not in _printed_versions:
-        _printed_versions[key] = fetch.native_flagship_stamp(binary)
-    return _printed_versions[key]
+        try:
+            _printed_versions[key] = fetch.native_flagship_stamp(binary)
+        except PlatformError as e:
+            _printed_versions[key] = e
+    printed = _printed_versions[key]
+    if isinstance(printed, PlatformError):
+        raise printed.with_traceback(None)
+    return printed
 
 
 def release_version() -> Optional[str]:

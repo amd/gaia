@@ -13,7 +13,7 @@
  *  - `gaia eval tasks` (SWE-bench and other task suites): {suite, tasks[]}.
  */
 
-import { getJson, ghHeaders, githubDownload, insertMany, writeAtomic, type CollectEnv, type Fetcher } from "./collector";
+import { githubDownload, githubPages, insertMany, writeAtomic, type CollectEnv, type Fetcher } from "./collector";
 import { listZip, readText } from "./zip";
 
 /** Workflows whose artifacts carry eval scorecards, by workflow file. */
@@ -202,13 +202,9 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
   const todo: GhRun[] = [];
   for (const wf of EVAL_WORKFLOWS) {
     const runs: GhRun[] = [];
-    for (let page = 1; page <= 10; page++) {
-      const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${wf}/runs?status=completed&per_page=100&page=${page}&created=%3E%3D${since}`;
-      const res = await getJson<{ workflow_runs: GhRun[] }>(f, url, { headers: ghHeaders(env) });
-      runs.push(...res.workflow_runs);
-      if (res.workflow_runs.length < 100) break;
-      if (page === 10) throw new Error(`More than 1,000 finished runs of ${wf} since ${since}; the listing would be cut off.`);
-    }
+    const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${wf}/runs?status=completed&per_page=100&created=%3E%3D${since}`;
+    // The Actions API lists at most 1,000 runs per query; the page guard fails past that rather than cut the list off.
+    for await (const res of githubPages<{ workflow_runs: GhRun[] }>(f, env, url, 10)) runs.push(...res.workflow_runs);
     todo.push(...runs.filter((r) => r.conclusion !== "skipped" && (refresh || known.get(r.id) !== r.run_attempt)));
   }
   // Newest first across all workflows, so the cap never holds recent results back for old ones.
@@ -221,11 +217,9 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
     }
     attempted++;
     try {
-      const arts = await getJson<{ artifacts: { id: number; name: string; size_in_bytes: number; expired: boolean }[] }>(
-        f,
-        `https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs/${run.id}/artifacts?per_page=100`,
-        { headers: ghHeaders(env) },
-      );
+      const arts: { artifacts: { id: number; name: string; size_in_bytes: number; expired: boolean }[] } = { artifacts: [] };
+      const artsUrl = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs/${run.id}/artifacts?per_page=100`;
+      for await (const p of githubPages<typeof arts>(f, env, artsUrl, 10)) arts.artifacts.push(...p.artifacts);
       const unusable = arts.artifacts.filter((a) => a.expired || a.size_in_bytes > MAX_ARTIFACT_BYTES);
       if (unusable.length && known.get(run.id) === run.run_attempt) {
         // Already stored from when its artifacts were readable; a refresh keeps that data.

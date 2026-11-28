@@ -48,6 +48,7 @@ from gaia.messaging.bridge import (
     AgentChannel,
     StreamThrottle,
     Turn,
+    written_file_path,
 )
 
 log = get_logger(__name__)
@@ -60,6 +61,14 @@ audit = get_logger("gaia.messaging.slack.audit")
 #: What an unauthorized sender is told. Deliberately says nothing about who IS
 #: allowed: a stranger who found the bot learns only that they are not.
 UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this GAIA agent."
+
+#: Posted in the original thread when the final reply could not be edited.
+#: It deliberately repeats neither the answer nor the Slack error: those may
+#: contain private file contents, tool output or credentials from an error.
+FINAL_DELIVERY_WARNING = (
+    ":warning: GAIA could not finish its reply here. "
+    "Please resend your message and try again."
+)
 
 #: Refusal text when no allowlist is configured. One string so the CLI and the
 #: exception cannot drift.
@@ -120,18 +129,6 @@ MULTI_USER_ERROR = (
     "  gaia slack start --allowed-users U024BE7LH\n"
     "\n"
     "Docs: https://amd-gaia.ai/docs/guides/slack"
-)
-
-#: Tools whose ``tool_call`` args name the file they write. The canonical
-#: ``tool_result`` carries only a summary, so the path is taken from the call.
-WRITE_TOOLS = frozenset(
-    {
-        "write_file",
-        "edit_file",
-        "write_markdown_file",
-        "write_python_file",
-        "edit_python_file",
-    }
 )
 
 #: Seconds an approval prompt waits before it is denied. The agent itself waits
@@ -847,10 +844,9 @@ class SlackAdapter:
 
     def _remember_written_file(self, target: ReplyTarget, tool: str, args: Any) -> None:
         """Note the path a file-writing tool was asked to write."""
-        if tool not in WRITE_TOOLS or not isinstance(args, dict):
-            return
-        raw = args.get("file_path") or args.get("path")
-        target.pending_upload = raw if isinstance(raw, str) else ""
+        path = written_file_path(tool, args)
+        if path is not None:
+            target.pending_upload = path
 
     def _maybe_upload(self, target: ReplyTarget, event: Dict[str, Any]) -> None:
         """Send back the file the preceding write tool produced.
@@ -908,9 +904,22 @@ class SlackAdapter:
         if target.throttle is not None and answer:
             # The final answer is authoritative — the streamed text can be a
             # partial render of the same content.
-            self._update(target, answer)
+            delivered = self._update(target, answer)
         elif target.throttle is not None:
-            target.throttle.finish()
+            delivered = target.throttle.finish()
+        else:
+            delivered = True
+        if not delivered:
+            log.warning(
+                "Could not finish the Slack reply in channel %s, reply %s",
+                target.channel,
+                target.reply_ts,
+            )
+            self._post(
+                target.channel,
+                FINAL_DELIVERY_WARNING,
+                thread_ts=target.thread_ts,
+            )
         trail = ", ".join(f"`{t}`" for t in target.tools)
         if trail:
             self._post(
@@ -964,7 +973,12 @@ class SlackAdapter:
         ts: str,
         text: str,
         blocks: Optional[List[dict]] = None,
-    ) -> None:
+    ) -> bool:
+        """Update a message, returning False instead of raising on failure.
+
+        Mid-stream callers ignore the result, so their failure tolerance is
+        unchanged. The final-answer path uses it to tell the user what happened.
+        """
         web = self._build_web_client()
         kwargs: Dict[str, Any] = {"channel": channel, "ts": ts, "text": _truncate(text)}
         if blocks is not None:
@@ -973,12 +987,14 @@ class SlackAdapter:
             web.chat_update(**kwargs)
         except Exception as e:  # noqa: BLE001 - rate limits must not kill the turn
             log.debug("Could not edit Slack message %s: %s", ts, e)
+            return False
+        return True
 
-    def _update(self, target: ReplyTarget, text: str) -> None:
+    def _update(self, target: ReplyTarget, text: str) -> bool:
         """Edit the turn's reply in place, posting one if there is none yet."""
         if not target.reply_ts:
             target.reply_ts = self._post(
                 target.channel, text, thread_ts=target.thread_ts
             )
-            return
-        self._edit(target.channel, target.reply_ts, text)
+            return True
+        return self._edit(target.channel, target.reply_ts, text)

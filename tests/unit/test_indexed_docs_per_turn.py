@@ -97,6 +97,20 @@ def test_a_document_that_failed_in_the_background_is_named_as_failed():
         )
 
 
+def test_a_document_restore_failure_is_named_as_failed():
+    rag = _rag([])
+    with chat_agent_build_context("full", rag_indexed_files=[]) as agent:
+        agent._memory_store = None
+        agent.rag = rag
+        agent.attached_documents = ["/docs/missing.pdf"]
+        agent._document_restore_failures = {"/docs/missing.pdf": "file not found"}
+
+        assert agent.get_memory_dynamic_context() == (
+            "[Document restore failed; tell the user before answering from it: "
+            "missing.pdf: file not found]"
+        )
+
+
 def test_profiles_without_document_tools_never_name_documents():
     with chat_agent_build_context("chat", rag_indexed_files=["/docs/a.pdf"]) as agent:
         agent._memory_store = None

@@ -9,7 +9,7 @@
  * counted once per Python version.
  */
 
-import { ghHeaders, githubDownload, insertMany, writeAtomic, type CollectEnv, type Fetcher, utcDay } from "./collector";
+import { githubDownload, githubPages, insertMany, writeAtomic, type CollectEnv, type Fetcher, utcDay } from "./collector";
 
 export interface TestCounts {
   passed: number;
@@ -105,9 +105,8 @@ export async function collectTests(
     if (have.get(day) === id && !refresh) continue;
     try {
       const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs/${id}/jobs?per_page=100`;
-      const res = await f(url, { headers: ghHeaders(env) });
-      if (!res.ok) throw new Error(`GET ${url} returned HTTP ${res.status}.`);
-      const jobs = ((await res.json()) as { jobs: { id: number; conclusion: string | null }[] }).jobs;
+      const jobs: { id: number; conclusion: string | null }[] = [];
+      for await (const p of githubPages<{ jobs: typeof jobs }>(f, env, url, 10)) jobs.push(...p.jobs);
       let best: TestCounts | null = null;
       for (const j of jobs) {
         if (j.conclusion !== "success" && j.conclusion !== "failure") continue;

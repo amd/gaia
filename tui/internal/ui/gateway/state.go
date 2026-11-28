@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // State is the non-secret gateway selection shared with the Python side
@@ -58,30 +60,29 @@ func (s State) Unavailable(id string) (Unavailability, bool) {
 // belongs to another writer and is carried through untouched.
 var ownedKeys = []string{"base_url", "enabled_models", "active_model"}
 
-// StatePath is where the selection is stored. GAIA_GATEWAY_FILE overrides it
-// for tests; GAIA_CONFIG_DIR moves the whole GAIA config directory.
-func StatePath() string {
+// StatePath is where the selection is stored, the same file gaia.llm.gateway
+// uses: GAIA_GATEWAY_FILE, else gateway.json in GAIA's config folder
+// (lemonade.ConfigDirFrom, so GAIA_HOME moves it too).
+func StatePath() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("GAIA_GATEWAY_FILE")); override != "" {
-		return override
+		return override, nil
 	}
-	dir := strings.TrimSpace(os.Getenv("GAIA_CONFIG_DIR"))
+	dir := lemonade.ConfigDirFrom(os.Getenv, os.UserHomeDir)
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			// Fall back to the working directory rather than guessing a path
-			// that does not exist; a save error then says so plainly.
-			return "gateway.json"
-		}
-		dir = filepath.Join(home, ".gaia")
+		return "", fmt.Errorf("could not find GAIA's config folder for the gateway settings: " +
+			"no home directory, and neither GAIA_CONFIG_DIR nor GAIA_HOME is set. Set GAIA_HOME and try again")
 	}
-	return filepath.Join(dir, "gateway.json")
+	return filepath.Join(dir, "gateway.json"), nil
 }
 
 // LoadState reads the saved selection. A missing file is not an error — it
 // means "nothing configured yet". A corrupt one is, so it surfaces instead of
 // being silently replaced by defaults.
 func LoadState() (State, error) {
-	path := StatePath()
+	path, err := StatePath()
+	if err != nil {
+		return State{}, err
+	}
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return State{BaseURL: DefaultBaseURL}, nil
@@ -118,7 +119,10 @@ func LoadState() (State, error) {
 
 // Save writes the selection back, creating ~/.gaia if needed.
 func (s State) Save() error {
-	path := StatePath()
+	path, err := StatePath()
+	if err != nil {
+		return err
+	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("could not create %s: %w", dir, err)

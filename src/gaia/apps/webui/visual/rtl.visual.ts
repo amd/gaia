@@ -14,7 +14,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SETTINGS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, withResourceStrip, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
-import { translateBare } from '../src/i18n/registry';
+import { stripIsolates, translateBare } from '../src/i18n/registry';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -1610,9 +1610,12 @@ for (const locale of ['ar', 'en']) {
         await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
         await expect(page.getByText('Question 22')).toBeVisible();
         await page.locator('.messages-scroll').hover();
-        await page.mouse.wheel(0, -20_000);
         const button = page.locator('.scroll-bottom-btn');
-        await expect(button).toBeVisible();
+        // A slow runner can still be settling onto the last answer and pull the list back down.
+        await expect(async () => {
+            await page.mouse.wheel(0, -20_000);
+            await expect(button).toBeVisible({ timeout: 1_000 });
+        }).toPass({ timeout: 15_000 });
         await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
         const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
         // 12px above the composer, never over its border (#7864), at its end, never in the middle of a line.
@@ -1669,6 +1672,32 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.code-copy')).toBeInViewport();
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath(`sticky-code-${locale}.png`) });
+    });
+
+    test(`a copy the clipboard refused says so, never Copied (${locale})`, async ({ page }, info) => {
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'clipboard', {
+                configurable: true,
+                value: { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) },
+            });
+            document.execCommand = () => false;
+        });
+        await page.setViewportSize({ width: 1400, height: 900 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongCode);
+        const failed = locale === 'ar' ? 'تعذّر النسخ' : "Couldn't copy";
+        const codeCopy = page.locator('.code-copy');
+        await codeCopy.click();
+        await expect(codeCopy).toHaveClass(/\bfailed\b/);
+        await expect(codeCopy).toContainText(failed);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        const msgCopy = reply.locator('.msg-copy');
+        await msgCopy.click();
+        await expect(msgCopy).toHaveClass(/\bfailed\b/);
+        await expect(msgCopy).toHaveAttribute('aria-label', new RegExp(failed));
+        await expect(page.locator('.copied')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`copy-failed-${locale}.png`) });
     });
 }
 
@@ -2050,6 +2079,44 @@ for (const locale of ['en', 'ar']) {
         await expect(page.locator('.render-needs-input__answered-note')).toBeVisible();
         await expect(page.locator('.queued-message')).toHaveCount(0);
         await shot(page, `question-answered-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const UNANSWERABLE_CONFIRMATION = [
+    { type: 'needs_confirmation', action: 'write_file', summary: 'Write notes.txt in /home/you/projects/gaia' },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`a step an old agent stopped at says it did not run and offers nothing to approve (${locale})`, async ({ page }) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, UNANSWERABLE_CONFIRMATION);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Save my notes');
+        await box.press('Enter');
+        const card = page.locator('.render-confirmation');
+        await expect(card).toBeVisible();
+        await expect(card.getByRole('button')).toHaveCount(1);
+        await expect(card).not.toContainText('write_file');
+        await expect(card.locator('.render-confirmation__label')).toContainText(locale === 'ar' ? 'كتابة ملف' : 'Writing file');
+        const footer = await card.locator('.render-confirmation__footer').evaluate((row) => {
+            const box = row.getBoundingClientRect();
+            const button = row.querySelector('button')!.getBoundingClientRect();
+            return { inside: button.left >= box.left - 1 && button.right <= box.right + 1, atEnd: getComputedStyle(row).direction === 'rtl' ? button.left - box.left < 2 : box.right - button.right < 2 };
+        });
+        expect(footer, 'Dismiss sits at the end of the footer, inside the card').toEqual({ inside: true, atEnd: true });
+        await shot(page, `confirmation-not-run-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -3515,11 +3582,14 @@ for (const locale of ['ar', 'en']) {
 
         test('long list, every group and detail open', async ({ page }) => {
             await openModelPage(page, locale);
-            const closed = await groups(page).evaluateAll((els) => els.filter((el) => !(el as HTMLDetailsElement).open).length);
-            expect(closed).toBeGreaterThan(0);
-            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
-            await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
-            await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible();
+            await expect.poll(() => groups(page).evaluateAll((els) => els.filter((el) => !(el as HTMLDetailsElement).open).length))
+                .toBeGreaterThan(0);
+            // Open again until it shows: a group that renders late is still closed after one pass.
+            await expect(async () => {
+                await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+                await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+                await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible({ timeout: 1_000 });
+            }).toPass({ timeout: 15_000 });
             // A model that fits but squeezes other apps says so instead of "Fits this PC".
             await expect(page.locator('.model-badge.is-tight')).toHaveCount(1);
             await page.locator('.model-badge.is-tight').scrollIntoViewIfNeeded();
@@ -3701,7 +3771,7 @@ for (const locale of ['ar', 'en']) {
     });
 
     test(`Mobile access without ngrok (${locale})`, async ({ page }) => {
-        const missing = { active: false, url: null, token: null, startedAt: null, publicIp: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
+        const missing = { active: false, url: null, token: null, startedAt: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
         await open(page, '', locale, (p) => p.route('**/api/tunnel/start', (route) => route.fulfill({ json: missing })));
         await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
         const dialog = page.locator('.mobile-modal');
@@ -3712,6 +3782,22 @@ for (const locale of ['ar', 'en']) {
         const dot = await dialog.locator('.status-dot').boundingBox();
         expect(dot && dot.width <= 10 && dot.height <= 10).toBe(true);
         await shot(page, `mobile-access-ngrok-missing-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`Mobile access with the tunnel on (${locale})`, async ({ page }) => {
+        const active = { active: true, url: 'https://quiet-otter.ngrok.app', token: 'a1b2c3d4-0000-4000-8000-00000000beef', startedAt: NOW.toISOString(), error: null, reason: null, installCommands: [], device: null };
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/tunnel/start', (route) => route.fulfill({ json: active }));
+            await p.route('**/api/tunnel/status', (route) => route.fulfill({ json: active }));
+        });
+        await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
+        const dialog = page.locator('.mobile-modal');
+        await expect(dialog.locator('.tunnel-url-area')).toBeVisible();
+        // ngrok is a third party; the dialog must not promise the data stays secure.
+        await expect(dialog).toContainText('ngrok');
+        await expect(dialog).not.toContainText('stays secure');
+        await shot(page, `mobile-access-active-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 
@@ -5137,6 +5223,28 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
     });
+
+    test(`a backend that never started: a plain heading, Restart GAIA, and the reason under Details (${locale})`, async ({ page }) => {
+        const missing = "GAIA's backend program is missing, so GAIA can't start: the app's files are incomplete. Reinstall GAIA from https://amd-gaia.ai/#install. Looked for /Applications/GAIA.app/Contents/Resources/core/gaia, /Users/you/.gaia/venv/bin/gaia and for gaia on PATH.";
+        await open(page, '', locale, async (p) => {
+            await withCrashedBackend(p, 'stopped', NOW.getTime());
+            await p.addInitScript((lastError) => {
+                const bridge = (window as unknown as { gaiaAPI: { backend: { getState: () => Promise<Record<string, unknown>> } } }).gaiaAPI.backend;
+                const read = bridge.getState;
+                bridge.getState = async () => ({ ...(await read()), lastExit: null, lastError });
+            }, missing);
+            await p.route('**/api/**', (route) => route.abort('connectionrefused'));
+        });
+        const screen = page.locator('.startup--failed');
+        await expect(screen.getByRole('heading')).toHaveText(locale === 'ar' ? /لم تبدأ خدمة GAIA/ : "GAIA's background service didn't start");
+        await expect(screen.getByRole('button', { name: locale === 'ar' ? /إعادة تشغيل GAIA/ : /Restart GAIA/ })).toBeVisible();
+        await expect(screen.locator('pre')).toBeHidden();
+        await screen.locator('summary').click();
+        await expect(screen.locator('pre')).toContainText('backend program is missing');
+        await shot(page, `backend-never-started-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.startup--failed', 'pre')).toEqual([]);
+    });
 }
 
 /** The reply's text asks the user to press Try again, so the button must be on screen, labelled, without a hover. */
@@ -6192,6 +6300,40 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+// Fast and light, a document it can't read, then a command it can't check: its English risk note and
+// the attach step's English narration both read in Arabic.
+const UNCHECKED_NOTE = "GAIA can't check where this command reads or writes: python3 runs code, which can read and write anywhere you can. It can reach files outside the folders this chat may use.";
+const PDF_CHECK = `python3 -c "import pypdf; print('ok')" 2>&1 || echo "no pdf library"`;
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`Fast and light's unchecked-command card and its attach step read in the UI's language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [
+            { type: 'tool_start', tool: 'index_documents', detail: 'documents: report-q3.pdf', narration: 'Indexing documents' },
+            { type: 'tool_end', success: true },
+            {
+                type: 'permission_request', tool: 'run_shell_command', tool_label: 'Running a shell command', confirm_id: 'c-unchecked',
+                args: { command: PDF_CHECK, working_directory: '/Users/you/.gaia/documents', _risk_note: UNCHECKED_NOTE },
+            },
+        ]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('summarize this report in three points');
+        await page.keyboard.press('Enter');
+        const risk = page.locator('.perm-card-risk');
+        await expect(risk).toBeVisible();
+        const step = page.locator('.flow-tool-label').filter({ hasText: /documents|المستندات/ }).first();
+        if (locale === 'ar') {
+            await expect(risk).toContainText('لا يستطيع GAIA التحقق');
+            await expect(risk).toContainText('يشغّل تعليمات برمجية');
+            await expect(step).toContainText('أضاف المستندات');
+        } else {
+            await expect(risk).toHaveText(UNCHECKED_NOTE);
+            await expect(step).toHaveText('Added documents');
+        }
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-unchecked-native-${locale}`);
+    });
+}
+
 const FOLDER = 'C:\\Users\\you\\Documents\\uxa';
 const STEPS_THEN_PROMPT = [
     ...['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt', 'a.txt', 'b.txt', 'c.txt', 'd.txt'].flatMap((f) => [
@@ -6823,6 +6965,47 @@ for (const locale of ['en', 'ar']) {
         expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
         const icon = label.locator('xpath=preceding-sibling::*[local-name()="svg"][1]');
         expect((await icon.boundingBox())?.width ?? 0, 'the cloud icon was squeezed').toBeGreaterThanOrEqual(12);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`a folder's skipped files are named by reason in the document library (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents/upload-path', (route) => route.fulfill({
+                status: 400,
+                contentType: 'application/json',
+                body: JSON.stringify({ detail: { status: 'is_folder', message: 'This is a folder' } }),
+            }));
+            await p.route('**/api/documents/index-folder', (route) => route.fulfill({ json: {
+                indexed: 1, failed: 0, skipped: 3, skipped_images: 0, skipped_files_truncated: true, errors: [],
+                documents: [{ id: 'd1', filename: 'notes.txt', filepath: '/docs/notes.txt', file_size: 12, chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }],
+                skipped_files: [
+                    { file: 'program.exe', reason: 'unsupported_type' },
+                    { file: 'ملاحظات.exe', reason: 'unsupported_type' },
+                    { file: 'secrets.json', reason: 'credential_file' },
+                    { file: 'song.mp3', reason: 'unsupported_type' },
+                ],
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: locale === 'en' ? /Documents/ : /المستندات/ }).click();
+        await page.locator('.path-input').fill('/home/me/downloads');
+        await page.locator('.path-input-form button[type="submit"]').click();
+
+        const notice = page.locator('.doc-folder-notice[role="status"]');
+        await expect(notice).toBeVisible();
+        const text = stripIsolates(await notice.innerText());
+        const reasonLabels = locale === 'en'
+            ? ["Files GAIA can't add:", "Credential files GAIA won't add:", 'Showing the first 50 skipped files.']
+            : ['الملفات التي لا يستطيع GAIA إضافتها:', 'ملفات بيانات الدخول التي لن يضيفها GAIA:', 'تُعرض أول 50 ملفًا متخطّى فقط.'];
+        const names = locale === 'en'
+            ? ['program.exe', 'ملاحظات.exe', 'song.mp3', 'secrets.json']
+            : ['program.exe', 'song.mp3', 'secrets.json', 'ملاحظات.exe'];
+        for (const label of [...reasonLabels, ...names]) {
+            expect(text, `missing ${label} from: ${text}`).toContain(label);
+        }
+        expect(text.indexOf('program.exe')).toBeLessThan(text.indexOf('secrets.json'));
+        await shot(page, `documents-skipped-files-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }

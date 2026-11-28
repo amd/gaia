@@ -26,6 +26,7 @@ from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
 from gaia.env import child_env
+from gaia.security import read_block
 from gaia.upload_names import (
     place_copy,
     reserve_copy_path,
@@ -101,6 +102,16 @@ SEARCH_STALL_GRACE_SEC = 1.0
 SEARCH_SETUP_ALLOWANCE_SEC = 1.0
 
 router = APIRouter(tags=["files"])
+
+
+def _refuse_secret(resolved: Path) -> None:
+    """403 when *resolved* holds credentials or keys, before it is opened."""
+    blocked, _ = read_block(str(resolved))
+    if blocked:
+        raise HTTPException(
+            status_code=403,
+            detail="This file holds credentials, so GAIA won't preview it.",
+        )
 
 
 # ── Upload ───────────────────────────────────────────────────────────────────
@@ -868,6 +879,7 @@ async def preview_file(path: str, lines: int = 50):
 
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
+    _refuse_secret(resolved)
 
     lines = min(max(lines, 1), 200)
     stat = resolved.stat()
@@ -971,6 +983,7 @@ async def serve_local_image(path: str):
 
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(status_code=404, detail="Image file not found")
+    _refuse_secret(resolved)
 
     ext = resolved.suffix.lower()
     if ext not in PREVIEWABLE_IMAGE_EXTENSIONS:
@@ -989,7 +1002,9 @@ async def serve_local_image(path: str):
         ".svg": "image/svg+xml",
     }
     media_type = media_types.get(ext, "application/octet-stream")
-    return FileResponse(path=str(resolved), media_type=media_type)
+    return harden_served_file(
+        FileResponse(path=str(resolved), media_type=media_type), resolved.name
+    )
 
 
 # ── Serve Generated Media ────────────────────────────────────────────────────

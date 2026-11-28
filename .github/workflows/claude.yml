@@ -733,6 +733,7 @@ jobs:
         --max-turns 100
         --model claude-opus-5-5
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
+        --permission-mode default
 
   # Decides whether a comment WITHOUT @claude is a follow-up Claude should consider
   # (#1408). A cheap API read, so the Opus run below only starts when a maintainer is
@@ -1321,7 +1322,7 @@ jobs:
       - name: Attempt auto-fix
         if: steps.existing.outputs.pr == ''
         id: claude   # referenced by the Notify step's execution_file check below
-        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67  # v1.0.286
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}

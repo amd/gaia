@@ -188,14 +188,14 @@ a chat model updates the jobs that depend on it:
 
 | Job | What you choose |
 |---|---|
-| Chat | One model. **Recommended** is what GAIA evaluated as the default for this PC, **Verified** passed GAIA's evaluations, and **Untested** runs at your own risk |
+| Chat | One model, from the ones that fit this PC. **Recommended** is what GAIA evaluated as the default for this PC, and **Verified** passed GAIA's evaluations. **Untested** models run at your own risk and wait behind **Show untested models**, which opens on its own when your chat model is one. A model too big for this PC isn't listed, unless it is already your chat model |
 | Reading images | Nothing, when the chat model reads images itself. Otherwise Gemma 4 E4B is preselected, and you can pick another or skip it. Off when chat runs on the NPU: the NPU model doesn't read images, so setup says so and downloads nothing for it, and a chat with an image says the image won't be read |
 | Documents and memory | The embedding model |
 | Optional extras | Speech to text, text to speech and creating images, off by default. Creating images isn't available with Gemma 4 E4B |
 
-**What you'll get** shows the result of those choices. A model too big for
-this PC's memory, or a selection too big for the disk, gets a warning with
-the numbers, and you can still go ahead.
+**What you'll get** shows the result of those choices. A chat model you
+already chose that is too big for this PC's memory, or a selection too big for
+the disk, gets a warning with the numbers, and you can still go ahead.
 
 ### Download
 
@@ -206,8 +206,10 @@ with speed and time left. Before the models start, the line under the list
 names the part being set up and how far its download is. **Cancel** sits in
 the bottom bar while setup works, including while GAIA's model server
 starts on Check this PC. Cancel keeps what finished, and **Retry** or
-**Resume** continues from there. Tick **Keep trying if the connection
-drops** to wait out a dropped connection for up to two minutes. Optional
+**Resume** continues from there. A dropped connection is waited out for up
+to two minutes before a download fails; to fail straight away instead,
+untick **Keep trying if the connection drops** on Customize. While setup
+runs, a failed model's **Retry** appears once the other downloads finish. Optional
 extras can be added here too: they download once the rest is ready, so
 setup doesn't wait for them, and the Ready screen names any still coming.
 Extras you add are remembered if you quit setup. If you stop with only

@@ -57,13 +57,13 @@ if ($RunBackend) {
 
     # Check that gaia is installed (editable install)
     Push-Location $ProjectRoot
-    $gaiaCheck = & uv run python -c "import gaia" 2>&1
+    $gaiaCheck = & uv run python -c "import gaia.ui.server" 2>&1
     Pop-Location
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] GAIA is not installed. Run the following from the project root:" -ForegroundColor Red
         Write-Host ""
         Write-Host "  cd $ProjectRoot"
-        Write-Host '  uv venv && uv pip install -e ".[dev,rag]"'
+        Write-Host '  uv venv && uv pip install -e ".[dev,ui]"'
         Write-Host ""
         Write-Host "See docs/reference/dev.mdx for full setup instructions."
         exit 1

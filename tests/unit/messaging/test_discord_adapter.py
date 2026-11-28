@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import itertools
+import logging
 import os
 import time
 from pathlib import Path
@@ -363,6 +364,108 @@ def test_the_answer_lands_below_the_prompt():
     ad._on_agent_event({"type": "final", "answer": "done"}, turn)
     final = ad.transport.sent[-1]
     assert final["text"] == "done" and final["id"] > prompt_id
+
+
+def test_a_failed_final_send_posts_a_warning(monkeypatch, caplog):
+    """The user sees a failed answer without the answer or the Discord error repeated."""
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+    turn = ad._agent().turns[-1]
+    original = ad.transport.send
+
+    def fail_answer(channel_id, text, **kwargs):
+        if text == "the whole answer":
+            raise RuntimeError("rate limited")
+        return original(channel_id, text, **kwargs)
+
+    monkeypatch.setattr(ad.transport, "send", fail_answer)
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.discord.adapter"):
+        ad._on_agent_event({"type": "final", "answer": "the whole answer"}, turn)
+
+    warnings = [m for m in ad.transport.sent if m["text"] == da.FINAL_DELIVERY_WARNING]
+    assert len(warnings) == 1
+    assert "the whole answer" not in warnings[0]["text"]
+    assert "rate limited" not in warnings[0]["text"]
+    assert any(
+        record.levelno == logging.WARNING
+        and "Could not finish the Discord reply" in record.getMessage()
+        for record in caplog.records
+    )
+    assert turn.context.reply_id == ""
+
+
+def test_one_failed_chunk_is_enough_to_warn(monkeypatch, caplog):
+    """A later chunk arriving does not make an earlier failed one invisible."""
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+    turn = ad._agent().turns[-1]
+    monkeypatch.setattr(da, "split_message", lambda text: ["first", "second", "third"])
+    original = ad.transport.send
+    attempted = []
+
+    def fail_second(channel_id, text, **kwargs):
+        attempted.append(text)
+        if text == "second":
+            raise RuntimeError("rate limited")
+        return original(channel_id, text, **kwargs)
+
+    monkeypatch.setattr(ad.transport, "send", fail_second)
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.discord.adapter"):
+        ad._on_agent_event({"type": "final", "answer": "the whole answer"}, turn)
+
+    posted = [m["text"] for m in ad.transport.sent]
+    assert attempted[:3] == ["first", "second", "third"]
+    assert "first" in posted and "third" in posted
+    assert posted.count(da.FINAL_DELIVERY_WARNING) == 1
+
+
+def test_a_failed_final_warning_is_logged(monkeypatch, caplog):
+    """A warning the user cannot see still surfaces in the log."""
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+    turn = ad._agent().turns[-1]
+    original = ad.transport.send
+    attempted = []
+
+    def fail_both(channel_id, text, **kwargs):
+        attempted.append(text)
+        if text in {"the whole answer", da.FINAL_DELIVERY_WARNING}:
+            raise RuntimeError("rate limited")
+        return original(channel_id, text, **kwargs)
+
+    monkeypatch.setattr(ad.transport, "send", fail_both)
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.discord.adapter"):
+        ad._on_agent_event({"type": "final", "answer": "the whole answer"}, turn)
+
+    assert da.FINAL_DELIVERY_WARNING in attempted
+    assert any(
+        record.levelno == logging.WARNING
+        and "Could not finish the Discord reply" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_a_failed_progress_edit_stays_tolerant(monkeypatch):
+    """A rate-limited status edit does not end the turn or produce a fallback."""
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+    turn = ad._agent().turns[-1]
+
+    def fail_edit(channel_id, message_id, text, **kwargs):
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr(ad.transport, "edit", fail_edit)
+    ad._on_agent_event(
+        {"type": "tool_call", "tool": "run_shell_command", "args": {}}, turn
+    )
+    ad._on_agent_event({"type": "final", "answer": "done"}, turn)
+
+    assert any(m["text"] == "done" for m in ad.transport.sent)
+    assert not any(m["text"] == da.FINAL_DELIVERY_WARNING for m in ad.transport.sent)
 
 
 def test_only_the_owner_in_their_dm_can_approve():

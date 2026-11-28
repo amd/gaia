@@ -283,6 +283,7 @@ add_library(gaia_core
     src/api_server.cpp
     src/web_tools.cpp
     src/workspace.cpp
+    src/shell_guard.cpp
     src/document_index.cpp
     src/memory_store.cpp
     src/media_tools.cpp
@@ -560,6 +561,7 @@ if(GAIA_BUILD_TESTS)
     # the CLI, and the sidecar HTTP + SSE API the Agent UI and the TUI use.
     if(GAIA_BUILD_GAIA_AGENT)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp tests/test_gaiacpp_sidecar.cpp)
+        target_sources(tests_mock PRIVATE tests/test_long_input.cpp tests/test_shell_confinement.cpp)
         target_sources(tests_mock PRIVATE tests/test_gaia_setup.cpp agents/gaiacpp/gaia_setup.cpp)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaiacpp/stdio_server.cpp)
         target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")

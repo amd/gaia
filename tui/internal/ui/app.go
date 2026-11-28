@@ -178,7 +178,8 @@ func checkClaudeSupported(agent catalog.Agent, useClaude bool) error {
 	}
 	return fmt.Errorf("--use-claude cannot be used here. %s Or run "+catalog.PythonAgentLabel+", which has a "+
 		"Claude provider, by setting %s=%s. See %s",
-		client.NativeClaudeUnavailable, catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
+		client.NativeClaudeUnavailable,
+		catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).

@@ -42,6 +42,7 @@ from typing import (
     MutableMapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
 )
@@ -236,6 +237,7 @@ from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
 from gaia.credential_shapes import redact_file_content, redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
+from gaia.llm.claude_defaults import DEFAULT_CLAUDE_MODEL
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -272,8 +274,9 @@ from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
-    from gaia.agents.base.history import TurnMessages
+    from gaia.agents.base.history import SessionHistory, TurnMessages
     from gaia.connectors.providers.base import ConnectorRequirement
+    from gaia.llm.inference_location import InferenceLocation
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
 
@@ -1699,7 +1702,9 @@ _MAX_CUT_OFF_CONTINUATIONS = 2
 _MAX_STREAM_CUT_OFF_RETRIES = 2
 STREAM_CUT_OFF_ERROR = "stream_cut_off"
 # Errors the loop recovered from once a later reply parsed: not a failed turn.
-_RECOVERABLE_ERROR_TYPES = frozenset({"tool_call_parse_error", STREAM_CUT_OFF_ERROR})
+_RECOVERABLE_ERROR_TYPES = frozenset(
+    {"tool_call_parse_error", STREAM_CUT_OFF_ERROR, "output_truncated"}
+)
 _CUT_OFF_CONTINUE_PROMPT = (
     "Your last reply was cut off at the output-token limit before it finished, "
     "so nothing in it was carried out. Continue from where you stopped: keep "
@@ -1811,6 +1816,48 @@ _INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
 )
 _SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
 _INDEX_TOOL_NAMES = ("index_directory", "index_document")
+# "Just index it and say done": every sentence must be an index command or one
+# of these closers, so any other request keeps the forced search.
+_INDEX_ONLY_TAIL = (
+    r"(?:(?:say|reply|respond)\s+(?:with\s+)?[\"'“]?done[\"'”]?"
+    r"|nothing\s+else"
+    r"|(?:so\s+)?(?:that\s+)?(?:i|we)\s*(?:can|could|will|['’]ll|may|might)\s+"
+    r"ask(?:\s+(?:you|about\s+it|about\s+them|questions(?:\s+about\s+it)?))*"
+    r"\s+later"
+    r"|for\s+later)"
+)
+# What "index" may take: a pronoun, a path or filename, or a file-type noun.
+_INDEX_ONLY_PATH = (
+    r"(?:\"[^\"]+\"|'[^']+'|(?=\S*\w)\S*[\\/~*]\S*|[\w-]+\.[A-Za-z0-9]{1,5})"
+)
+_INDEX_ONLY_OBJECT = (
+    r"(?:(?:all|all\s+of|everything\s+in|the|my|this|that|these|those|our|every)\s+)*"
+    r"(?:it|this|that|these|those|them|" + _INDEX_ONLY_PATH + r"|(?:[\w-]+\s+){0,2}"
+    r"(?:files?|documents?|docs|folders?|director(?:y|ies)|reports?|pdfs?)"
+    r"(?:\s+" + _INDEX_ONLY_PATH + r")?)"
+    r"(?:\s+(?:in|from)\s+" + _INDEX_ONLY_PATH + r")?"
+)
+_INDEX_ONLY_SENTENCE_PATTERN = re.compile(
+    r"(?:(?:please|kindly|just|only|simply|now|go\s+ahead\s+and)\s+)*"
+    r"(?:re-?)?index\s+"
+    + _INDEX_ONLY_OBJECT
+    + r"(?:[,;]?\s*(?:(?:and|then|and\s+then)\s+)?"
+    + _INDEX_ONLY_TAIL
+    + r")?"
+    r"|" + _INDEX_ONLY_TAIL,
+    re.IGNORECASE,
+)
+_INDEX_ONLY_MARKER_PATTERN = re.compile(
+    r"\b(?:just|only|simply)\s+(?:re-?)?index\b|" + _INDEX_ONLY_TAIL, re.IGNORECASE
+)
+# Anything that asks about the content, so indexing alone doesn't finish the turn.
+_ASKS_ABOUT_CONTENT_PATTERN = re.compile(
+    r"\?|\b(?:what|who|whom|whose|when|where|why|how|which|tell me|summari[sz]e"
+    r"|summary|explain|describe|find|list|show me|compare|extract|look up"
+    r"|answer|quote|give me|read|analy[sz]e|analysis|search|check|review|need"
+    r"|count|calculate|verify)\b",
+    re.IGNORECASE,
+)
 
 
 def _requests_indexing(text: str) -> bool:
@@ -1825,6 +1872,23 @@ def _requests_indexing(text: str) -> bool:
         if not _NEGATED_BEFORE_PATTERN.search(text[sentence_start:verb]):
             return True
     return False
+
+
+def _requests_indexing_only(text: str) -> bool:
+    """Whether *text* explicitly asks only to index, and nothing about the content."""
+    text = (text or "").strip()
+    if (
+        not _requests_indexing(text)
+        or _ASKS_ABOUT_CONTENT_PATTERN.search(text)
+        or not _INDEX_ONLY_MARKER_PATTERN.search(text)
+    ):
+        return False
+    sentences = (
+        part.strip(" .!")
+        for part in _SENTENCE_END_PATTERN.split(text)
+        if part.strip(" .!")
+    )
+    return all(_INDEX_ONLY_SENTENCE_PATTERN.fullmatch(s) for s in sentences)
 
 
 def _asks_permission_to_index(answer: str) -> bool:
@@ -3543,6 +3607,123 @@ def _resolve_output_handles(agent, value):
     return value
 
 
+HOSTED_MODELS_DOCS = "https://amd-gaia.ai/docs/sdk/core/agent-system#hosted-models"
+
+_HOSTED_PROVIDER_REMEDY = {
+    "fireworks": (
+        "Set FIREWORKS_API_KEY before starting the agent (GAIA hands it to the "
+        "Lemonade it runs), or set LEMONADE_FIREWORKS_API_KEY where your own "
+        "Lemonade runs and restart it"
+    ),
+    "amd": "Connect the AMD LLM gateway with /gateway in the TUI",
+}
+
+
+class HostedProviderError(RuntimeError):
+    """A hosted model's provider can't serve this agent, with what to do about it."""
+
+
+def resolve_agent_provider(
+    provider: Optional[str], use_claude: bool, model_id: Optional[str]
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """``(use_claude, model_id, cloud_provider)`` for an ``Agent(provider=...)``.
+
+    *cloud_provider* is set only for a Lemonade-routed provider, and *model_id*
+    then carries its ``<provider>.`` prefix. Raises ``ValueError`` for an unknown
+    provider, a contradiction with *use_claude*, or a cloud provider with no model.
+    """
+    if provider is None:
+        return use_claude, model_id, None
+    from gaia.llm.cloud_keys import PROVIDERS as CLOUD_PROVIDERS
+    from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+    name = str(provider).strip().lower()
+    if name in {"openai", "litellm"}:
+        raise ValueError(REMOVED_PROVIDER_MESSAGE)
+    if name == "claude":
+        return True, model_id, None
+    known = ("lemonade", "claude", *CLOUD_PROVIDERS)
+    if name not in known:
+        raise ValueError(
+            f"Unknown provider {provider!r}. Use one of: {', '.join(known)}. "
+            f"See {HOSTED_MODELS_DOCS}"
+        )
+    if use_claude:
+        raise ValueError(
+            f"provider={provider!r} contradicts use_claude=True. Pass "
+            "provider='claude' (or use_claude=True alone) for the Claude API."
+        )
+    prefix, dot, rest = (model_id or "").partition(".")
+    names_cloud = bool(dot and rest and prefix in CLOUD_PROVIDERS)
+    if name == "lemonade":
+        if names_cloud:
+            raise ValueError(
+                f"provider='lemonade' is a local model, but model_id {model_id!r} "
+                f"runs on {prefix}. Pass provider={prefix!r}."
+            )
+        return False, model_id, None
+    if not model_id:
+        raise ValueError(
+            f"provider={name!r} needs model_id, the model to run on {name} "
+            f"(for example model_id='{name}.<model>'). See {HOSTED_MODELS_DOCS}"
+        )
+    if names_cloud:
+        if prefix != name:
+            raise ValueError(
+                f"model_id {model_id!r} names provider {prefix!r}, but "
+                f"provider={name!r} was passed. Drop one of them."
+            )
+        return False, model_id, name
+    return False, f"{name}.{model_id}", name
+
+
+def claude_model_for(
+    provider: Optional[str], model_id: Optional[str], claude_model: str
+) -> str:
+    """The Claude model for ``Agent(provider="claude", model_id="claude-...")``.
+
+    A Claude id passed as *model_id* is the model the caller asked for, so it
+    is used. Any other *model_id* stays the local id it has always been.
+    """
+    if (
+        provider is None
+        or str(provider).strip().lower() != "claude"
+        or not (model_id or "").startswith("claude-")
+    ):
+        return claude_model
+    if claude_model not in (DEFAULT_CLAUDE_MODEL, model_id):
+        raise ValueError(
+            f"model_id={model_id!r} and claude_model={claude_model!r} name two "
+            "Claude models. Pass one of them."
+        )
+    return model_id
+
+
+def connect_hosted_provider(provider: str, model_id: str, client: Any) -> None:
+    """Make sure Lemonade can run *model_id* on *provider*, or raise.
+
+    Registers and keys the provider when GAIA holds a key for it (see
+    :func:`gaia.llm.cloud_keys.reconnect_provider`). Raises
+    ``HostedProviderError`` naming the provider, the server and the fix.
+    """
+    from gaia.llm.cloud_keys import CloudKeyError, reconnect_provider
+    from gaia.llm.gateway import GatewayError
+
+    remedy = _HOSTED_PROVIDER_REMEDY.get(provider, "Connect the provider in Lemonade")
+    try:
+        usable = reconnect_provider(provider, client)
+    except (CloudKeyError, GatewayError) as e:
+        raise HostedProviderError(
+            f"Could not connect {provider} to run {model_id!r}: {e} "
+            f"See {HOSTED_MODELS_DOCS}"
+        ) from e
+    if not usable:
+        raise HostedProviderError(
+            f"{provider} has no working key on the Lemonade server, so "
+            f"{model_id!r} cannot run. {remedy}. See {HOSTED_MODELS_DOCS}"
+        )
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -3780,6 +3961,9 @@ class Agent(abc.ABC):
     # generic shell/file-mutation tools. Empty by default.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset()
 
+    # This turn's last request_user_input question, while it went unanswered.
+    _unanswered_question: Optional[str] = None
+
     #: Method names a composed mixin contributes to the confirmation decision.
     #: A static name set cannot express "gate this call only in this state" —
     #: the browser mixin gates a click only when the page is inside a signed-in
@@ -3876,7 +4060,7 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        claude_model: str = "claude-sonnet-5",
+        claude_model: str = DEFAULT_CLAUDE_MODEL,
         base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: Optional[int] = None,
@@ -3901,11 +4085,22 @@ Do NOT wrap conversational replies in JSON.
         context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,
         context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,
         tool_scope: Optional[Sequence[str]] = None,
+        provider: Optional[str] = None,
     ):
         """
         Initialize the Agent with LLM client.
 
         Args:
+            provider: Who serves the chat model. ``None`` (default) keeps the
+                          ``use_claude`` switch. ``"lemonade"`` is a local model,
+                          ``"claude"`` the Claude API (same as ``use_claude=True``),
+                          and a Lemonade cloud provider (``"fireworks"``, or
+                          ``"amd"`` for the AMD LLM gateway) runs ``model_id`` on
+                          that provider through Lemonade's cloud routing; the id
+                          gets the ``<provider>.`` prefix when it lacks one. A
+                          cloud provider that Lemonade can't use (no key, not
+                          registered, local-only mode on) raises
+                          ``HostedProviderError`` here, never a fallback.
             use_claude: If True, uses Claude API (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
@@ -3969,6 +4164,10 @@ Do NOT wrap conversational replies in JSON.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
+        use_claude, model_id, hosted_provider = resolve_agent_provider(
+            provider, use_claude, model_id
+        )
+        claude_model = claude_model_for(provider, model_id, claude_model)
         if max_output_tokens is not None and (
             isinstance(max_output_tokens, bool)
             or not isinstance(max_output_tokens, int)
@@ -4056,6 +4255,13 @@ Do NOT wrap conversational replies in JSON.
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
+        # Set by start_session_history: process_query then records each turn.
+        self._owned_history: Optional[SessionHistory] = None
+        self._history_on_cut: Optional[Callable[[Any], None]] = None
+        # close() closed a history this agent had been given.
+        self._history_closed = False
+        # Tools whose full docs went to the model this turn (thin schemas).
+        self._tool_docs_sent: Set[str] = set()
         # User messages and tool results, for skill tools that check facts (note_seen).
         self._seen_sources: List[Tuple[str, Dict[str, Any], str]] = []
         self.max_steps = max_steps if max_steps is not None else default_max_steps()
@@ -4091,7 +4297,10 @@ Do NOT wrap conversational replies in JSON.
         # Optional cooperative cancel signal. When set (e.g. by the Agent UI's
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
-        self._cancel_event: Optional[threading.Event] = None
+        # Kept when a subclass set ``cancel_event`` before calling this.
+        self._cancel_event: Optional[threading.Event] = getattr(
+            self, "_cancel_event", None
+        )
         # System text supplied by an API caller; see set_caller_system_prompt.
         self._caller_system_prompt: Optional[str] = None
         # Optional queue of follow-ups the user sent WHILE this turn was
@@ -4162,6 +4371,10 @@ Do NOT wrap conversational replies in JSON.
                 probe_client.current_base_url()
                 if resolve_after_start:
                     base_url = probe_client.base_url
+                if hosted_provider:
+                    # Keyed before the probe, which learns tool calling from it.
+                    connect_hosted_provider(hosted_provider, model_id, probe_client)
+                    hosted_provider = None
                 try:
                     probe_client.health_check()
                 except LemonadeUnresponsiveError:
@@ -4188,6 +4401,15 @@ Do NOT wrap conversational replies in JSON.
                 # Starting GAIA's own server picks its port, so follow it.
                 if resolve_after_start:
                     base_url = resolve_lemonade_base_url()
+        if hosted_provider:
+            # skip_lemonade: the server is the caller's, but it still routes the call.
+            from gaia.llm.lemonade_client import LemonadeClient
+
+            connect_hosted_provider(
+                hosted_provider,
+                model_id,
+                LemonadeClient(base_url=base_url, verbose=False),
+            )
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -4234,6 +4456,7 @@ Do NOT wrap conversational replies in JSON.
         # Claude always speaks native tool_calls, whatever model_id says — the
         # two tool-capability gates below read this alongside model_id.
         self._use_claude = use_claude
+        self._claude_model = claude_model
 
         # Initialised here (not lazy via getattr) so subclass tests that drive
         # the parsing helpers outside the standard query lifecycle don't see
@@ -5646,11 +5869,14 @@ Do NOT wrap conversational replies in JSON.
     ) -> None:
         """Hook run at the top of every turn, before the prompt is composed.
 
-        Default: no-op. Mixins that orient the agent in its environment — the
-        project map (#3379) is the first — override this and must call
+        Default: forgets which tools' docs were sent. Mixins that orient the
+        agent in its environment — the project map (#3379) is the first —
+        override this and must call
         ``super()._on_task_start(user_input)``. Anything expensive belongs
         behind a once-per-session guard inside the override, not here.
         """
+        # Docs go again each turn: a history trim may have dropped them.
+        self._tool_docs_sent = set()
 
     def _admit_skill_tools(  # pylint: disable=unused-argument
         self, names: List[str]
@@ -9465,6 +9691,31 @@ Do NOT wrap conversational replies in JSON.
         return restored + list(getattr(self, "_seen_sources", []))
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
+        """Run a tool call; a malformed one gets the tool's full docs back.
+
+        With thin schemas the model has parameter names but not how to fill
+        them in, so the first invalid call to a tool each turn carries its
+        ``[Tool docs: ...]`` block under ``tool_docs``.
+        """
+        result = self._dispatch_tool(tool_name, tool_args)
+        if (
+            self._thin_tool_schemas()
+            and isinstance(result, dict)
+            and result.get("error_type") == "invalid_arguments"
+            and tool_name not in self._tool_docs_sent
+        ):
+            result = {**result, "tool_docs": self._tool_docs([tool_name])}
+        return result
+
+    def _tool_docs(self, names: List[str]) -> str:
+        """Render *names* as ``[Tool docs: ...]`` blocks and note them as sent."""
+        from gaia.agents.base.tool_loader import format_tool_docs
+
+        self._tool_docs_sent.update(names)
+        schemas = self._build_openai_tool_schemas(filter_to=names)
+        return "\n\n".join(format_tool_docs(schema) for schema in schemas)
+
+    def _dispatch_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
 
@@ -11376,12 +11627,64 @@ Do NOT wrap conversational replies in JSON.
             record_id=record_id,
         )
 
-    def _model_service_label(self) -> Optional[str]:
-        """Who serves the chat model ("Fireworks AI"), for failure messages.
+    def _inference_location(self) -> "InferenceLocation":
+        """Where this agent's chat turns are actually answered.
 
-        ``None`` when this agent cannot tell; subclasses that know override it.
+        Reads the live client when there is one: it holds the catalog, so a
+        cloud provider discovered at runtime is recognised too. Before the
+        client exists (a prompt composed during ``__init__``) it reads the
+        backend choice already stored on the agent.
         """
-        return None
+        from gaia.llm.inference_location import resolve_inference_location
+
+        chat = getattr(self, "chat", None)
+        live_model = getattr(chat, "effective_model", None)
+        chat_config = getattr(chat, "config", None)
+        # A stand-in chat with no model of its own: the agent's choice stands.
+        if isinstance(live_model, str) and chat_config is not None:
+            lookup = getattr(
+                getattr(chat, "llm_client", None), "cloud_model_provider", None
+            )
+            return resolve_inference_location(
+                live_model,
+                use_claude=bool(chat_config.use_claude),
+                cloud_provider_lookup=lookup if callable(lookup) else None,
+            )
+        use_claude = bool(getattr(self, "_use_claude", False))
+        model = (
+            getattr(self, "_claude_model", None)
+            if use_claude
+            else getattr(self, "model_id", None)
+        )
+        return resolve_inference_location(
+            model or resolve_default_chat_model(), use_claude=use_claude
+        )
+
+    def _model_service_label(self) -> Optional[str]:
+        """Names the provider in a failed turn's message: "Fireworks AI: …"."""
+        from gaia.llm.lemonade_client import (
+            _endpoint_label,
+            configured_lemonade_url,
+            resolve_lemonade_base_url,
+        )
+
+        location = self._inference_location()
+        if location.provider != "lemonade" or configured_lemonade_url() is None:
+            return location.display
+        # A base URL the user chose may be any OpenAI-compatible server.
+        live = getattr(
+            getattr(getattr(self, "chat", None), "llm_client", None),
+            "current_base_url",
+            None,
+        )
+        url = live() if callable(live) else None
+        # A stand-in client answers with something that is not an address.
+        if not isinstance(url, str):
+            url = resolve_lemonade_base_url()
+        label = _endpoint_label(url)
+        if not label:
+            return "The configured model server"
+        return f"The model server at {label}"
 
     def _save_failure_record(self, exc: BaseException) -> Optional[str]:
         """Save a local fault record for *exc*; its id, or None when not one.
@@ -12229,7 +12532,7 @@ Do NOT wrap conversational replies in JSON.
         did not fix. The loop then makes each call itself, through the same
         approval gates as any call, once per turn, and has the model answer from
         the result. A call goes here only when its arguments come straight from
-        the request ("add the skill at <path>"). Empty by default.
+        the request ("remember X", "add the skill at <path>"). Empty by default.
         """
         return []
 
@@ -12441,7 +12744,7 @@ Do NOT wrap conversational replies in JSON.
         """
         if not answer or not answer.strip():
             return []
-        roots = [os.getcwd(), self._verification_project_root()]
+        roots = [self._session_folder(), os.getcwd(), self._verification_project_root()]
         return ungrounded(
             strip_verification_scope(answer),
             self._request_text(query),
@@ -12691,7 +12994,11 @@ Do NOT wrap conversational replies in JSON.
                 strip_verification_scope(answer),
                 self._request_text(query),
                 history,
-                [os.getcwd(), self._verification_project_root()],
+                [
+                    self._session_folder(),
+                    os.getcwd(),
+                    self._verification_project_root(),
+                ],
             )
         self._turn_ungrounded = unverified_reasons(findings)
 
@@ -13155,6 +13462,7 @@ Do NOT wrap conversational replies in JSON.
         ns_id = self._namespaced_agent_id()
         # getattr: hosts built with __new__ reach process_query without __init__.
         self._turn_error_start = len(getattr(self, "error_history", ()))
+        self._unanswered_question = None
         # A level the model chose for the last request must not carry into this one.
         reset_effort = getattr(self, "reset_reasoning_effort", None)
         if reset_effort is not None:
@@ -13172,8 +13480,49 @@ Do NOT wrap conversational replies in JSON.
                     self._console_cancelled if stoppable else None,
                 ),
             ):
-                user_input = self._expand_skill_command(user_input)
-                return self._process_query_impl(user_input, max_steps, trace, filename)
+                history = self._recording_history(user_input)
+                if history is not None:
+                    history.prepare(
+                        self,
+                        str(user_input),
+                        on_cut=getattr(self, "_history_on_cut", None),
+                    )
+                    history.begin([{"role": "user", "content": str(user_input)}])
+                try:
+                    expanded = self._expand_skill_command(user_input)
+                    result = self._process_query_impl(
+                        expanded, max_steps, trace, filename
+                    )
+                except BaseException:
+                    if history is not None:
+                        history.discard_pending()
+                    raise
+                if history is not None:
+                    messages = (
+                        result.get("model_messages")
+                        if isinstance(result, dict)
+                        else None
+                    )
+                    if messages is None:
+                        answer = (
+                            result.get("result") if isinstance(result, dict) else ""
+                        )
+                        messages = [
+                            {"role": "user", "content": str(user_input)},
+                            {"role": "assistant", "content": str(answer or "")},
+                        ]
+                    try:
+                        history.record(messages)
+                    except Exception as e:
+                        history.discard_pending()
+                        raise RuntimeError(
+                            "The turn finished but could not be saved to this "
+                            f"agent's session history ({type(e).__name__}: {e}). "
+                            "Its answer is not in later turns' context."
+                        ) from e
+                    # The list itself shows the turn just recorded.
+                    history.prepare(self, "")
+                return result
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
             # retries). A recorder left attached would fold the next turn's
@@ -13185,6 +13534,152 @@ Do NOT wrap conversational replies in JSON.
             # backdate the next one.
             self._pre_turn_spans = None
             self._run_turn_end_hooks()
+
+    def start_session_history(
+        self,
+        path: Optional[Union[str, os.PathLike]] = None,
+        on_cut: Optional[Callable[[Any], None]] = None,
+    ) -> "SessionHistory":
+        """Give this agent a conversation of its own, recorded turn by turn.
+
+        From here on each ``process_query`` sends the earlier turns that fit
+        the model's window (tool calls included) and records the finished turn;
+        a turn that raises leaves no trace. *path* keeps the transcript in a
+        SQLite file, so a later agent passing the same path resumes it; ``None``
+        keeps it in memory. One agent per conversation keeps conversations
+        apart. Calling it again starts a new history and closes the one this
+        method started before; ``close()`` closes it.
+
+        *on_cut* is called with a ``HistoryCut(turns, tokens)`` whenever more
+        earlier turns drop out of the model's view than before, so a host can
+        tell the user. The file still holds every turn.
+
+        Turns may run on any thread, one at a time: a tool must not call
+        ``process_query`` on the agent that is running it.
+        """
+        import sqlite3
+
+        from gaia.agents.base.history import SessionHistory
+
+        try:
+            history = SessionHistory(path)
+        except (sqlite3.Error, OSError) as e:
+            raise RuntimeError(
+                f"Could not open a session history at {path}: {e}. Pass a file "
+                "path in a folder you can write to, or None to keep it in memory."
+            ) from e
+        previous = getattr(self, "_owned_history", None)
+        self._owned_history = history
+        self._history_closed = False
+        self._history_on_cut = on_cut
+        self.conversation_history = history
+        if previous is not None:
+            previous.close()
+        history.prepare(self, "")
+        return history
+
+    def switch_model(
+        self, target: str, on_status: Optional[Callable[[str], None]] = None
+    ) -> str:
+        """Move this agent to model *target*, keeping its conversation.
+
+        *target* is a Claude id (``claude-sonnet-5``) or a model the Lemonade
+        server lists: a downloaded local one, or a cloud one such as
+        ``fireworks.<model>``. Returns the name to show for it. The new client
+        is built before anything changes and the change is rolled back as a
+        unit, so a failed switch raises ``RuntimeError`` with the fix and
+        leaves the agent on its old model. *on_status* gets a plain line while
+        the switch waits for GAIA's model server to restart. Call it between
+        turns, not during one.
+        """
+        from gaia.agents.base.model_switch import switch_concrete_model
+
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError(
+                f"switch_model needs a model id, got {target!r}. Pass a Claude id "
+                "or a model your Lemonade server lists."
+            )
+        return switch_concrete_model(self, target.strip(), on_status)
+
+    def _model_switch_config(self) -> Any:
+        """A settings object with ``use_claude``/``model_id``/``claude_model``
+        that a switch must keep in step, or None. Default: None."""
+        return None
+
+    def follow_model_switch(self) -> None:
+        """Hook run after a model switch, before the prompt is rebuilt.
+
+        Default: nothing. Override to re-point whatever this agent chose for
+        the model it was built on (a second client, a per-model setting).
+        """
+
+    def _snapshot_model_followers(self) -> Dict[str, Any]:
+        """State ``follow_model_switch`` may change, kept for a switch's rollback.
+
+        An override adds its own keys to ``super()``'s and undoes them in
+        ``_restore_model_followers``.
+        """
+        from gaia.agents.base.model_switch import snapshot_followers
+
+        return snapshot_followers(self)
+
+    def _restore_model_followers(self, state: Dict[str, Any]) -> None:
+        from gaia.agents.base.model_switch import restore_followers
+
+        restore_followers(self, state)
+
+    @property
+    def cancel_event(self) -> Optional[threading.Event]:
+        """The event that stops a running turn at its next step boundary.
+
+        Set it from another thread to stop ``process_query``; a ``TurnCancel``
+        also sets the answer the turn ends with. ``None`` (default): no stop.
+        """
+        return getattr(self, "_cancel_event", None)
+
+    @cancel_event.setter
+    def cancel_event(self, event: Optional[threading.Event]) -> None:
+        self._cancel_event = event
+
+    def _recording_history(self, user_input: Any) -> Optional["SessionHistory"]:
+        """The history ``start_session_history`` gave this agent, while it's in use."""
+        # A host that assigned its own history since then runs with that one.
+        if getattr(self, "_history_closed", False) and not self.conversation_history:
+            raise RuntimeError(
+                "close() closed this agent's session history, so the turn would "
+                "run with none. Call start_session_history() again, or build a "
+                "new agent."
+            )
+        history = getattr(self, "_owned_history", None)
+        if history is None or self.conversation_history is not history:
+            return None
+        return history if str(user_input).strip() else None
+
+    def close(self) -> None:
+        """Release what this agent holds. Safe to call more than once.
+
+        The base closes the history ``start_session_history`` opened, then
+        runs the ``close()`` of any mixin listed after it. Subclasses that
+        hold more (watchers, database handles, MCP servers) extend this and
+        call ``super().close()``.
+        """
+        history = getattr(self, "_owned_history", None)
+        if history is not None:
+            self._owned_history = None
+            self._history_closed = True
+            if self.conversation_history is history:
+                self.conversation_history = []
+            history.close()
+        # A mixin listed after Agent may hold resources of its own.
+        parent = getattr(super(), "close", None)
+        if callable(parent):
+            parent()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
 
     def _expand_skill_command(self, user_input: Any) -> Any:
         """Run ``/<skill-name> request`` on that skill, as Claude Code does.
@@ -13619,6 +14114,100 @@ Do NOT wrap conversational replies in JSON.
         )
         return f"{note}\n\n{user_input}"
 
+    def _recover_from_parse_error(
+        self,
+        parse_exc: ValueError,
+        *,
+        steps_taken: int,
+        step_results: List[Any],
+        messages: List[Dict[str, Any]],
+        parse_failures: int,
+        markup_retries: int,
+    ) -> Tuple[Optional[str], int]:
+        """Handle a model reply whose tool call could not be parsed.
+
+        Records the error and either gives up or asks the model to try again.
+        Returns ``(answer, markup_retries)``: ``answer`` is the reply to end the
+        turn with when the retries are used up, else None after the retry
+        prompt has been appended to ``messages``.
+        """
+        logger.warning(
+            "Tool-call parse failed (step %d): %s — recovering with retry prompt",
+            steps_taken,
+            parse_exc,
+        )
+        self.error_history.append(
+            {
+                "step": steps_taken,
+                "error": str(parse_exc),
+                "type": "tool_call_parse_error",
+            }
+        )
+        # Pull the most recent successful image path
+        # out of step_results so both the recovery prompt and the
+        # give-up fallback can surface it.  When the SD two-step
+        # flow's step-1 succeeded and step-2 parse-failed, the
+        # canonical path is the breadcrumb the model needs to
+        # retry verbatim, and the breadcrumb the user needs in the
+        # final answer so the successful generation isn't lost.
+        # No-op for agents that don't emit ``image_path``.
+        _last_image_path = next(
+            (
+                r["image_path"]
+                for r in reversed(step_results)
+                if isinstance(r, dict)
+                and r.get("status") == "success"
+                and r.get("image_path")
+            ),
+            None,
+        )
+        if isinstance(parse_exc, MalformedToolMarkup):
+            if markup_retries >= _MAX_MARKUP_RETRIES:
+                return _TOOL_MARKUP_FAILURE_ANSWER, markup_retries
+            markup_retries += 1
+        # If we've already retried several times, give up gracefully and
+        # answer in plain text rather than spamming the user.
+        if parse_failures >= 3:
+            if _last_image_path:
+                return (
+                    f"I generated your image at `{_last_image_path}`, "
+                    "but I couldn't finish the follow-up step. "
+                    "Try asking for the next step in a fresh message."
+                ), markup_retries
+            return (
+                "I had trouble formatting my tool call. Could you "
+                "rephrase or break the request into smaller pieces?"
+            ), markup_retries
+        assistant_msg = "[I tried to call a tool but it could not be parsed.]"
+        user_msg = self._tool_call_retry_prompt(parse_exc)
+        if _last_image_path:
+            user_msg += (
+                f"\n\nYour previous step generated an image at "
+                f"`{_last_image_path}`. If your next tool call "
+                "needs this path, copy that string VERBATIM — do "
+                "not retype it."
+            )
+            logger.info(
+                "[PARSE-RECOVERY] injected canonical image_path=%s",
+                _last_image_path,
+            )
+        # Push a synthetic assistant turn + recovery user message so the
+        # next LLM call has context. Don't include the raw envelope to
+        # keep noise out of the conversation history.
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_msg,
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": user_msg,
+            }
+        )
+        return None, markup_retries
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -13647,7 +14236,8 @@ Do NOT wrap conversational replies in JSON.
         )
         self._single_tool_done = False
         self._turn_seq += 1
-        self._denied_effects = DeniedEffects(os.getcwd())
+        session_folder = self._session_folder()
+        self._denied_effects = DeniedEffects(session_folder)
         Agent._lift_declined_calls(
             self, getattr(self, "_original_user_input", None) or user_input
         )
@@ -13658,11 +14248,11 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_schemas = None
         self._last_tool_filter = None
 
-        # Relative paths resolve against the working directory, as the file tools do.
+        # Relative paths resolve against the chat folder, as the file tools do.
         # Text handed over to translate names no source to inventory.
         self._extraction_ledger = ExtractionLedger(
             instruction_part(user_input),
-            os.getcwd(),
+            session_folder,
             available=self._read_validator() is not None,
         )
         # A test agent built via __new__ never ran Agent.__init__, so it has
@@ -13673,7 +14263,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self._turn_scope.begin_turn(
             user_input,
-            os.getcwd(),
+            session_folder,
             scratch=getattr(self._read_validator(), "scratch_dir", None),
         )
         self._stopped_on_failing_repeats = False
@@ -13844,7 +14434,7 @@ Do NOT wrap conversational replies in JSON.
         self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
             self._request_text(user_input),
-            os.getcwd(),
+            session_folder,
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
             backups=self._session_backups,
@@ -14939,86 +15529,19 @@ Do NOT wrap conversational replies in JSON.
                 markup_retries = 0
                 self._mark_errors_recovered()
             except ValueError as parse_exc:
-                logger.warning(
-                    "Tool-call parse failed (step %d): %s — recovering with retry prompt",
-                    steps_taken,
-                    parse_exc,
-                )
-                self.error_history.append(
-                    {
-                        "step": steps_taken,
-                        "error": str(parse_exc),
-                        "type": "tool_call_parse_error",
-                    }
-                )
                 error_count += 1
                 parse_failures += 1
-                # Pull the most recent successful image path
-                # out of step_results so both the recovery prompt and the
-                # give-up fallback can surface it.  When the SD two-step
-                # flow's step-1 succeeded and step-2 parse-failed, the
-                # canonical path is the breadcrumb the model needs to
-                # retry verbatim, and the breadcrumb the user needs in the
-                # final answer so the successful generation isn't lost.
-                # No-op for agents that don't emit ``image_path``.
-                _last_image_path = next(
-                    (
-                        r["image_path"]
-                        for r in reversed(step_results)
-                        if isinstance(r, dict)
-                        and r.get("status") == "success"
-                        and r.get("image_path")
-                    ),
-                    None,
+                given_up, markup_retries = self._recover_from_parse_error(
+                    parse_exc,
+                    steps_taken=steps_taken,
+                    step_results=step_results,
+                    messages=messages,
+                    parse_failures=parse_failures,
+                    markup_retries=markup_retries,
                 )
-                if isinstance(parse_exc, MalformedToolMarkup):
-                    if markup_retries >= _MAX_MARKUP_RETRIES:
-                        final_answer = _TOOL_MARKUP_FAILURE_ANSWER
-                        break
-                    markup_retries += 1
-                # If we've already retried several times, give up gracefully and
-                # answer in plain text rather than spamming the user.
-                if parse_failures >= 3:
-                    if _last_image_path:
-                        final_answer = (
-                            f"I generated your image at `{_last_image_path}`, "
-                            "but I couldn't finish the follow-up step. "
-                            "Try asking for the next step in a fresh message."
-                        )
-                    else:
-                        final_answer = (
-                            "I had trouble formatting my tool call. Could you "
-                            "rephrase or break the request into smaller pieces?"
-                        )
+                if given_up is not None:
+                    final_answer = given_up
                     break
-                assistant_msg = "[I tried to call a tool but it could not be parsed.]"
-                user_msg = self._tool_call_retry_prompt(parse_exc)
-                if _last_image_path:
-                    user_msg += (
-                        f"\n\nYour previous step generated an image at "
-                        f"`{_last_image_path}`. If your next tool call "
-                        "needs this path, copy that string VERBATIM — do "
-                        "not retype it."
-                    )
-                    logger.info(
-                        "[PARSE-RECOVERY] injected canonical image_path=%s",
-                        _last_image_path,
-                    )
-                # Push a synthetic assistant turn + recovery user message so the
-                # next LLM call has context. Don't include the raw envelope to
-                # keep noise out of the conversation history.
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": assistant_msg,
-                    }
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": user_msg,
-                    }
-                )
                 steps_taken += 1
                 continue
             logger.debug(f"Parsed response: {parsed}")
@@ -16012,6 +16535,9 @@ Do NOT wrap conversational replies in JSON.
                 if (
                     last_index_pos >= 0
                     and not query_after_index
+                    and not _requests_indexing_only(
+                        getattr(self, "_original_user_input", None) or user_input
+                    )
                     and steps_taken < steps_limit - 1
                 ):
                     logger.debug(
@@ -16154,7 +16680,7 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     unlooked = named_workspace_paths(
                         getattr(self, "_original_user_input", None) or user_input,
-                        os.getcwd(),
+                        self._session_folder(),
                     )
                     if unlooked:
                         look_first_reprompted = True
