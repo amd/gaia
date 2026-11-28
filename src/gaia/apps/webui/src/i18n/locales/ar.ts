@@ -3152,6 +3152,9 @@ const messages: Messages = {
     // The model chip's status icons
     'modelChip.notDownloaded': 'غير منزَّل',
     'modelChip.switchFailed': 'تعذّر تبديل النموذج',
+    'modelChip.next': 'التالي',
+    'modelChip.queuedTitle': 'يُستخدم {model} بدءًا من رسالتك التالية.',
+    'modelChip.notDownloadedTitle': 'لم يُنزَّل {name} بعد. افتح القائمة لتنزيله.',
 
     // The update chip
 

@@ -88,8 +88,20 @@
 }
 
 .composer-chip-next {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
     color: var(--accent-blue);
     font-size: 11.5px;
+}
+
+.composer-chip-next-arrow,
+.composer-chip-next-tag {
+    flex-shrink: 0;
+}
+
+.composer-chip-next-model {
     overflow: hidden;
     text-overflow: clip;
     animation: fade-cut-inline both;
