@@ -191,7 +191,7 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	// 2. Switch to gaiacpp: through the gate, back in chat, header marked.
 	tui.run("/agent gaiacpp")
 	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat},
-		"contains": "(" + catalog.NativeAgentBinary + " · Beta)"})
+		"contains": "(" + catalog.HarnessLabel(catalog.NativeAgentBinary) + " · Beta)"})
 	// The new agent warms up behind a stage that covers the transcript, and a
 	// command typed meanwhile runs once it is ready: its answer is the wait.
 	tui.run("/agent")
@@ -211,7 +211,7 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	// 3. And back.
 	tui.run("/agent gaiapy")
 	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat},
-		"absent": "(" + catalog.NativeAgentBinary + " · Beta)"})
+		"absent": "(" + catalog.HarnessLabel(catalog.NativeAgentBinary) + " · Beta)"})
 	tui.run("/agent")
 	tui.waitFor(map[string]any{"contains": "Full-featured (gaia-agent) · running now · your saved choice"})
 	onPython := tui.screen()
@@ -273,7 +273,7 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 		tui.keys("enter")
 		time.Sleep(100 * time.Millisecond)
 	}
-	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}, "contains": "(gaiacpp · Beta)", "timeout_ms": 20000})
+	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}, "contains": "(Fast and light · Beta)", "timeout_ms": 20000})
 	// The transcript comes back once the new agent has warmed up.
 	tui.waitFor(map[string]any{"contains": "Downloaded gaiacpp 0.27.0", "timeout_ms": 20000})
 	if n := downloads.Load(); n != 1 {

@@ -208,6 +208,54 @@ TEST(ShellCommandScopeTest, ProgramOrSubcommandOrExact) {
     EXPECT_EQ(shellCommandScope("mkdir -p out"), "cmd:mkdir");
 }
 
+// The shape a coding turn sends over and over: cd into the project, one command, 2>&1.
+TEST(ShellCommandScopeTest, ACdIntoAFolderAndMergedOutputKeepTheCommandsOwnGrant) {
+    ASSERT_TRUE(isReadOnlyShellCommand("cd /work/repo", true)) << "cd alone runs without a card";
+    EXPECT_EQ(shellCommandScope("cd /work/repo && go test ./... 2>&1"), "cmd:go test");
+    EXPECT_EQ(shellCommandScope("go test ./pkg -run TestX 2>&1"), "cmd:go test");
+    EXPECT_EQ(shellCommandScope("cd /work/repo && make tests 2>&1"), "cmd:make tests");
+    EXPECT_EQ(shellCommandScope("cd /work/repo && git log --oneline -10"), "cmd:git log");
+    EXPECT_EQ(shellCommandScope("cd /work/repo && npm test"), "cmd:npm test");
+    EXPECT_EQ(shellCommandScope("cd /work/repo && gcc -std=c89 -Wall -I. -Itests -c tests/misc_tests.c -o tests/misc_tests.o"),
+              "cmd:gcc");
+    EXPECT_EQ(shellCommandScope("gcc -c a.c"), "cmd:gcc");
+    EXPECT_EQ(shellCommandScope("clang++ -std=c++17 -O2 main.cpp -o app 2>&1"), "cmd:clang++");
+
+    // Anything more than that one shape is still approved only as written.
+    for (const char* line : {
+             "cd /work/repo && make clean && make tests",
+             "cd /work/repo && gcc -c a.c && ./a.out",
+             "cd /work/repo && git log | head -20",
+             "cd /work/repo; rm -rf build",
+             "cd /work/repo && ./cJSON_test 2>&1",
+             "cd /work/repo && python3 -m pytest tests",
+             "cd .. && rm -rf build",
+             "cd ~/elsewhere && rm notes.txt",
+             "cd /work/* && rm notes.txt",
+             "cd \"/work/my repo\" && make test",
+             "cd /work/repo && cd .. && rm x",
+             "cd /work/repo || rm x",
+             "go test ./... > out.txt 2>&1",
+             "go test ./... 2>&1 | tee log",
+             "make test 2>&1; rm -rf build",
+             "pytest 2>&1 &",
+             "gcc -c a.c -o ../../outside.o",
+             "gcc -c a.c -o../outside.o",
+             "gcc @flags.rsp",
+             "gcc -wrapper ./evil a.c",
+             "gcc -fplugin=./evil.so a.c",
+             "gcc -specs=evil.specs a.c",
+             "gcc -B./bin a.c",
+             "gcc a.c -Wl,--plugin=./evil.so",
+             "clang -Xclang -load -Xclang ./evil.so a.c",
+             "gcc -fuse-ld=./evil a.c",
+         }) {
+        EXPECT_EQ(shellCommandScope(line), std::string("exact:") + line) << line;
+    }
+    EXPECT_EQ(shellCommandScope("  go test ./...   2>&1 > out.txt "), "exact:go test ./...   2>&1 > out.txt")
+        << "an exact grant is for the line as the user saw it";
+}
+
 TEST(ShellCommandScopeTest, AlwaysAllowCoversOnlyThatCommand) {
     const std::string dir = (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia-grant-scope-test")).string();
     std::filesystem::remove_all(dir);

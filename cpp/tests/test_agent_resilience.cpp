@@ -593,6 +593,55 @@ TEST(AgentStreaming, AReplyCutOffInItsReasoningSaysSoAndIsNotRetried) {
     EXPECT_EQ(mock.requestCount(), 1) << "sending the same request again would hit the same limit";
 }
 
+namespace {
+class WorkingAgent : public ResilienceAgent {
+public:
+    using ResilienceAgent::ResilienceAgent;
+
+protected:
+    std::string workSoFar() const override { return "Before it stopped, this turn had already:\n- Run add"; }
+};
+}  // namespace
+
+// A turn that did work and then ran out of reply limit while reasoning: the reason is the
+// limit (not an "LLM error"), the remedy is one this surface has, and the work done is listed.
+TEST(AgentStreaming, AReplyLimitAfterWorkSaysWhatWasDoneAndOffersARemedyTheSurfaceHas) {
+    bench::MockLlmServer mock;
+    mock.enableSseStreaming(true);
+    const json callDelta = {{"tool_calls", json::array({{{"index", 0}, {"id", "c1"}, {"type", "function"},
+                                                         {"function", {{"name", "add"}, {"arguments", R"({"a":1,"b":2})"}}}}})}};
+    mock.pushSseStream(sse({delta(callDelta, "tool_calls")}));
+    const std::string thinking = sse({delta({{"reasoning_content", "Thinking at great length"}}, "length")});
+    mock.pushSseStream(thinking);
+    mock.pushSseStream(thinking);  // the closing answer runs out too
+    AgentConfig cfg = cfgFor(mock);
+    cfg.streaming = true;
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";  // a reasoning model keeps its full limit
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    cfg.maxTokens = 16384;
+    cfg.contextSize = 65536;
+    cfg.replyLimitRemedy = "Break the request into smaller steps";
+    WorkingAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+
+    EXPECT_EQ(r["status"], "error") << r.dump();
+    EXPECT_EQ(r.value("stop_reason", ""), "reply_limit") << r.dump();
+    const std::string why = r["result"].get<std::string>();
+    EXPECT_EQ(why.rfind("The model reached its reply limit of 16384 tokens", 0), 0u) << why;
+    EXPECT_EQ(why.find("LLM error"), std::string::npos) << "the server answered; the model ran out: " << why;
+    EXPECT_NE(why.find("Break the request into smaller steps or ask for a shorter answer."), std::string::npos) << why;
+    EXPECT_EQ(why.find("--max-tokens"), std::string::npos) << why;
+    EXPECT_EQ(why.find("--ctx-size"), std::string::npos) << why;
+    EXPECT_NE(why.find("Before it stopped, this turn had already:\n- Run add"), std::string::npos) << why;
+    ASSERT_EQ(agent.executed.size(), 1u);
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 3u);
+    EXPECT_EQ(json::parse(bodies[1])["max_tokens"], 16384);
+    EXPECT_LE(json::parse(bodies[2])["max_tokens"].get<int>(), 4096)
+        << "a second full-size try after the limit costs minutes more";
+}
+
 TEST(AgentStreaming, AStreamWithReasoningButNoAnswerIsRetried) {
     bench::MockLlmServer mock;
     mock.enableSseStreaming(true);
@@ -1641,4 +1690,107 @@ TEST(AgentResilience, ATagToolCallShownWithItsExplanationIsNotRun) {
     second.initForTest();
     second.processQuery("add 1 and 2");
     EXPECT_EQ(second.executed, (std::vector<std::string>{"add"})) << "a call that ends the reply still runs";
+}
+
+// ---- History that outgrows the window ----
+
+namespace {
+
+struct NoticeConsole : SilentConsole {
+    std::vector<std::string>* warnings;
+    explicit NoticeConsole(std::vector<std::string>* w) : warnings(w) {}
+    void printWarning(const std::string& m) override { warnings->push_back(m); }
+};
+
+std::string answerUsing(const std::string& text, int promptTokens) {
+    return json{{"choices", json::array({{{"message", {{"role", "assistant"}, {"content", text}}}}})},
+                {"usage", {{"prompt_tokens", promptTokens}, {"completion_tokens", 10}}}}
+        .dump();
+}
+
+size_t userTurns(const Agent& agent) {
+    size_t n = 0;
+    for (const auto& m : agent.history()) n += m.role == MessageRole::USER ? 1 : 0;
+    return n;
+}
+
+}  // namespace
+
+// The terminal modes capped history at 40 messages whatever the window; nothing said so.
+TEST(AgentHistoryWindow, HistoryIsKeptWhileItFitsTheWindowTheModelIsLoadedWith) {
+    bench::MockLlmServer mock;
+    // Another program loaded the model at 256K; this agent is configured for 32K.
+    mock.setHealth(R"({"status":"ok","all_models_loaded":[{"model_name":"Gemma-4-E4B-it-GGUF",)"
+                   R"("recipe_options":{"ctx_size":262144}}]})");
+    AgentConfig cfg = cfgFor(mock);
+    cfg.contextSize = 32768;
+    cfg.maxTokens = 16384;
+    cfg.maxHistoryMessages = 0;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    std::vector<std::string> warnings;
+    agent.setOutputHandler(std::make_unique<NoticeConsole>(&warnings));
+
+    for (int turn = 1; turn <= 30; ++turn) {
+        mock.pushResponse(answerUsing("reply " + std::to_string(turn), 1500 * turn));  // 45K tokens by the end
+        agent.processQuery("question " + std::to_string(turn) + " " + std::string(2000, 'q'));
+    }
+    EXPECT_EQ(userTurns(agent), 30u) << "45K tokens fit a 256K window: nothing may be dropped";
+    EXPECT_TRUE(warnings.empty()) << warnings.front();
+}
+
+TEST(AgentHistoryWindow, DroppingTheOldestTurnsIsSaidOncePerConversation) {
+    bench::MockLlmServer mock;  // reports the model loaded at 16384
+    AgentConfig cfg = cfgFor(mock);
+    cfg.contextSize = 16384;
+    cfg.maxTokens = 4096;
+    cfg.maxHistoryMessages = 0;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    std::vector<std::string> warnings;
+    agent.setOutputHandler(std::make_unique<NoticeConsole>(&warnings));
+
+    size_t kept = 0;
+    for (int turn = 1; turn <= 12; ++turn) {
+        mock.pushResponse(answerUsing("reply " + std::to_string(turn), 2000 * turn));
+        agent.processQuery("question " + std::to_string(turn) + " " + std::string(6000, 'q'));
+        if (turn == 5) {
+            EXPECT_EQ(userTurns(agent), 5u) << "10K tokens still fit";
+            EXPECT_TRUE(warnings.empty());
+        }
+        kept = userTurns(agent);
+    }
+    EXPECT_LT(kept, 12u) << "24K tokens cannot stay in a 16K window";
+    EXPECT_GE(kept, 1u);
+    // The newest turn is never the one dropped, and a turn is dropped whole.
+    const auto history = agent.history();
+    ASSERT_FALSE(history.empty());
+    EXPECT_EQ(history.front().role, MessageRole::USER);
+    EXPECT_EQ(history.back().content, "reply 12");
+    ASSERT_EQ(warnings.size(), 1u) << "said once, not every turn";
+    EXPECT_NE(warnings[0].find("the oldest turns are no longer sent to the model"), std::string::npos) << warnings[0];
+
+    // A cleared chat is a new conversation: it is told again if it happens again.
+    agent.clearHistory();
+    for (int turn = 1; turn <= 12; ++turn) {
+        mock.pushResponse(answerUsing("again " + std::to_string(turn), 2000 * turn));
+        agent.processQuery("question " + std::to_string(turn) + " " + std::string(6000, 'q'));
+    }
+    EXPECT_EQ(warnings.size(), 2u);
+}
+
+TEST(AgentHistoryWindow, AMessageCapStillAppliesAndIsSaidToo) {
+    bench::MockLlmServer mock;
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxHistoryMessages = 4;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    std::vector<std::string> warnings;
+    agent.setOutputHandler(std::make_unique<NoticeConsole>(&warnings));
+    for (int turn = 1; turn <= 4; ++turn) {
+        mock.pushResponse(answer("reply " + std::to_string(turn)));
+        agent.processQuery("question " + std::to_string(turn));
+    }
+    EXPECT_EQ(agent.history().size(), 4u);
+    EXPECT_EQ(warnings.size(), 1u);
 }

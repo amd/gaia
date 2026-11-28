@@ -211,8 +211,9 @@
 
 .schedule-card-meta {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 4px 12px;
     margin-top: 6px;
     font-size: 12px;
     color: var(--text-secondary);

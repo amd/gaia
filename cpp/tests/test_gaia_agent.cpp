@@ -355,6 +355,32 @@ std::string why(const std::optional<std::pair<std::string, std::string>>& gap) {
 }
 }  // namespace
 
+TEST(GaiaAgentTest, AFailedTurnListsTheFilesItChangedAndTheCommandsItRan) {
+    EXPECT_EQ(GaiaAgent::describeWork({}), "");
+    EXPECT_EQ(GaiaAgent::describeWork({{"file_read", {{"path", "a.py"}}, "{}", true},
+                                       shellRun("grep -n foo a.py", 0, "1:foo")}),
+              "")
+        << "reading and searching change nothing";
+    const GaiaAgent::CallSeen refused = {"bash_execute", {{"command", "rm -rf build"}},
+                                         R"({"error":"Tool 'bash_execute' execution denied by user","status":"error"})",
+                                         false};
+    const GaiaAgent::CallSeen failedEdit = {"file_edit", {{"path", "src/missing.py"}}, R"({"error":"no match"})", false};
+    const std::string work = GaiaAgent::describeWork(
+        {edit("src/click/core.py"), edit("src/click/core.py"), failedEdit,
+         {"file_write", {{"path", "tests/test_core.py"}}, "{}", true},
+         shellRun("python -m pytest tests/test_core.py -x", 1, "1 failed, 3 passed in 0.6s"), refused,
+         shellRun("git diff --stat", 0, " 2 files changed")});
+    EXPECT_EQ(work, "Before it stopped, this turn had already:\n"
+                    "- Changed 2 files: src/click/core.py, tests/test_core.py\n"
+                    "- Run 2 commands: `python -m pytest tests/test_core.py -x` (failed); `git diff --stat`\n"
+                    "Those changes are still in place.");
+    std::vector<GaiaAgent::CallSeen> many;
+    for (int i = 0; i < 9; ++i) many.push_back(shellRun("make step" + std::to_string(i), 0, "ok"));
+    const std::string capped = GaiaAgent::describeWork(many);
+    EXPECT_NE(capped.find("Run 9 commands, the last 6: `make step3`"), std::string::npos) << capped;
+    EXPECT_EQ(capped.find("still in place"), std::string::npos) << "no file was changed: " << capped;
+}
+
 TEST(GaiaAgentTest, ATestsPassClaimNeedsATestRunThatPassedAfterTheLastChange) {
     const std::string none = "no tests were run this turn";
     const std::string failed = "the tests run this turn didn't pass";
@@ -398,6 +424,46 @@ TEST(GaiaAgentTest, ATestsPassClaimNeedsATestRunThatPassedAfterTheLastChange) {
                                                  {shellRun("go test ./...", 0, "ok  \texample.com/x\t0.012s\n")}));
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
         "All 10 tests pass.", {shellRun("npm test", 0, "Tests:       10 passed, 10 total\n")}));
+
+    // C and C++ projects: a built test program, make tests, ctest, GoogleTest, Catch2.
+    const std::string unityOk = "tests/misc_tests.c:757:cjson_array_foreach_should_loop_over_arrays:PASS\n"
+                                "\n-----------------------\n27 Tests 0 Failures 0 Ignored \nOK\n";
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All 27 tests in `misc_tests` pass.",
+        {edit("cJSON.c"), shellRun("cd /repo && gcc -I. tests/misc_tests.c cJSON.c -o tests/misc_tests && "
+                                   "./tests/misc_tests 2>&1",
+                                   0, unityOk)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All tests pass.", {edit("cJSON.c"), shellRun("cd /repo && make clean && make tests 2>&1", 0, "gcc ...\n")}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All tests pass.",
+        {shellRun("cmake --build build && ./build/tests_mock", 0,
+                  "[==========] 12 tests from 3 test suites ran. (4 ms total)\n[  PASSED  ] 12 tests.\n")}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All tests pass.", {shellRun("ctest --test-dir build", 0,
+                                     "100% tests passed, 0 tests failed out of 9\n\nTotal Test time (real) = 0.31 sec\n")}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All tests pass.", {shellRun("./run_checks", 0, "All tests passed (41 assertions in 7 test cases)\n")}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("The tests pass.", {shellRun("./build/unit_tests", 0, "ok 1\nok 2\n")}))
+        << "an unknown runner's output: not known to be no tests";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All tests pass.", {shellRun("./tests/misc_tests", 1, "27 Tests 2 Failures 0 Ignored \nFAIL\n")})),
+              failed);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All tests pass.",
+                  {shellRun("./build/tests_mock", 1, "[  PASSED  ] 11 tests.\n[  FAILED  ] 1 test, listed below:\n")})),
+              failed);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All tests pass.", {shellRun("ctest", 8, "89% tests passed, 1 tests failed out of 9\n")})),
+              failed);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("The tests pass.", {shellRun("./build/unit_tests", 0, "")})), none)
+        << "a test program that printed nothing";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("The tests pass.", {shellRun("./test_stats.py", 0, "")})), none);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "The tests pass.", {shellRun("gcc -c tests/misc_tests.c -o tests/misc_tests.o", 0, "")})),
+              none)
+        << "compiling a test is not running it";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("The tests pass.", {shellRun("cat tests/unit_test", 0, "x\n")})), none);
 
     // A failed run, a run of no tests, and a pass that came before the last edit.
     EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
@@ -1112,6 +1178,19 @@ TEST(GaiaAgentTest, AWriteThatWouldHaveHappenedNamesNoFile) {
     }
 }
 
+TEST(GaiaAgentTest, AFileNamedBeforeItsVerbIsFoundWhereverItSits) {
+    using Files = std::vector<std::string>;
+    EXPECT_EQ(GaiaAgent::claimedFiles("out/report.csv was saved."), Files{"out/report.csv"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Done: C:\\work\\x.md has been written."), Files{"C:\\work\\x.md"});
+    Files both = GaiaAgent::claimedFiles("a.md was saved and (b.txt) was created.");
+    std::sort(both.begin(), both.end());
+    EXPECT_EQ(both, (Files{"a.md", "b.txt"}));
+    // Long words around the claim: the name is tried once per word, not at every letter.
+    std::string text;
+    for (int i = 0; i < 32; ++i) text += std::string(255, 'A') + " ";
+    EXPECT_EQ(GaiaAgent::claimedFiles(text + "`summary.md` has been created."), Files{"summary.md"});
+}
+
 TEST(GaiaAgentTest, ASaveBesideADenialOrACounterfactualIsStillAClaim) {
     using Files = std::vector<std::string>;
     EXPECT_EQ(GaiaAgent::claimedFiles("I wrote no files except `summary.md`."), Files{"summary.md"});
@@ -1453,6 +1532,19 @@ TEST(GaiaAgentTest, ReplyAndOutputLimitsShrinkWithTheContextWindow) {
     EXPECT_EQ(c.toolResultCharLimit(), 16000);
 }
 
+TEST(GaiaAgentTest, TheDefaultReplyLimitIsSizedFromTheWindowLikeThePythonAgent) {
+    for (const auto& [ctx, limit] : std::vector<std::pair<int, int>>{
+             {8192, 4096}, {16384, 8192}, {32768, 8192}, {65536, 16384}, {131072, 32768}, {262144, 32768}}) {
+        EXPECT_EQ(localMaxOutputTokens(ctx), limit) << ctx;
+    }
+    AgentConfig c;
+    c.modelId = "some-unlisted-model";
+    c.contextSize = 32768;
+    c.loadedContextSize = 131072;
+    c.maxTokens = localMaxOutputTokens(c.loadedContextSize);
+    EXPECT_EQ(c.replyTokenLimit(), 32768) << "capped by the loaded window, not the configured one";
+}
+
 TEST(GaiaAgentTest, TheRequestCarriesTheWindowSizedReplyLimit) {
     Workdir w;
     bench::MockLlmServer mock;
@@ -1770,6 +1862,105 @@ TEST(GaiaAgentTest, AFalseNotFoundIsSentBackOnceThroughTheAgent) {
     EXPECT_EQ(r["result"], "The early termination fee is $4,000 (lease.md, page 3).");
     ASSERT_EQ(mock.receivedBodies().size(), 3u);
     EXPECT_NE(mock.receivedBodies()[2].find("you have not opened lease.md"), std::string::npos);
+}
+
+// ---- Long web pages ----
+
+namespace {
+struct LongPageServer {
+    httplib::Server srv;
+    std::thread t;
+    int port = 0;
+    std::atomic<int> hits{0};
+    std::string body;
+    size_t sectionAt = 0;
+    LongPageServer() {
+        while (body.size() < 150000) body += "   This line is filler text from an earlier section of the RFC.\n";
+        sectionAt = body.size();
+        body += "15.5.19.  418 (Unused)\n   [RFC2324] was an April 1 RFC that lampooned the various ways HTTP was "
+                "abused; one such abuse was the definition of an application-specific 418 status code.\n";
+        while (body.size() < 220000) body += "   This line is filler text from a later section of the RFC.\n";
+        srv.Get("/rfc9110.txt", [this](const httplib::Request&, httplib::Response& res) {
+            ++hits;
+            res.set_content(body, "text/plain");
+        });
+        port = srv.bind_to_any_port("127.0.0.1");
+        t = std::thread([this] { srv.listen_after_bind(); });
+        while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ~LongPageServer() {
+        srv.stop();
+        t.join();
+    }
+    std::string url() const { return "http://127.0.0.1:" + std::to_string(port) + "/rfc9110.txt"; }
+};
+
+struct AllowPrivateFetch {
+    AllowPrivateFetch() { set("1"); }
+    ~AllowPrivateFetch() { set(""); }
+    static void set(const char* v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_WEB_FETCH_ALLOW_PRIVATE", v);
+#else
+        if (*v) setenv("GAIA_WEB_FETCH_ALLOW_PRIVATE", v, 1); else unsetenv("GAIA_WEB_FETCH_ALLOW_PRIVATE");
+#endif
+    }
+};
+}  // namespace
+
+TEST(GaiaAgentTest, AnyPartOfALongPageIsReachableWithoutFetchingItAgain) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    LongPageServer page;
+    AllowPrivateFetch allow;
+    GaiaAgent::Options o = optionsFor(w);
+    o.webTools = true;
+    GaiaAgent agent(cfgFor(mock), o);
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+
+    json first = agent.toolRegistry().executeTool("web_fetch", json{{"url", page.url()}});
+    ASSERT_EQ(first["status"], "success") << first.dump().substr(0, 400);
+    EXPECT_EQ(first["total_chars"], page.body.size());
+    EXPECT_TRUE(first["truncated"].get<bool>());
+    EXPECT_LT(first["text"].get<std::string>().size(), 16000u) << "a part must fit the conversation's clip";
+    ASSERT_TRUE(first.contains("next_offset")) << "a cut part names where the next one starts";
+    EXPECT_NE(first.value("note", "").find("offset="), std::string::npos) << first.value("note", "");
+
+    // A #fragment is the same page: the second look is served from this turn's copy.
+    json found = agent.toolRegistry().executeTool(
+        "web_fetch", json{{"url", page.url() + "#section-15.5.19"}, {"find", "15.5.19"}});
+    ASSERT_EQ(found["status"], "success") << found.dump().substr(0, 400);
+    EXPECT_NE(found["text"].get<std::string>().find("418 (Unused)"), std::string::npos)
+        << found["text"].get<std::string>().substr(0, 300);
+    EXPECT_EQ(found["matches"], 1);
+
+    const size_t next = first["next_offset"].get<size_t>();
+    json second = agent.toolRegistry().executeTool("web_fetch", json{{"url", page.url()}, {"offset", next}});
+    ASSERT_EQ(second["status"], "success");
+    EXPECT_EQ(second["text"].get<std::string>().substr(0, 40), page.body.substr(next, 40));
+
+    json missed = agent.toolRegistry().executeTool("web_fetch", json{{"url", page.url()}, {"find", "teapot"}});
+    EXPECT_EQ(missed["matches"], 0);
+    EXPECT_NE(missed.value("note", "").find("Do not infer"), std::string::npos);
+    json past = agent.toolRegistry().executeTool("web_fetch",
+                                                 json{{"url", page.url()}, {"offset", page.body.size() + 10}});
+    EXPECT_EQ(past["status"], "error");
+    EXPECT_NE(past.value("error", "").find("past the end"), std::string::npos) << past.dump().substr(0, 300);
+
+    EXPECT_EQ(page.hits.load(), 1) << "the page was downloaded again";
+    EXPECT_EQ(asked, 1) << "the user was asked again for a page already read this turn";
+
+    // A new turn starts fresh: the page may have changed, and the user is asked again.
+    mock.pushResponse(answer("ok"));
+    agent.processQuery("thanks");
+    json later = agent.toolRegistry().executeTool("web_fetch", json{{"url", page.url()}});
+    EXPECT_EQ(later["status"], "success");
+    EXPECT_EQ(page.hits.load(), 2);
+    EXPECT_EQ(asked, 2);
 }
 
 // ---- NPU ----

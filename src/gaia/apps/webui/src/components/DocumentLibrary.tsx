@@ -431,8 +431,15 @@ export function DocumentLibrary() {
                 const name = doc.filename || filename;
                 setActionError(serverNotAddedText(doc.error_kind, name, t) ?? t('docs.notAdded', { name }));
             } else if (doc?.id) {
+                // The server matches by content, so a renamed copy comes back as the file already there.
+                const picked = visibleName(filename);
+                const existingName = visibleName(doc.filename || filename);
+                const sameAs = picked !== existingName
+                    && useChatStore.getState().documents.some((d) => d.id === doc.id)
+                    ? existingName : null;
                 try {
                     await attachToTarget(doc.id, doc.filename || filename);
+                    if (sameAs) setNotice((prev) => `${t('docs.sameContents', { name: picked, existing: sameAs })} ${prev}`);
                 } catch (attachErr) {
                     log.doc.error(`Could not attach "${filename}" to ${targetChatName}`, attachErr);
                     setUploadError({

@@ -16,7 +16,6 @@ background memory extraction storing a fact between turns.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import time
@@ -26,6 +25,7 @@ import pytest
 from gaiapy import stdio
 from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 from gaiapy.chat_agent import ChatAgent
+from registry_isolation import isolated_registry
 
 from gaia.agents.base import project_map
 from gaia.agents.base.history import (
@@ -39,7 +39,6 @@ from gaia.agents.base.history import (
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.skill_synthesis import DistilledProcedure, load_synthesis_config
 from gaia.agents.base.tool_loader import THIN_DESCRIPTION_CHARS, thin_tool_schema
-from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_metrics import count_tokens
 from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 from gaia.config import GaiaConfig, GaiaConfigError
@@ -60,17 +59,6 @@ def _fake_embedding(text: str) -> np.ndarray:
         vec[int(hashlib.md5(word.encode()).hexdigest(), 16) % _DIM] += 1.0
     norm = np.linalg.norm(vec)
     return vec / norm if norm else vec
-
-
-@contextlib.contextmanager
-def _isolated_registry():
-    saved = dict(_TOOL_REGISTRY)
-    _TOOL_REGISTRY.clear()
-    try:
-        yield
-    finally:
-        _TOOL_REGISTRY.clear()
-        _TOOL_REGISTRY.update(saved)
 
 
 def _dump_json(value) -> str:
@@ -110,7 +98,7 @@ def flagship_config_off(monkeypatch, tmp_path):
     monkeypatch.setattr(MemoryMixin, "_embed_text", lambda self, t: _fake_embedding(t))
     monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
     GaiaConfig.save_key("dynamic_tools", False)
-    with _isolated_registry():
+    with isolated_registry():
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
         try:
             yield agent
@@ -531,7 +519,7 @@ def test_the_environment_wins_over_the_config_file(monkeypatch, tmp_path):
     GaiaConfig.save_key("dynamic_tools", False)
     assert GaiaAgentConfig().dynamic_tools is False
     monkeypatch.setenv("GAIA_DYNAMIC_TOOLS", "1")
-    with _isolated_registry():
+    with isolated_registry():
         agent = ChatAgent.__new__(ChatAgent)
         agent.config = GaiaAgentConfig()
         assert agent._resolve_dynamic_tools_enabled() is True

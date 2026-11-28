@@ -1290,7 +1290,7 @@ class AgentSDK:
     def _estimate_tokens(self, text: str) -> int:
         """
         Estimate the number of tokens in text.
-        Uses rough approximation of 4 characters per token.
+        Uses :func:`gaia.rag.text_units.estimate_tokens`.
 
         Args:
             text: The text to estimate tokens for
@@ -1298,9 +1298,10 @@ class AgentSDK:
         Returns:
             Estimated token count
         """
-        # Rough approximation: ~4 characters per token for English text
-        # This is conservative to avoid overrunning context
-        return len(text) // 4
+        # Local: gaia.rag imports this module.
+        from gaia.rag.text_units import estimate_tokens
+
+        return estimate_tokens(text)
 
     def _truncate_rag_context(self, context: str, max_tokens: int) -> str:
         """
@@ -1318,8 +1319,11 @@ class AgentSDK:
         if estimated_tokens <= max_tokens:
             return context
 
-        # Calculate how many characters we can keep
-        target_chars = max_tokens * 4  # Using same 4:1 ratio
+        # Chars per token as estimated: 4 for plain text, fewer for CJK.
+        chars_per_token = 4
+        if estimated_tokens:
+            chars_per_token = min(4, len(context) / estimated_tokens)
+        target_chars = int(max_tokens * chars_per_token)
 
         # Truncate and add ellipsis
         truncated = context[: target_chars - 20]  # Leave room for ellipsis

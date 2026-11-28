@@ -13,10 +13,12 @@ all Python-owned secret slots inside one ``0600`` encrypted file at
 ``~/.gaia/connectors/vault.enc`` (or ``$GAIA_VAULT_FILE``). Existing legacy
 Keychain items are copied into the vault lazily on first read.
 
-Transition release: legacy per-slot items are kept, and every write also
-updates them, so a downgrade or an older agent build that reads the per-slot
-items still sees current values. Reads always prefer the vault. The next
-release stops mirroring and removes the legacy items.
+Transition release: legacy per-slot items are kept so a downgrade still finds
+them. A user-initiated save also rewrites a slot's legacy item, but only when
+that slot was migrated from one (recorded in the vault at migration time) and
+the value changed since it was last mirrored. Background token refreshes update
+the vault only, and a fresh install never gets legacy items. Reads always
+prefer the vault. The next release stops mirroring and removes the legacy items.
 
 MCP server slots (``mcp-*``) remain directly in the OS Keychain because the
 C++ runtime (``cpp/src/keyring.cpp``) resolves ``$keyring`` references there.
@@ -28,7 +30,10 @@ Envelope wire format (version 1, language-neutral for C++ portability):
     bytes[7:19]  = 12-byte random AES-GCM nonce
     bytes[19:]   = AES-256-GCM ciphertext + 16-byte tag
     AAD          = b"gaia.connections:vault:v1"
-    plaintext    = UTF-8 JSON ``{"entries": {"<slot>": "<value>"}, "v": 1}``
+    plaintext    = UTF-8 JSON ``{"entries": {"<slot>": "<value>"}, "v": 1}``,
+                   plus ``"legacy_mirror": {"<slot>": "synced"|"stale"}`` for
+                   slots migrated from a legacy item (whether that item still
+                   holds the vault value)
 """
 
 from __future__ import annotations
@@ -64,6 +69,13 @@ _TAG_BYTES = 16
 _HEADER_BYTES = len(VAULT_MAGIC) + 1
 _MIN_ENVELOPE_BYTES = _HEADER_BYTES + _NONCE_BYTES + _TAG_BYTES
 _LOCK_POLL_SECONDS = 0.02
+
+MIRROR_USER = "user"
+MIRROR_BACKGROUND = "background"
+MIRROR_NEVER = "never"
+_MIRROR_MODES = (MIRROR_USER, MIRROR_BACKGROUND, MIRROR_NEVER)
+_SYNCED = "synced"
+_STALE = "stale"
 
 _thread_lock = threading.Lock()
 
@@ -106,8 +118,20 @@ def encrypt_envelope(key: bytes, entries: Dict[str, str]) -> bytes:
     return _encrypt_envelope_with_nonce(key, entries, os.urandom(_NONCE_BYTES))
 
 
+def _encrypt_payload(
+    key: bytes, entries: Dict[str, str], legacy_mirror: Dict[str, str]
+) -> bytes:
+    return _encrypt_envelope_with_nonce(
+        key, entries, os.urandom(_NONCE_BYTES), legacy_mirror=legacy_mirror
+    )
+
+
 def _encrypt_envelope_with_nonce(
-    key: bytes, entries: Dict[str, str], iv: bytes
+    key: bytes,
+    entries: Dict[str, str],
+    iv: bytes,
+    *,
+    legacy_mirror: Optional[Dict[str, str]] = None,
 ) -> bytes:
     """Test-vector hook only; production code must call :func:`encrypt_envelope`."""
     if len(key) != _KEY_BYTES:
@@ -118,8 +142,11 @@ def _encrypt_envelope_with_nonce(
         raise ConnectorsError(
             f"Vault nonce must be {_NONCE_BYTES} bytes, got {len(iv)}."
         )
+    payload: dict = {"v": VAULT_VERSION, "entries": entries}
+    if legacy_mirror:
+        payload["legacy_mirror"] = legacy_mirror
     plaintext = json.dumps(
-        {"v": VAULT_VERSION, "entries": entries},
+        payload,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -129,6 +156,11 @@ def _encrypt_envelope_with_nonce(
 
 def decrypt_envelope(key: bytes, blob: bytes) -> Dict[str, str]:
     """Decrypt and validate a version-1 vault envelope into ``{slot: value}``."""
+    return _decrypt_payload(key, blob)[0]
+
+
+def _decrypt_payload(key: bytes, blob: bytes) -> tuple[Dict[str, str], Dict[str, str]]:
+    """Decrypt into ``(entries, legacy_mirror)``."""
     if len(key) != _KEY_BYTES:
         raise ConnectorsError(
             f"Vault master key must be {_KEY_BYTES} bytes, got {len(key)}."
@@ -164,12 +196,17 @@ def decrypt_envelope(key: bytes, blob: bytes) -> Dict[str, str]:
             isinstance(k, str) and isinstance(v, str) for k, v in raw_entries.items()
         ):
             raise ValueError("vault entries must map strings to strings")
+        raw_mirror = parsed.get("legacy_mirror", {})
+        if not isinstance(raw_mirror, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in raw_mirror.items()
+        ):
+            raise ValueError("legacy_mirror must map strings to strings")
     except (UnicodeDecodeError, json.JSONDecodeError, AttributeError, ValueError) as e:
         raise ConnectorsError(
             f"The credential vault payload at {vault_path()} is malformed ({e}). "
             "Remove the file and reconnect your accounts."
         ) from e
-    return dict(raw_entries)
+    return dict(raw_entries), dict(raw_mirror)
 
 
 def _parse_master_key(raw: str) -> bytes:
@@ -328,10 +365,10 @@ def _sweep_legacy_slot_no_read(username: str, *, keyring_mod=None) -> None:
 
 
 def _mirror_legacy_slot(username: str, value: str, *, keyring_mod=None) -> None:
-    """Keep the legacy per-slot item equal to the vault value (transition release).
+    """Rewrite a migrated slot's legacy per-slot item (transition release).
 
-    Writes only, never reads, so it adds no macOS read prompt. A failure is
-    raised: a stale legacy item would be read as current after a downgrade.
+    Writes only, never reads. :func:`put` decides whether to call it and how a
+    failure is reported.
     """
     if keyring_mod is not None:
         keyring_mod.write(SERVICE_NAME, username, value)
@@ -412,6 +449,40 @@ def _missing_master_key_error(path: Path) -> ConnectorsError:
     )
 
 
+def _open_locked(
+    path: Path, *, preloaded_key: Optional[bytes] = None, keyring_mod=None
+) -> tuple[bytes, Dict[str, str], Dict[str, str]]:
+    """Return ``(key, entries, legacy_mirror)`` for ``path``; caller holds the lock.
+
+    Mints a fresh master key and starts empty when ``path`` does not exist.
+    """
+    if not path.exists():
+        # Never reuse a preloaded key when the vault file is gone: another
+        # process may have deleted both vault.enc and vault-master-key since
+        # the pre-lock read.
+        key = _load_or_mint_master_key(allow_mint=True, keyring_mod=keyring_mod)
+        return key, {}, {}
+    blob = path.read_bytes()
+    key = _load_or_mint_master_key(
+        allow_mint=False, preloaded_key=preloaded_key, keyring_mod=keyring_mod
+    )
+    if key is None:
+        raise _missing_master_key_error(path)
+    try:
+        entries, legacy_mirror = _decrypt_payload(key, blob)
+    except ConnectorsError:
+        if preloaded_key is None:
+            raise
+        # Another process may have deleted and re-minted the vault under a
+        # fresh master key after our pre-lock read; re-read Keychain once.
+        fresh_key = _load_or_mint_master_key(allow_mint=False, keyring_mod=keyring_mod)
+        if fresh_key is None or fresh_key == key:
+            raise
+        key = fresh_key
+        entries, legacy_mirror = _decrypt_payload(key, blob)
+    return key, entries, legacy_mirror
+
+
 def _write_entries_locked(
     path: Path,
     username: str,
@@ -419,48 +490,56 @@ def _write_entries_locked(
     *,
     preloaded_key: Optional[bytes] = None,
     only_if_absent: bool = False,
+    migrated_from_legacy: bool = False,
     keyring_mod=None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Optional[str]]:
     """Persist ``username -> value`` into ``path`` while holding ``_vault_locked``.
 
-    Returns ``(written, effective_value)``. When ``only_if_absent`` is True and
-    ``username`` is already present in ``path``, the existing value is kept
-    (preventing a slow legacy migration from overwriting a newer token) and
-    ``(False, existing_value)`` is returned.
-    """
-    if path.exists():
-        blob = path.read_bytes()
-        key = _load_or_mint_master_key(
-            allow_mint=False, preloaded_key=preloaded_key, keyring_mod=keyring_mod
-        )
-        if key is None:
-            raise _missing_master_key_error(path)
-        try:
-            entries = decrypt_envelope(key, blob)
-        except ConnectorsError:
-            if preloaded_key is None:
-                raise
-            # Another process may have deleted and re-minted the vault under a
-            # fresh master key after our pre-lock read; re-read Keychain once.
-            fresh_key = _load_or_mint_master_key(
-                allow_mint=False, keyring_mod=keyring_mod
-            )
-            if fresh_key is None or fresh_key == key:
-                raise
-            key = fresh_key
-            entries = decrypt_envelope(key, blob)
-        if only_if_absent and username in entries:
-            return False, entries[username]
-    else:
-        # Never reuse a preloaded key when the vault file is gone: another
-        # process may have deleted both vault.enc and vault-master-key since
-        # the pre-lock read.
-        key = _load_or_mint_master_key(allow_mint=True, keyring_mod=keyring_mod)
-        entries = {}
+    Returns ``(written, effective_value, mirror_state)``. ``mirror_state`` is
+    ``"synced"`` or ``"stale"`` for a slot migrated from a legacy item (whether
+    that item still holds the vault value), else ``None``. When
+    ``only_if_absent`` is True and ``username`` is already present, the
+    existing value is kept (a slow legacy migration must not overwrite a newer
+    token) and ``written`` is False.
 
+    ``migrated_from_legacy`` marks ``value`` as just read from a legacy item,
+    so later user saves keep that item current for a downgrade.
+    """
+    key, entries, legacy_mirror = _open_locked(
+        path, preloaded_key=preloaded_key, keyring_mod=keyring_mod
+    )
+    if only_if_absent and username in entries:
+        if migrated_from_legacy and username not in legacy_mirror:
+            legacy_mirror[username] = _SYNCED if entries[username] == value else _STALE
+            _write_private(path, _encrypt_payload(key, entries, legacy_mirror))
+        return False, entries[username], legacy_mirror.get(username)
+    if migrated_from_legacy and username not in legacy_mirror:
+        legacy_mirror[username] = _SYNCED
+    elif username in legacy_mirror and entries.get(username) != value:
+        legacy_mirror[username] = _STALE
     entries[username] = value
-    _write_private(path, encrypt_envelope(key, entries))
-    return True, value
+    _write_private(path, _encrypt_payload(key, entries, legacy_mirror))
+    return True, value, legacy_mirror.get(username)
+
+
+def _record_mirrored_locked(
+    path: Path,
+    username: str,
+    value: str,
+    *,
+    preloaded_key: Optional[bytes] = None,
+    keyring_mod=None,
+) -> None:
+    """Record that the legacy item now holds ``value``, unless a newer write won."""
+    if not path.exists():
+        return
+    key, entries, legacy_mirror = _open_locked(
+        path, preloaded_key=preloaded_key, keyring_mod=keyring_mod
+    )
+    if username not in legacy_mirror or entries.get(username) != value:
+        return
+    legacy_mirror[username] = _SYNCED
+    _write_private(path, _encrypt_payload(key, entries, legacy_mirror))
 
 
 def _read_vault_entries(
@@ -501,10 +580,30 @@ def _read_vault_entries(
         return decrypt_envelope(_parse_master_key(fresh_raw), fresh_blob)
 
 
-def put(username: str, value: str, *, keyring_mod=None) -> None:
-    """Store ``value`` under ``username`` in the encrypted vault."""
+def put(
+    username: str, value: str, *, keyring_mod=None, mirror: str = MIRROR_USER
+) -> None:
+    """Store ``value`` under ``username`` in the encrypted vault.
+
+    ``mirror`` says who is saving, which decides how a slot migrated from a
+    legacy item keeps that item current during the transition release:
+
+    - ``MIRROR_USER`` (sign-in, API-key save, messaging setup): rewrite it if
+      it no longer matches the vault; a failure raises so the user can act and
+      retry.
+    - ``MIRROR_BACKGROUND``: rewrite it if it no longer matches the vault; a
+      failure is logged as a warning and the save still succeeds.
+    - ``MIRROR_NEVER`` (background token refresh): vault only.
+
+    A slot never migrated from a legacy item is never mirrored, so a fresh
+    install gets no legacy items.
+    """
     if not username or username == MASTER_KEY_USERNAME:
         raise ConnectorsError(f"Invalid credential slot name: {username!r}")
+    if mirror not in _MIRROR_MODES:
+        raise ConnectorsError(
+            f"Invalid legacy mirror mode {mirror!r}; expected one of {_MIRROR_MODES}."
+        )
     from gaia.connectors import store
 
     if keyring_mod is None:
@@ -523,14 +622,49 @@ def put(username: str, value: str, *, keyring_mod=None) -> None:
             preloaded_key = _parse_master_key(raw_key)
 
     with _vault_locked():
-        _write_entries_locked(
+        _, _, mirror_state = _write_entries_locked(
             path,
             username,
             value,
             preloaded_key=preloaded_key,
             keyring_mod=keyring_mod,
         )
-    _mirror_legacy_slot(username, value, keyring_mod=keyring_mod)
+    if mirror == MIRROR_NEVER or mirror_state != _STALE:
+        return
+    try:
+        _mirror_legacy_slot(username, value, keyring_mod=keyring_mod)
+    except Exception as e:  # noqa: BLE001 - re-raised or logged per mode below
+        if mirror == MIRROR_BACKGROUND:
+            logger.warning(
+                "Saved a secret to the credential vault, but could not update "
+                "its older per-item entry kept for downgrades (%s); the next "
+                "save retries it.",
+                type(e).__name__,
+            )
+            return
+        raise ConnectorsError(
+            f"Saved {username!r} to the credential vault, but could not update "
+            "the older per-item entry kept in the OS credential store so a "
+            f"downgrade still works: {e}. Allow the credential-store prompt "
+            "and save again. See docs/security/connections.mdx."
+        ) from e
+    try:
+        with _vault_locked():
+            _record_mirrored_locked(
+                path,
+                username,
+                value,
+                preloaded_key=preloaded_key,
+                keyring_mod=keyring_mod,
+            )
+    except (ConnectorsError, OSError) as e:
+        if mirror != MIRROR_BACKGROUND:
+            raise
+        # Left "stale", so the next save just rewrites the item again.
+        logger.warning(
+            "Could not record a legacy credential mirror (%s)",
+            type(e).__name__,
+        )
 
 
 def get(
@@ -542,9 +676,10 @@ def get(
     """Read ``username`` from the encrypted vault, falling back to legacy Keychain.
 
     When a legacy Keychain entry is read and ``migrate`` is True, it is copied
-    into ``vault.enc`` only if ``username`` is still absent there. The legacy
-    item is kept for this transition release so a downgrade still finds it;
-    later reads come from the vault and never touch it.
+    into ``vault.enc`` only if ``username`` is still absent there, and the slot
+    is recorded as migrated so later user saves keep the legacy item current.
+    The legacy item is kept for this transition release so a downgrade still
+    finds it; later reads come from the vault and never touch it.
     """
     from gaia.connectors import store
 
@@ -570,12 +705,13 @@ def get(
                 preloaded_key = _parse_master_key(raw_key)
         try:
             with _vault_locked():
-                _, effective = _write_entries_locked(
+                _, effective, _ = _write_entries_locked(
                     path,
                     username,
                     legacy,
                     preloaded_key=preloaded_key,
                     only_if_absent=True,
+                    migrated_from_legacy=True,
                     keyring_mod=keyring_mod,
                 )
         except (OSError, store.KeyringRefused) as e:
@@ -630,11 +766,14 @@ def delete(username: str, *, keyring_mod=None) -> None:
                 )
             if raw_key:
                 key = _parse_master_key(raw_key)
-                entries = decrypt_envelope(key, path.read_bytes())
-                if username in entries:
-                    del entries[username]
+                entries, legacy_mirror = _decrypt_payload(key, path.read_bytes())
+                if username in entries or username in legacy_mirror:
+                    entries.pop(username, None)
+                    legacy_mirror.pop(username, None)
                     if entries:
-                        _write_private(path, encrypt_envelope(key, entries))
+                        _write_private(
+                            path, _encrypt_payload(key, entries, legacy_mirror)
+                        )
                     else:
                         path.unlink()
                         _raw_delete(MASTER_KEY_USERNAME, keyring_mod=keyring_mod)

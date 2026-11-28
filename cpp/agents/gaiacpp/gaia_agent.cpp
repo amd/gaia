@@ -20,6 +20,7 @@
 #include <gaia/model_registry.h>
 #include <gaia/process.h>
 #include <gaia/security.h>
+#include <gaia/shell_guard.h>
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
 
@@ -71,14 +72,17 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
 GaiaAgent::~GaiaAgent() = default;
 
 void GaiaAgent::registerTools() {
-    std::shared_ptr<const Workspace> ws;
+    std::shared_ptr<Workspace> ws;
+    // A read-only command whose every path is a granted file or inside a granted folder.
+    std::function<bool(const std::string&)> readStaysInside;
+    std::function<std::string()> shellFolder;
     if (options_.fullAccess) {
         FileIOTools::registerAll(toolRegistry());
         GitTools::registerAll(toolRegistry());
         toolRegistry().registerTool(BashTools::bashExecute(options_.shell));
         toolRegistry().registerTool(BashTools::envInspect());
     } else {
-        ws = std::make_shared<const Workspace>(options_.workspaceRoots);
+        ws = std::make_shared<Workspace>(options_.workspaceRoots);
         auto& reg = toolRegistry();
         reg.registerTool(Workspace::confine(FileIOTools::fileRead(), ws, {"path"}));
         reg.registerTool(Workspace::confine(FileIOTools::fileWrite(), ws, {"path"}));
@@ -88,15 +92,16 @@ void GaiaAgent::registerTools() {
         reg.registerTool(Workspace::confine(GitTools::gitDiff(), ws, {"path"}));
         reg.registerTool(Workspace::confine(GitTools::gitLog(), ws, {"path"}));
         reg.registerTool(Workspace::confine(GitTools::gitShow(), ws, {"path"}));
-        ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
-                                              !BashTools::detectShell().empty());
         const std::shared_ptr<ShellSession> shell = options_.shell;
-        // A read skips the approval card only while it stays in the chat's folders.
-        sh.needsConfirm = [ws, shell](const json& args) {
+        shellFolder = [shell] { return (shell ? *shell : BashTools::defaultSession()).cwd(); };
+        readStaysInside = [ws, shell](const std::string& command) {
             const bool posix = !BashTools::detectShell().empty();
-            std::string cmd = " " + args.value("command", "") + " ";
-            if (!isReadOnlyShellCommand(cmd, posix)) return true;
+            std::string cmd = " " + command + " ";
+            if (!isReadOnlyShellCommand(cmd, posix)) return false;
             ShellSession& session = shell ? *shell : BashTools::defaultSession();
+            if (posix && !judgeShellCommand(command, session.cwd(), session.environment(), ws.get()).inside()) {
+                return false;
+            }
             // An exported PATH or preload decides which program `ls` is.
             for (const auto& [name, value] : session.environment()) {
                 static const std::set<std::string> steering = {
@@ -105,21 +110,40 @@ void GaiaAgent::registerTools() {
                 std::string upper = name;
                 std::transform(upper.begin(), upper.end(), upper.begin(),
                                [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-                if (steering.count(upper)) return true;
+                if (steering.count(upper)) return false;
             }
             for (const char* q : {" 2>/dev/null ", " >/dev/null ", " 2>nul ", " >nul ", " 2>&1 "}) {
                 for (size_t at; (at = cmd.find(q)) != std::string::npos;) cmd.replace(at, std::strlen(q), " ");
             }
             std::vector<std::vector<std::string>> segments;
-            if (!splitShellCommand(cmd, posix, segments)) return true;
-            return !ws->readsStayInside(segments, session.cwd());
+            if (!splitShellCommand(cmd, posix, segments)) return false;
+            return ws->readsStayInside(segments, session.cwd());
         };
+        // Such a read runs without a card, and its `cd` to an attached file's folder isn't refused.
+        const auto proven = [check = readStaysInside](const json& args) { return check(args.value("command", "")); };
+        ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
+                                              !BashTools::detectShell().empty(), proven);
+        // A command approved unread (a script, an interpreter) can leave the shell outside the folders.
+        ToolCallback runShell = std::move(sh.callback);
+        sh.callback = [ws, shell, runShell](const json& args) -> json {
+            ShellSession& session = shell ? *shell : BashTools::defaultSession();
+            returnShellInside(*ws, session);
+            json result = runShell(args);
+            const std::string left = returnShellInside(*ws, session);
+            if (!left.empty() && result.is_object()) {
+                result["cwd"] = session.cwd();
+                result["note"] = "The command left the shell in " + left + ", outside the folders this agent may "
+                                 "use, so the shell was moved back to " + session.cwd() + ".";
+            }
+            return result;
+        };
+        sh.needsConfirm = [proven](const json& args) { return !proven(args); };
         reg.registerTool(std::move(sh));
         reg.registerTool(BashTools::envInspect());
     }
     workspace_ = ws;
     if (options_.maxHelpers != 0) toolRegistry().registerTool(delegateTaskTool());
-    if (options_.webTools) WebTools::registerAll(toolRegistry());
+    if (options_.webTools) WebTools::registerAll(toolRegistry(), webPages_);
     if (docs_) {
         docs_->registerTools(toolRegistry(), ws ? std::function<std::string(const std::string&)>(
                                                       [ws](const std::string& p) { return ws->checkPath(p); })
@@ -145,15 +169,68 @@ void GaiaAgent::registerTools() {
         }
         args["command"] = keepScriptDollars(args["command"].get<std::string>(), ran);
     });
-    toolRegistry().setPreCheck([this, ws](const ToolInfo& tool, const json& args) -> std::optional<json> {
+    toolRegistry().setPreCheck([this, ws, readStaysInside, shellFolder](const ToolInfo& tool,
+                                                                         const json& args) -> std::optional<json> {
         if (auto refusal = switchRefusal(tool, args)) return refusal;
         if (!ws) return std::nullopt;
+        // Asks the user about each outside place the call names; "" once it may run.
+        const auto openOutside = [this, &ws](const std::function<Workspace::Outside()>& judge) -> std::string {
+            std::string asked;
+            for (;;) {
+                const Workspace::Outside out = judge();
+                if (out.refusal.empty()) return "";
+                if (!askPathAccess_ || out.askPath.empty() || out.askPath == asked) return out.refusal;
+                asked = out.askPath;
+                if (!askPathAccess_(asked)) {
+                    return "Refused: the user did not allow GAIA to use " + asked +
+                           ". Don't ask again or reach it another way this turn. Tell the user what you "
+                           "could not do without it.";
+                }
+                ws->addRoot(asked);
+                std::lock_guard<std::mutex> lock(turnListingMu_);
+                openedFolders_.push_back(asked);
+            }
+        };
         // Refused here, the user is never asked to approve a location the tool would turn down.
         std::string why;
         if (tool.name == "bash_execute") {
+            if (args.contains("command") && args["command"].is_string() &&
+                !(readStaysInside && readStaysInside(args["command"].get<std::string>()))) {
+                // A shell left in an attached file's folder opens nothing else there.
+                const std::string beside = ws->attachedFileFolder(shellFolder ? shellFolder() : "");
+                if (!beside.empty()) why = openOutside([&] { return ws->judgePath(beside); });
+                if (why.empty()) {
+                    why = openOutside([&] {
+                        return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty());
+                    });
+                }
+                // What the command reaches once the shell has expanded and resolved its words.
+                if (why.empty()) {
+                    ShellSession& session = options_.shell ? *options_.shell : BashTools::defaultSession();
+                    returnShellInside(*ws, session);
+                    ShellJudgement judged;
+                    why = openOutside([&] {
+                        judged = judgeShell(args["command"].get<std::string>());
+                        if (judged.outsideWord.empty()) return Workspace::Outside{};
+                        if (!judged.refusal.empty()) return Workspace::Outside{judged.refusal, ""};
+                        return Workspace::Outside{ws->outsideRefusal(judged.outsideWord, judged.outsideWhy),
+                                                  judged.outsidePath};
+                    });
+                    if (why.empty() && !judged.opaque.empty() && options_.unattended) {
+                        const std::string command = args["command"].get<std::string>();
+                        size_t cut = std::min<size_t>(command.size(), 80);
+                        while (cut > 0 && cut < command.size() && (static_cast<unsigned char>(command[cut]) & 0xC0) == 0x80) --cut;
+                        why = "Not run: `" + command.substr(0, cut) +
+                              "` needs a person's approval, because " + judged.opaque +
+                              ", so GAIA can't check that it stays inside the folders this agent may use. Nobody "
+                              "can approve it in this run. Do the task with the file tools or with commands GAIA "
+                              "can check (ls, cat, grep, cp, mv, mkdir and the like, on paths inside those "
+                              "folders). If that can't be done, tell the user the exact command to run "
+                              "themselves, or to start gaiacpp with --full-access.";
+                    }
+                }
+            }
             if (args.contains("command") && args["command"].is_string()) {
-                why = ws->checkCommand(args["command"].get<std::string>(),
-                                       !BashTools::detectShell().empty());
                 if (why.empty()) {
                     std::vector<std::string> names;
                     {
@@ -162,15 +239,18 @@ void GaiaAgent::registerTools() {
                     }
                     why = unquotedHostileName(args["command"].get<std::string>(), names);
                 }
-                if (why.empty()) why = pastedDataRefusal(args["command"].get<std::string>(), options_.workspaceRoots);
-                if (why.empty()) why = oneLineBlockRefusal(args["command"].get<std::string>());
+                // Advice, not safety: these read the command with any very long word cut short, since
+                // their patterns cost the square of one.
+                const std::string advised = textForChecks(args["command"].get<std::string>(), 64 * 1024, 1024);
+                if (why.empty()) why = pastedDataRefusal(advised, foldersInUse());
+                if (why.empty()) why = oneLineBlockRefusal(advised);
                 if (why.empty()) {
                     std::vector<CallSeen> seen;
                     for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output});
-                    std::vector<std::string> places = options_.workspaceRoots;
+                    std::vector<std::string> places = foldersInUse();
                     std::error_code ec;
                     places.push_back(fs::current_path(ec).u8string());
-                    const std::string table = unreadTable(args["command"].get<std::string>(), seen, places);
+                    const std::string table = unreadTable(advised, seen, places);
                     std::lock_guard<std::mutex> lock(turnListingMu_);
                     if (!table.empty() && turnTablesPointedAt_.insert(table).second) {
                         why = "Not run yet. " + table + " is a small table: read it with file_read first. That "
@@ -188,11 +268,11 @@ void GaiaAgent::registerTools() {
                         }
                         earlier.push_back({c.name, ranArgs, c.output});
                     }
-                    why = repeatedCommandRefusal(args["command"].get<std::string>(), earlier);
+                    why = repeatedCommandRefusal(advised, earlier);
                 }
             }
         } else if (args.contains("path") && args["path"].is_string()) {
-            why = ws->checkPath(args["path"].get<std::string>());
+            why = openOutside([&] { return ws->judgePath(args["path"].get<std::string>()); });
             if (why.empty() && tool.name == "file_write") {
                 const std::string beside = besidePath(turnRequest(), args["path"].get<std::string>());
                 if (!beside.empty()) {
@@ -200,6 +280,9 @@ void GaiaAgent::registerTools() {
                           args["path"].get<std::string>() + " would land in the working folder instead. Write it to " +
                           beside + ".";
                 }
+            }
+            if (why.empty() && (tool.name == "file_write" || tool.name == "file_edit")) {
+                why = ws->sharedFileRefusal(args["path"].get<std::string>());
             }
             // Whole words: a folder named locked_config is not the user acknowledging a lock.
             static const std::regex mentionsLock(R"(\b(?:lock|locked|lockfile|managed|anyway)\b)",
@@ -240,6 +323,48 @@ void GaiaAgent::registerTools() {
                          [ws](const std::string& p) { return ws->checkPath(p); })
                    : std::function<std::string(const std::string&)>()));
         }
+    }
+}
+
+std::string GaiaAgent::returnShellInside(const Workspace& ws, ShellSession& session) {
+    const std::string at = session.cwd();
+    if (ws.locate(at, "").allowed || !ws.attachedFileFolder(at).empty()) return "";
+    const std::string start = session.startCwd();
+    session.setCwd(ws.locate(start, "").allowed ? start : ws.roots().front());
+    return at;
+}
+
+ShellJudgement GaiaAgent::judgeShell(const std::string& command) const {
+    ShellSession& session = options_.shell ? *options_.shell : BashTools::defaultSession();
+    if (BashTools::detectShell().empty()) {
+        // cmd.exe: only its plain reads are understood.
+        ShellJudgement out;
+        if (!isReadOnlyShellCommand(command, false)) out.opaque = "cmd.exe runs it, and GAIA reads only bash commands";
+        return out;
+    }
+    return judgeShellCommand(command, session.cwd(), session.environment(), workspace_.get());
+}
+
+std::string GaiaAgent::shellApprovalNote(const std::string& command) const {
+    if (!workspace_) return "";
+    const ShellJudgement judged = judgeShell(command);
+    if (judged.opaque.empty()) return "";
+    return "GAIA can't check where this command reads or writes: " + judged.opaque +
+           ". It can reach files outside the folders this chat may use" +
+           (options_.webOff ? ", and GAIA can't tell whether it goes online." : ".");
+}
+
+std::vector<std::string> GaiaAgent::foldersInUse() const {
+    std::vector<std::string> folders = options_.workspaceRoots;
+    std::lock_guard<std::mutex> lock(turnListingMu_);
+    folders.insert(folders.end(), openedFolders_.begin(), openedFolders_.end());
+    return folders;
+}
+
+void GaiaAgent::setPathAccessPrompt(std::function<bool(const std::string& path)> ask) {
+    askPathAccess_ = std::move(ask);
+    if (workspace_ && askPathAccess_) {
+        workspace_->setRemedy("That location can't be opened from this chat: if the user needs it, tell them so.");
     }
 }
 
@@ -291,12 +416,21 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
     auto refuse = [](const std::string& why) {
         return json{{"status", "error"}, {"error", why}, {"executed", false}};
     };
+    // What an earlier command exported decides which program a later `$TOOL` is.
+    std::map<std::string, std::string> shellEnv;
+    std::string shellDir;
+    if (tool.name == "bash_execute" &&
+        ((options_.internetOff && options_.internetOff->load()) || options_.webOff)) {
+        ShellSession& session = options_.shell ? *options_.shell : BashTools::defaultSession();
+        shellEnv = session.environment();
+        shellDir = session.cwd();
+    }
     if (options_.internetOff && options_.internetOff->load()) {
-        const std::string why = internetRefusal(tool, args);
+        const std::string why = internetRefusal(tool, args, shellEnv, shellDir);
         if (!why.empty()) return refuse(why);
     }
     if (options_.webOff) {
-        const std::string why = webFetchRefusal(tool, args);
+        const std::string why = webFetchRefusal(tool, args, shellEnv, shellDir);
         if (!why.empty()) return refuse(why);
     }
     static const std::set<std::string> reads = {"recall"};
@@ -480,6 +614,8 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
 }
 
 void GaiaAgent::onTurnStart() {
+    // A page read last turn may have changed, and fetching it again is the user's call.
+    webPages_->clear();
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
     for (const auto& name : compactWithheldTools()) {
@@ -503,7 +639,7 @@ void GaiaAgent::onTurnStart() {
     std::string size = toolRegistry().hasTool("delegate_task") && toolRegistry().isEnabled("delegate_task")
                            ? textSizeOf(fs::current_path(ec))
                            : std::string();
-    std::vector<std::string> hostile = hostileNames(options_.workspaceRoots);
+    std::vector<std::string> hostile = hostileNames(foldersInUse());
     std::lock_guard<std::mutex> lock(turnListingMu_);
     turnListing_ = std::move(listing);
     turnTextSize_ = std::move(size);
@@ -831,9 +967,10 @@ std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
         if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
         pos = verb + static_cast<size_t>(m.length(0));
     }
-    // "`summary.md` has been created": the file comes before the verb.
+    // "`summary.md` has been created": the file comes before the verb. The name starts after a
+    // character that can't be in one, so a long word is tried once, not at every letter.
     static const std::regex passive(
-        R"(([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
+        R"((?:^|[^A-Za-z0-9_~./\\:-])([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
         R"((?:md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))[`'"*]*\s+)"
         R"((?:has been|have been|has now been|is now|was)\s+(?:successfully\s+)?)" + kWriteVerbs + R"(\b)",
         std::regex::icase);
@@ -1343,6 +1480,12 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
         R"((ok|FAIL)[ \t]+\S+(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s)(?:[ \t]+\[[^\]\n]*\])?|[ \t]+\[[^\]\n]*\])(?:[ \t]+coverage:.*)?[ \t]*)");
     static const std::regex cargo(
         R"(test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; \d+ ignored; \d+ measured; \d+ filtered out(?:; finished in \d+(?:\.\d+)?s)?[ \t]*)");
+    // C and C++ runners: Unity, GoogleTest, CTest, Catch2.
+    static const std::regex unity(R"((\d+) Tests (\d+) Failures \d+ Ignored[ \t]*)");
+    static const std::regex gtest(R"(\[  (PASSED|FAILED)  \] (\d+) tests?(?:\.|, listed below:)[ \t]*)");
+    static const std::regex ctest(R"(\d+% tests passed, (\d+) tests failed out of (\d+)[ \t]*)");
+    static const std::regex catch2(
+        R"(All tests passed \(.*\)[ \t]*|test cases:[ \t]*(\d+)(?:[ \t]*\|[ \t]*\d+ \w+)*[ \t]*)");
     static const std::regex counted(R"(\b[1-9]\d* (?:passed|failed|passing|failing)\b)");
     static const std::regex failure(R"(\b[1-9]\d* (?:subtests? )?(?:failed|error|errors|failing)\b|\bFAILED \()");
 
@@ -1387,6 +1530,14 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
             note(line.find("[no tests to run]") == std::string::npos, m[1].str() == "FAIL");
         } else if (std::regex_match(line, m, cargo)) {
             note(m[1].str() != "0" || m[2].str() != "0", m[2].str() != "0");
+        } else if (std::regex_match(line, m, unity)) {
+            note(m[1].str() != "0", m[2].str() != "0");
+        } else if (std::regex_match(line, m, gtest)) {
+            note(m[2].str() != "0", m[1].str() == "FAILED" && m[2].str() != "0");
+        } else if (std::regex_match(line, m, ctest)) {
+            note(m[2].str() != "0", m[1].str() != "0");
+        } else if (std::regex_match(line, m, catch2)) {
+            note(!m[1].matched || m[1].str() != "0", line.find(" failed") != std::string::npos);
         }
     }
     // A runner that found nothing to run says so in its own words.
@@ -1397,6 +1548,10 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
     return s;
 }
 
+// ./misc_tests, build/tests_mock, tests/unit_test.exe: a program, not a script, with "test" in its name.
+constexpr const char* kTestBinary =
+    R"((?:^|[;&|(])\s*(?:\./|(?:[\w.-]+/)+)[\w-]*tests?[\w-]*(?:\.exe|\.out)?(?=[\s;&|)]|$))";
+
 // A command that starts a test runner: pytest, python -m unittest, npm test, go test, ctest...
 const std::regex& testRunnerWords() {
     static const std::regex runner(
@@ -1404,10 +1559,17 @@ const std::regex& testRunnerWords() {
         R"(|(?:^|[\s;&|(`/\\])(?:python[0-9.]*|py)(?:\.exe)?\s+(?:-\S+\s+)*-m\s*(?:pytest|unittest)\b)"
         R"(|\b(?:npm|yarn|pnpm|bun)(?:\.cmd)?\s+(?:run\s+)?test\b|\bnpx\s+(?:jest|vitest|mocha)\b)"
         R"(|\b(?:go|cargo|dotnet|deno|swift)\s+test\b|\b(?:mvn|mvnw)\s+(?:\S+\s+)*(?:test|verify)\b)"
-        R"(|\bgradlew?(?:\.bat)?\s+(?:\S+\s+)*(?:test|check)\b|\bmake\s+(?:test|check)\b)"
-        R"(|\b(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+(?:\S+\s+)*?(?:pytest|python\s+-m\s+(?:pytest|unittest))\b)",
+        R"(|\bgradlew?(?:\.bat)?\s+(?:\S+\s+)*(?:test|check)\b|\b(?:make|gmake|ninja)\s+(?:\S+\s+)*(?:tests?|check)\b)"
+        R"(|\b(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+(?:\S+\s+)*?(?:pytest|python\s+-m\s+(?:pytest|unittest))\b)"
+        R"(|)" + std::string(kTestBinary),
         std::regex::icase);
     return runner;
+}
+
+// A built test program run by path. Without output it proves nothing: it may have run no test.
+bool runsTestBinary(const std::string& command) {
+    static const std::regex binary(kTestBinary, std::regex::icase);
+    return std::regex_search(command, binary);
 }
 
 bool namesTestRunner(const std::string& command) {
@@ -1746,6 +1908,51 @@ std::string checkTarget(const std::string& command) {
 }
 }  // namespace
 
+std::string GaiaAgent::describeWork(const std::vector<CallSeen>& calls) {
+    constexpr size_t kMaxFiles = 12, kMaxCommands = 6, kMaxCommandChars = 100;
+    std::vector<std::string> files, commands;
+    for (const CallSeen& c : calls) {
+        if (!c.args.is_object()) continue;
+        if ((c.name == "file_write" || c.name == "file_edit") && c.succeeded && c.args.contains("path") &&
+            c.args["path"].is_string()) {
+            const std::string path = c.args["path"].get<std::string>();
+            if (std::find(files.begin(), files.end(), path) == files.end()) files.push_back(path);
+        } else if (c.name == "bash_execute" && c.args.contains("command") && c.args["command"].is_string()) {
+            const std::string command = c.args["command"].get<std::string>();
+            // Refused or declined commands never ran; ones that only show text changed nothing.
+            if (!readShellRun(c.output).ran || onlyShowsText(command)) continue;
+            std::string shown;
+            for (const char ch : command) shown += (ch == '\n' || ch == '\r' || ch == '`') ? ' ' : ch;
+            if (shown.size() > kMaxCommandChars) {
+                size_t cut = kMaxCommandChars;
+                while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) --cut;
+                shown = shown.substr(0, cut) + "...";
+            }
+            commands.push_back("`" + shown + "`" + (c.succeeded ? "" : " (failed)"));
+        }
+    }
+    if (files.empty() && commands.empty()) return "";
+    std::string out = "Before it stopped, this turn had already:";
+    if (!files.empty()) {
+        out += "\n- Changed " + std::to_string(files.size()) + (files.size() == 1 ? " file: " : " files: ");
+        for (size_t i = 0; i < files.size() && i < kMaxFiles; ++i) out += (i ? ", " : "") + files[i];
+        if (files.size() > kMaxFiles) out += ", and " + std::to_string(files.size() - kMaxFiles) + " more";
+    }
+    if (!commands.empty()) {
+        out += "\n- Run " + std::to_string(commands.size()) + (commands.size() == 1 ? " command" : " commands");
+        const size_t from = commands.size() > kMaxCommands ? commands.size() - kMaxCommands : 0;
+        out += from ? ", the last " + std::to_string(kMaxCommands) + ": " : ": ";
+        for (size_t i = from; i < commands.size(); ++i) out += (i > from ? "; " : "") + commands[i];
+    }
+    return out + (files.empty() ? "" : "\nThose changes are still in place.");
+}
+
+std::string GaiaAgent::workSoFar() const {
+    std::vector<CallSeen> seen;
+    for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output, c.succeeded});
+    return describeWork(seen);
+}
+
 std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestClaim(const std::string& answer,
                                                                                     const std::vector<CallSeen>& calls) {
     const std::string claim = passingTestClaim(answer);
@@ -1787,6 +1994,9 @@ std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestCla
                 changed = true;
                 changedPath.clear();
             }
+            continue;
+        }
+        if (!summary.found && runsTestBinary(command) && run.text.find_first_not_of(" \t\r\n") == std::string::npos) {
             continue;
         }
         const RunVerdict verdict = testRunVerdict(command, run, c.succeeded, summary);
@@ -2035,12 +2245,46 @@ size_t utf8Cut(const std::string& text, size_t limit) {
 std::string reviewedPart(const std::string& answer) {
     constexpr size_t kHead = 6000;
     constexpr size_t kTail = 2000;
-    if (answer.size() <= kHead + kTail) return answer;
+    // No long unbroken run either: a backtracking pattern costs the square of one.
+    if (answer.size() <= kHead + kTail) return textForChecks(answer);
     size_t tail = answer.size() - kTail;
     while (tail < answer.size() && (static_cast<unsigned char>(answer[tail]) & 0xC0) == 0x80) ++tail;
-    return answer.substr(0, utf8Cut(answer, kHead)) + "\n...\n" + answer.substr(tail);
+    return textForChecks(answer.substr(0, utf8Cut(answer, kHead)) + "\n...\n" + answer.substr(tail));
 }
 }  // namespace
+
+std::vector<std::string> GaiaAgent::namedFiles(const std::string& text) {
+    static const std::set<std::string> kinds = {"md",   "txt", "csv",  "tsv",  "xls", "xlsx", "doc", "docx",
+                                                "pdf",  "ppt", "pptx", "json", "yml", "yaml", "log", "htm",
+                                                "html", "xml", "ini",  "toml", "eml", "zip"};
+    const auto isWord = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+    const auto inName = [&](char c) { return isWord(c) || c == '.' || c == '&' || c == '~' || c == '-'; };
+    std::vector<std::string> names;
+    for (size_t at = 0; at < text.size();) {
+        if (!inName(text[at])) {
+            ++at;
+            continue;
+        }
+        size_t end = at;
+        while (end < text.size() && inName(text[end])) ++end;
+        // One pass from the right: the name ends at the last extension in the run.
+        size_t wordEnd = end;
+        for (size_t i = end; i-- > at + 1;) {
+            if (isWord(text[i])) continue;
+            const size_t stop = wordEnd;
+            wordEnd = i;
+            if (text[i] != '.') continue;
+            std::string ext = text.substr(i + 1, stop - i - 1);
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (!kinds.count(ext)) continue;
+            names.push_back(text.substr(at, i + 1 + ext.size() - at));
+            break;
+        }
+        at = end;
+    }
+    return names;
+}
 
 std::string GaiaAgent::oneLineBlockRefusal(const std::string& command) {
     static const std::regex inline_(R"(\bpython[\d.]*(?:\.exe)?\s+-c\s+(["']))", std::regex::icase);
@@ -2486,7 +2730,7 @@ std::optional<std::string> GaiaAgent::announcedStepNote(const std::string& answe
 std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bool factsOnly) {
     std::error_code ec;
     std::vector<fs::path> roots;
-    for (const auto& r : options_.workspaceRoots) roots.emplace_back(fs::u8path(r));
+    for (const auto& r : foldersInUse()) roots.emplace_back(fs::u8path(r));
     if (roots.empty()) roots.push_back(fs::current_path(ec));
 
     const auto& calls = turnToolCalls();
@@ -2665,14 +2909,9 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         std::vector<CallSeen> seen;
         for (const auto& c : calls) seen.push_back({c.name, c.args, c.output});
         // A named file that isn't there is the missing thing, not a fact other files might hold.
-        static const std::regex namedFile(
-            R"([\w.&~-]+\.(?:md|txt|csv|tsv|xlsx?|docx?|pdf|pptx?|json|ya?ml|log|html?|xml|ini|toml|eml|zip)\b)",
-            std::regex::icase);
         bool namedFileMissing = false;
-        const std::string& request = turnRequest();
-        for (auto it = std::sregex_iterator(request.begin(), request.end(), namedFile);
-             it != std::sregex_iterator() && !namedFileMissing; ++it) {
-            namedFileMissing = !exists(it->str());
+        for (const auto& named : namedFiles(turnRequest())) {
+            if ((namedFileMissing = !exists(named))) break;
         }
         if (!lookedNote && !namedFileMissing) {
             if (auto note = unopenedFilesNote(answer, roots, seen)) notes.push_back(*note);

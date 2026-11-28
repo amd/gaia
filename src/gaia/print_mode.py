@@ -290,8 +290,11 @@ def run(
 
     if output_format == "json":
         print(json.dumps(record, ensure_ascii=False))
-    elif record["result"] or not record["is_error"]:
-        # A failed turn with no answer leaves stdout empty, not one blank line.
+    elif not record["is_error"] or (
+        record["result"] and record["result"] != record.get("error")
+    ):
+        # A failed turn leaves stdout empty, not one blank line, when it has no
+        # answer or its answer is the error, which stderr says once below.
         print(record["result"])
     if record["is_error"]:
         ended = f"the turn ended with status '{record['status']}'"
@@ -709,11 +712,9 @@ def _run_turn(
             base_url=base_url,
             extra_paths=extra_paths,
             time_limit=time_limit,
-            restricted=(
-                "--disallowed-tools"
-                if disallowed_tools
-                else "--no-web" if no_web else "--no-skills" if no_skills else ""
-            ),
+            disallowed_tools=disallowed_tools,
+            no_web=no_web,
+            no_skills=no_skills,
         )
     detected_base_url = _start_server(model, base_url)
 
@@ -739,12 +740,7 @@ def _run_turn(
     configure_console(agent.console, skip_permissions, full_access)
     agent.no_one_to_ask = True  # one shot: a question would go unanswered
     if full_access:
-        log.warning("Full access ENABLED at launch (gaia -p): shell gates off")
-        print(
-            "⚠️  gaia -p: full access is on — shell guardrails off, paths outside "
-            "the current folder granted without asking.",
-            file=sys.stderr,
-        )
+        _warn_full_access()
     agent._ensure_tool_loader_reset()  # pylint: disable=protected-access
 
     timer = _arm_time_limit(agent, time_limit) if time_limit else None
@@ -773,6 +769,15 @@ def _run_turn(
     if withheld:
         record["withheld_tools"] = withheld
     return record
+
+
+def _warn_full_access() -> None:
+    log.warning("Full access ENABLED at launch (gaia -p): shell gates off")
+    print(
+        "⚠️  gaia -p: full access is on — shell guardrails off, paths outside "
+        "the current folder granted without asking.",
+        file=sys.stderr,
+    )
 
 
 def restrict_tools(
@@ -878,38 +883,29 @@ def _relay_turn(
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
     time_limit: Optional[int] = None,
-    restricted: str = "",
+    disallowed_tools: Sequence[str] = (),
+    no_web: bool = False,
+    no_skills: bool = False,
 ) -> Dict[str, Any]:
     """Run the turn on the GAIA agent's own binary, through the daemon.
 
-    Confirmation-gated tools are refused there, as -p refuses them in-process
-    without --dangerously-skip-permissions.
+    The agent applies this run's flags to this run alone: it is a one-shot,
+    so no chat on the same service inherits a permission override.
     """
     import io
 
     from gaia.daemon.agent_query import ConsoleRenderer, run_query
 
-    if skip_permissions or full_access or base_url or time_limit or restricted:
-        flag = (
-            "--full-access"
-            if full_access
-            else (
-                "--dangerously-skip-permissions"
-                if skip_permissions
-                else (
-                    "--base-url"
-                    if base_url
-                    else "--time-limit" if time_limit else restricted
-                )
-            )
-        )
+    if base_url:
         raise PrintModeError(
-            f"{flag} needs the GAIA agent in this process, and here it runs as "
-            "its own program through GAIA's background service, which uses "
-            "GAIA's model server and asks before gated tools. Run without "
-            f"{flag}, or from a GAIA install that includes the agent package "
-            "(https://amd-gaia.ai/docs/reference/dev)."
+            "--base-url needs the GAIA agent in this process, and here it runs as "
+            "its own program through GAIA's background service, which always uses "
+            "the model server GAIA is set up with. Run without --base-url, or "
+            "point GAIA itself at that server with `gaia lemonade connect <its "
+            "address>`."
         )
+    if full_access:
+        _warn_full_access()
 
     cwd = os.getcwd()
     renderer = ConsoleRenderer(out=io.StringIO(), err=io.StringIO())
@@ -922,6 +918,15 @@ def _relay_turn(
         renderer=renderer,
         working_directory=cwd,
         allowed_paths=[cwd, *(extra_paths or [])],
+        # Its refusals name the -p flags; nobody is there to answer a question.
+        surface="cli",
+        can_answer_questions=False,
+        time_limit=time_limit,
+        disallowed_tools=list(disallowed_tools),
+        no_web=no_web,
+        no_skills=no_skills,
+        skip_permissions=skip_permissions,
+        full_access=full_access,
         # Sent, even empty, it makes the final carry the turn's model messages.
         **({"turns": []} if verbose else {}),
     )
@@ -935,13 +940,19 @@ def _relay_turn(
         "output_tokens": usage.get("tokens"),
         "conversation": outcome.model_messages or [],
     }
-    if not succeeded:
+    if succeeded and outcome.time_limit_reached:
+        # As in-process: an answer cut short by the limit is not a success.
+        result["status"] = "incomplete"
+        result["time_limit_reached"] = True
+    elif not succeeded:
         result["error"] = (
             outcome.error_detail
             or (outcome.final_answer if outcome.failed else "")
             or "the GAIA agent's reply ended without an answer"
         )
     record = summarize(result, model, time.time() - started, verbose=verbose)
+    if outcome.withheld_tools:
+        record["withheld_tools"] = list(outcome.withheld_tools)
     # Prefer the agent's own counts; a final without them keeps the conversation's.
     for src, dst in (
         ("tools_used", "num_tool_calls"),

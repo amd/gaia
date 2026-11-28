@@ -49,6 +49,13 @@ const SKILL_RELOAD_REASONS = new Map<string, Parameters<Translate>[0]>([
     ['it failed to load with the current settings', 'live.skillReloadFailed'],
 ]);
 
+/** Why a chat has no context measurement, in the chosen language; an unknown reason stays as sent. */
+export function localizeContextReason(t: Translate, reason: string): string {
+    return reason === "Not available yet: gaiacpp doesn't report what fills its context."
+        ? t('ctx.nativeUnavailable')
+        : reason;
+}
+
 /**
  * `label` in the chosen language when it is a status line GAIA knows; any other
  * line (a tool's progress, a retry notice) is shown as the backend wrote it.
@@ -94,5 +101,7 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (label === 'Downloaded the speech model') return t('live.speechModelDoneNoSize');
     m = /^Downloading (\S+)$/.exec(label);
     if (m) return t('live.downloadingModel', { model: m[1] });
+    m = /^Undo may not work for this turn: (\S+) doesn't record file changes yet\.$/.exec(label);
+    if (m) return t('turnChanges.nativeNoUndo', { name: m[1] });
     return label;
 }

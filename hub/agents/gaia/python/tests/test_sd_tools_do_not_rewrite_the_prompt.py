@@ -16,25 +16,11 @@ turns that need it. These tests pin both halves — tools present, persona absen
 
 from __future__ import annotations
 
-import contextlib
-
 import pytest
 from gaiapy.agent import GaiaAgent, GaiaAgentConfig
-
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from registry_isolation import isolated_registry
 
 SD_TOOLS = {"generate_image", "list_sd_models", "get_generation_history"}
-
-
-@contextlib.contextmanager
-def _isolated_registry():
-    saved = dict(_TOOL_REGISTRY)
-    _TOOL_REGISTRY.clear()
-    try:
-        yield
-    finally:
-        _TOOL_REGISTRY.clear()
-        _TOOL_REGISTRY.update(saved)
 
 
 @pytest.fixture(scope="module")
@@ -46,7 +32,7 @@ def flagship():
     Reading it live makes selection assertions depend on test order: a tool
     missing from a smaller registry cannot trigger a jump. The snapshot pins it.
     """
-    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+    with isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))
         agent._registry_snapshot = dict(agent._tools_registry)

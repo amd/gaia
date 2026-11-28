@@ -2884,6 +2884,10 @@ def _refuse_internet_off(
     )
 
 
+class ModelServerDownError(RuntimeError):
+    """A relayed run failed because the model server did not answer."""
+
+
 def relay_one_prompt(
     handler,
     prompt: str,
@@ -2930,7 +2934,10 @@ def relay_one_prompt(
         return None
     content = str(answer.get("content") or "")
     if answer.get("failed"):
-        raise RuntimeError(content or "The GAIA agent's run failed.")
+        message = content or "The GAIA agent's run failed."
+        if answer.get("failure") == MODEL_SERVER_DOWN:
+            raise ModelServerDownError(message)
+        raise RuntimeError(message)
     return content
 
 
@@ -3189,10 +3196,14 @@ def _dispatch_sidecar_query(
             hint or "no hint given",
         )
         if hint:
+            # GAIA is open here, so a "start GAIA" remedy is swapped for the app's.
             sse_handler._emit(
                 {
                     "type": "status",
-                    "message": f"Readiness check reported: {hint} — continuing.",
+                    "message": (
+                        f"Readiness check reported: {_agent_ui_wording(hint)} "
+                        "— continuing."
+                    ),
                 }
             )
 
@@ -3911,6 +3922,24 @@ def _turn_failure_kind(answer_event: Optional[dict], result: Any) -> Optional[st
     return None
 
 
+def _failed_turn_program(
+    agent_type: str, failure: Optional[str] = None
+) -> Optional[str]:
+    """``gaiacpp`` when a failed turn ran on the native agent, else None.
+
+    The UI then says which agent the chat runs on and how to switch; it never
+    switches by itself. A model-server outage is not the agent's fault, so it
+    names no program.
+    """
+    from gaia.daemon.sidecars import fetch
+
+    if agent_type != FLAGSHIP_AGENT_ID or failure == MODEL_SERVER_DOWN:
+        return None
+    if fetch.saved_flagship() != fetch.NATIVE_FLAGSHIP:
+        return None
+    return fetch.NATIVE_FLAGSHIP
+
+
 def _done_event(
     msg_id: int,
     content: str,
@@ -3921,6 +3950,7 @@ def _done_event(
     failure: Optional[str] = None,
     documents_added: Optional[list] = None,
     library_notices: Optional[list[str]] = None,
+    agent_program: Optional[str] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -3928,7 +3958,8 @@ def _done_event(
     the UI labels the turn from what happened rather than from the click — a
     Stop that lands after the agent already answered stays an ordinary turn.
     ``failed`` marks a turn a model failure ended; its content explains why,
-    and ``failure`` names a cause the UI offers a fix for.
+    and ``failure`` names a cause the UI offers a fix for. ``agent_program``
+    is ``gaiacpp`` when a failed turn ran on it.
     ``documents_added`` are the library documents the turn attached to the chat.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
@@ -3938,6 +3969,8 @@ def _done_event(
         event["failed"] = True
         if failure:
             event["failure"] = failure
+        if agent_program:
+            event["agent_program"] = agent_program
     if stats:
         event["stats"] = stats
     if turn_summary:
@@ -3955,18 +3988,25 @@ async def _add_indexed_documents_to_library(
     sse_handler,
     listed_uploads: Optional[list] = None,
 ) -> Tuple[list, list]:
-    """Library rows the turn attached to the chat, and notices.
+    """Library rows the turn attached to the chat or marked failed, and notices.
 
     Each file the agent indexed is recorded in the Document library and
     attached to the chat, as if the user had added it there. *listed_uploads*
     are the composer attachments already put there when the turn began; they
     are read again for what indexing them recorded.
     """
-    from .agent_documents import add_indexed_documents
+    from .agent_documents import add_indexed_documents, mark_unreadable
     from .utils import doc_to_response
 
     indexed = sse_handler.turn_ledger.indexed_documents()
-    rows = [db.get_document(doc["id"]) for doc in listed_uploads or []]
+    unreadable = sse_handler.turn_ledger.unreadable_documents()
+    # A listed upload the agent couldn't read shows as failed, not ticked.
+    rows = (
+        await asyncio.to_thread(mark_unreadable, db, session_id, unreadable)
+        if unreadable
+        else []
+    )
+    rows += [db.get_document(doc["id"]) for doc in listed_uploads or []]
     notices: list = []
     if indexed:
         added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
@@ -6024,6 +6064,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 ),
                 request.session_id,
             )
+            failure_kind = (
+                _turn_failure_kind(answer_event, result_holder.get("result"))
+                if turn_failed
+                else None
+            )
             done_event = _done_event(
                 msg_id,
                 full_response,
@@ -6031,13 +6076,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 stats=inference_stats,
                 turn_summary=turn_summary,
                 failed=turn_failed,
-                failure=(
-                    _turn_failure_kind(answer_event, result_holder.get("result"))
+                failure=failure_kind,
+                documents_added=documents_added,
+                library_notices=library_notices,
+                agent_program=(
+                    _failed_turn_program(agent_type, failure_kind)
                     if turn_failed
                     else None
                 ),
-                documents_added=documents_added,
-                library_notices=library_notices,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -6120,6 +6166,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     failed=failed,
                     documents_added=documents_added,
                     library_notices=library_notices,
+                    agent_program=_failed_turn_program(agent_type) if failed else None,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)

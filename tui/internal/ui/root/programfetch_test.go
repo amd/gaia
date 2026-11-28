@@ -138,7 +138,7 @@ func TestEnterDownloadsWithProgressThenSwitchesToGaiacpp(t *testing.T) {
 	if !m.agent.Native || f.saved(t) != preflight.FlagshipAgentNative {
 		t.Fatalf("the session did not move to gaiacpp: native=%v saved=%q", m.agent.Native, f.saved(t))
 	}
-	if !strings.Contains(header(t, m), "(gaiacpp · Beta)") {
+	if !strings.Contains(header(t, m), "(Fast and light · Beta)") {
 		t.Fatalf("the header does not mark gaiacpp as Beta:\n%s", header(t, m))
 	}
 }

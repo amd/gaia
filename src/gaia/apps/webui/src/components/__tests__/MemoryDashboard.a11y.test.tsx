@@ -17,6 +17,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryDashboard } from '../MemoryDashboard';
 import * as memoryApi from '../../services/memoryApi';
+import { PYTHON_MEMORY_STORE } from '../../test/memoryStore';
 
 vi.mock('../../services/memoryApi');
 
@@ -38,6 +39,7 @@ beforeEach(() => {
     mockedApi.getGoalStats.mockResolvedValue({ goals: {}, tasks: {} });
     // Memory disabled keeps the dashboard body minimal — the Settings section
     // (and its beta-confirm toggle) renders either way.
+    mockedApi.getMemoryStore.mockResolvedValue(PYTHON_MEMORY_STORE);
     mockedApi.getMemorySettings.mockResolvedValue({
         memory_enabled: false,
         mcp_memory_enabled: false,

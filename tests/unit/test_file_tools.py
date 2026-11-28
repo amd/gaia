@@ -21,7 +21,8 @@ from pathlib import Path
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.tools.file_tools import FileSearchToolsMixin
+from gaia.agents.tools.file_tools import FileSearchToolsMixin, _relative_time
+from gaia.utils.sizes import format_size
 from gaia.utils.text_decoding import decode_text
 
 # ---------------------------------------------------------------------------
@@ -43,71 +44,16 @@ def mixin():
 
 @pytest.fixture
 def helpers():
-    """
-    Call register_file_search_tools with a no-op @tool decorator so that the
-    inner helper closures (_human_readable_size, _relative_time,
-    _read_tabular_file, _infer_column_type, _parse_numeric) become
-    accessible through the tool registry.
+    """The file-tool helpers under test, as one namespace: both are the real code.
 
-    Since the helpers are *not* decorated with @tool they are plain local
-    variables.  We use a patching trick: temporarily replace the decorator
-    to capture every local function created inside register_file_search_tools.
+    ``_relative_time`` is the module-level function, and sizes go through
+    ``format_size`` with the two GB decimals file_tools asks for.
     """
 
     captured = {}
 
-    # We will patch the inner locals by monkey-patching at module level.
-    # Instead, the cleanest approach is to replicate the pure helper logic
-    # here and test it identically.  But even better: we can exec the
-    # function body and extract the locals.
-    #
-    # The most robust approach: re-import the source and evaluate just the
-    # helpers.  Since the helpers are pure functions with no dependency on
-    # self or outer scope, we extract them by reading the source.
-    #
-    # For pragmatism, we directly re-implement the same algorithms below
-    # and verify equivalence against the documented behaviour.
-    #
-    # However, for _read_tabular_file we want to exercise the real code.
-    # We achieve this by calling register_file_search_tools with mocked
-    # tool decorator, then pulling _read_tabular_file from the closure via
-    # the analyze_data_file tool that calls it.
-
-    # --- _human_readable_size (exact copy from source) ---
     def _human_readable_size(size_bytes: int) -> str:
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        elif size_bytes < 1024 * 1024 * 1024:
-            return f"{size_bytes / (1024 * 1024):.1f} MB"
-        else:
-            return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
-
-    # --- _relative_time (exact copy from source) ---
-    def _relative_time(dt: datetime) -> str:
-        now = datetime.now()
-        diff = now - dt
-        seconds = diff.total_seconds()
-
-        if seconds < 60:
-            return "just now"
-        elif seconds < 3600:
-            minutes = int(seconds / 60)
-            return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-        elif seconds < 86400:
-            hours = int(seconds / 3600)
-            return f"{hours} hour{'s' if hours != 1 else ''} ago"
-        elif seconds < 172800:
-            return "yesterday"
-        elif seconds < 604800:
-            days = int(seconds / 86400)
-            return f"{days} days ago"
-        elif seconds < 2592000:
-            weeks = int(seconds / 604800)
-            return f"{weeks} week{'s' if weeks != 1 else ''} ago"
-        else:
-            return dt.strftime("%Y-%m-%d")
+        return format_size(size_bytes, gb_decimals=2)
 
     captured["human_readable_size"] = _human_readable_size
     captured["relative_time"] = _relative_time

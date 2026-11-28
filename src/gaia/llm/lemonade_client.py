@@ -1896,7 +1896,7 @@ def split_backend_spec(spec: str) -> Tuple[str, str]:
     """Split a ``recipe:backend`` spec into its two parts.
 
     ``/install`` and ``/uninstall`` take the halves as separate fields and
-    reject a combined one with 400 "Both 'recipe' and 'backend' are required".
+    reject a combined one with a 400 naming the missing ``backend``.
     """
     recipe, _, backend = (spec or "").partition(":")
     if not recipe or not backend:
