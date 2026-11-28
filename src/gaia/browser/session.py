@@ -130,7 +130,7 @@ def _load_key() -> bytes:
 
     key = os.urandom(_KEY_BYTES)
     try:
-        vault.put(KEYRING_USERNAME, key.hex())
+        vault.put(KEYRING_USERNAME, key.hex(), mirror=vault.MIRROR_BACKGROUND)
     except ConnectorsError as e:
         raise SessionStoreError(str(e)) from e
     except Exception as e:  # noqa: BLE001 — re-raised actionably
