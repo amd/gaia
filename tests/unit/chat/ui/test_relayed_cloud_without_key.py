@@ -36,7 +36,7 @@ def test_a_cloud_model_without_a_working_key_stops_the_turn(monkeypatch):
     errors = [e for e in sse.events if e["type"] == "agent_error"]
     assert len(errors) == 1
     assert "isn't connected, so GAIA can't answer" in errors[0]["content"]
-    assert "Reconnect fireworks" in errors[0]["content"]
+    assert "Reconnect Fireworks AI" in errors[0]["content"]
     assert "404" not in errors[0]["content"]
 
 
@@ -58,3 +58,21 @@ def test_a_local_model_is_not_checked(monkeypatch):
 
     monkeypatch.setattr("gaia.llm.cloud_keys.reconnect_provider", unexpected)
     assert _replay_cloud_key_for_relay(_SSE(), "Qwen3.6-35B-A3B-GGUF") is True
+
+
+def test_both_modes_say_the_same_thing(monkeypatch):
+    from gaia.ui._chat_helpers import (
+        _agent_ui_wording,
+        _missing_local_model_text,
+        _replay_cloud_key_for_relay,
+    )
+
+    monkeypatch.setattr(
+        "gaia.llm.cloud_keys.reconnect_provider", lambda provider: False
+    )
+    monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
+    sse = _SSE()
+    _replay_cloud_key_for_relay(sse, CLOUD_MODEL)
+
+    in_process = _missing_local_model_text({"model": {"id": CLOUD_MODEL}})
+    assert sse.events[0]["content"] == _agent_ui_wording(in_process)

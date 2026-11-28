@@ -2796,6 +2796,17 @@ def _probe_misses_only_the_model(init_body: dict | None) -> bool:
     )
 
 
+def _cloud_not_connected_text(model_id: str) -> str:
+    """The sentence for a cloud model whose provider has no working key."""
+    from .routers.providers import cloud_provider_name, display_name
+
+    return (
+        f"{display_name(model_id)} isn't connected, so GAIA can't answer. "
+        f"Reconnect {cloud_provider_name(model_id)} under Settings > Agent & model, "
+        "or pick another model."
+    )
+
+
 def _missing_local_model_text(init_body: dict) -> str:
     """What the chat says when the model a turn needs is not available.
 
@@ -2818,10 +2829,7 @@ def _missing_local_model_text(init_body: dict) -> str:
                 "under Settings > Agent & model, or turn off Local only under Settings > "
                 "Privacy."
             )
-        return (
-            f"{name} isn't connected, so GAIA can't answer. Reconnect {provider} "
-            "under Settings > Agent & model, or pick another model."
-        )
+        return _cloud_not_connected_text(model_id)
     name = friendly_name(model_id)
     if cloud_blocked():
         return (
@@ -2858,29 +2866,25 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> bool:
     try:
         usable = reconnect_provider(provider)
     except (CloudKeyError, GatewayError, requests.RequestException) as exc:
+        from .routers.providers import cloud_provider_name
+
         logger.warning("chat: could not reconnect the %s provider: %s", provider, exc)
         sse_handler._emit(
             {
                 "type": "status",
                 "message": _agent_ui_wording(
-                    f"Could not reconnect {provider}: {exc}. If the answer says "
+                    f"Could not reconnect {cloud_provider_name(model_id)}: {exc}. If the answer says "
                     "the model is unavailable, reconnect it in Settings > Agent & model."
                 ),
             }
         )
         return True
     if not usable:
-        from .routers.providers import display_name
-
         logger.warning("chat: %s has no working key for %s", provider, model_id)
         sse_handler._emit(
             {
                 "type": "agent_error",
-                "content": _agent_ui_wording(
-                    f"{display_name(model_id)} isn't connected, so GAIA can't answer. "
-                    f"Reconnect {provider} under Settings > Agent & model, or pick "
-                    "another model."
-                ),
+                "content": _agent_ui_wording(_cloud_not_connected_text(model_id)),
             }
         )
         return False
