@@ -552,7 +552,7 @@ def test_gaiacpp_indexed_documents_reads_single_and_batch_results(tmp_path):
     _call(
         ledger,
         "index_document",
-        {"path": doc_a},
+        {"file_path": doc_a},
         {"status": "success", "indexed": [{"file": doc_a, "chunks": 3}], "chunks": 3},
     )
     _call(
@@ -573,3 +573,44 @@ def test_gaiacpp_indexed_documents_reads_single_and_batch_results(tmp_path):
     assert ledger.indexed_documents() == [(doc_a, 3), (doc_b, 5)]
     outputs = ledger.summary(location=LOCAL)["outputs"]
     assert outputs == [{"kind": "document", "name": "a.pdf", "path": doc_a}]
+
+
+def test_gaiacpp_batch_summary_counts_indexed_files_even_when_one_failed(tmp_path):
+    ledger = TurnLedger()
+    memo = str(tmp_path / "memo.txt")
+    sheet = str(tmp_path / "budget_sheet.xlsx")
+    _call(
+        ledger,
+        "index_documents",
+        {"documents": ["memo.txt", "budget_sheet.xlsx"]},
+        {
+            "status": "partial",
+            "has_errors": True,
+            "indexed": [{"document": "memo.txt", "file": memo, "chunks": 4}],
+            "failed": [
+                {
+                    "document": "budget_sheet.xlsx",
+                    "file": sheet,
+                    "error": "Can't index budget_sheet.xlsx: Excel (.xlsx) files aren't supported.",
+                }
+            ],
+            "summary": "Indexed memo.txt (4 passages); couldn't index 1 document:",
+        },
+        success=False,
+    )
+    assert ledger.indexed_documents() == [(memo, 4)]
+
+
+def test_batch_rows_without_an_absolute_path_are_left_out():
+    ledger = TurnLedger()
+    _call(
+        ledger,
+        "index_documents",
+        {"documents": ["x.xlsx"]},
+        {
+            "status": "error",
+            "indexed": [{"file": "relative.txt", "chunks": 1}],
+            "failed": [],
+        },
+    )
+    assert ledger.indexed_documents() == []

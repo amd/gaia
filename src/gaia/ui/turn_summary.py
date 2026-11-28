@@ -318,15 +318,19 @@ class TurnLedger:
         if isinstance(path, str) and os.path.isabs(path):
             chunks = data.get("num_chunks")
             found[path] = chunks if isinstance(chunks, int) else 0
-        indexed = data.get("indexed")
-        if isinstance(indexed, list):
-            for item in indexed:
-                if not isinstance(item, dict):
-                    continue
-                item_path = item.get("file")
-                if isinstance(item_path, str) and os.path.isabs(item_path):
-                    chunks = item.get("chunks")
-                    found[item_path] = chunks if isinstance(chunks, int) else 0
+        TurnLedger._collect_indexed_items(data.get("indexed"), found)
+
+    @staticmethod
+    def _collect_indexed_items(indexed: Any, found: Dict[str, int]) -> None:
+        if not isinstance(indexed, list):
+            return
+        for item in indexed:
+            if not isinstance(item, dict):
+                continue
+            item_path = item.get("file")
+            if isinstance(item_path, str) and os.path.isabs(item_path):
+                chunks = item.get("chunks")
+                found[item_path] = chunks if isinstance(chunks, int) else 0
 
     def indexed_documents(self) -> List[Tuple[str, int]]:
         """``(path, chunks)`` for each file ``index_document`` indexed this turn.
@@ -336,18 +340,19 @@ class TurnLedger:
         """
         found: Dict[str, int] = {}
         for call in self._finished():
+            data = call["data"]
+            if call["tool"] == "index_documents" and isinstance(data, dict):
+                # The batch names what it indexed even when another file failed.
+                self._collect_indexed_items(data.get("indexed"), found)
+                continue
             if not call["success"]:
                 continue
-            data = call["data"]
             if call["tool"] == "index_document":
                 self._collect_indexed_result(data, found)
-            elif call["tool"] == "index_documents":
-                if isinstance(data, list):
-                    for entry in data:
-                        if isinstance(entry, dict):
-                            self._collect_indexed_result(entry.get("result"), found)
-                else:
-                    self._collect_indexed_result(data, found)
+            elif call["tool"] == "index_documents" and isinstance(data, list):
+                for entry in data:
+                    if isinstance(entry, dict):
+                        self._collect_indexed_result(entry.get("result"), found)
         return list(found.items())
 
     def unreadable_documents(self) -> List[Tuple[str, str]]:
@@ -411,9 +416,7 @@ class TurnLedger:
                         item["copy_of"] = kept
                     out.append(item)
             elif tool in _INDEX_TOOLS:
-                path = args.get(_INDEX_TOOLS[tool]) or (
-                    args.get("path") if tool == "index_document" else None
-                )
+                path = args.get(_INDEX_TOOLS[tool])
                 if isinstance(path, str) and path:
                     path = os.path.expanduser(path)
                     out.append(
