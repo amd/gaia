@@ -332,3 +332,80 @@ def test_a_failed_chat_names_where_the_model_runs_not_always_the_gpu(
     assert f"loads on {where}" in error
     if device != "gpu":
         assert "GPU" not in error
+
+
+# ── Which agent the failure blames ─────────────────────────────────────────
+
+_SIDECAR_WHY = "gaiacpp stopped: the tool call could not be read."
+
+
+def _failed_agent_row(monkeypatch, why=_SIDECAR_WHY):
+    from gaia.ui import warmup
+
+    monkeypatch.setattr(warmup, "_device_for", lambda *_a: "gpu")
+    monkeypatch.setattr(sr, "_agent_turn_problem", lambda _model: why)
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False, chat_model=QWEN)
+    run.chat_model_for = lambda _run: QWEN
+    problem = runner._test_agent(run)
+    return problem, run.tests[("agent", QWEN)]
+
+
+def test_a_chat_that_fails_on_gaiacpp_blames_the_agent_not_the_model(monkeypatch):
+    """The model's own test passed before the chat test runs (#8854's symptom)."""
+    _save(flagship_agent="gaiacpp")
+    problem, row = _failed_agent_row(monkeypatch)
+    assert row["state"] == "failed" and row["kind"] == "agent"
+    assert row["agent"] == "gaiacpp"
+    assert row["agent_error"] == _SIDECAR_WHY
+    assert row["error"] == problem
+    assert "gaiacpp, the beta agent" in problem
+    assert "could not be read. " in problem and ".." not in problem
+    assert "Finish setup on the Python agent" in problem
+    assert "choose another chat model" not in problem
+
+
+def test_a_model_server_outage_on_gaiacpp_is_not_blamed_on_the_agent(monkeypatch):
+    _save(flagship_agent="gaiacpp")
+    down = sr.ModelServerDown(
+        "the model server at http://127.0.0.1:13305 did not answer."
+    )
+    problem, row = _failed_agent_row(monkeypatch, down)
+    assert row["kind"] == "agent"
+    assert "agent" not in row and "agent_error" not in row
+    assert "gaiacpp" not in problem
+    assert "choose another chat model" in problem
+
+
+def test_the_test_chat_marks_a_server_outage(monkeypatch):
+    from gaia.hub import installer as hub_installer
+    from gaia.ui import _chat_helpers as helpers
+
+    def down(*_a, **_k):
+        raise helpers.ModelServerDownError("GAIA's model server isn't running.")
+
+    monkeypatch.setattr(hub_installer, "read_sentinel", lambda _id: {"v": 1})
+    monkeypatch.setattr(helpers, "relay_one_prompt", down)
+    why = sr._agent_turn_problem.real(QWEN)
+    assert isinstance(why, sr.ModelServerDown)
+    assert why == "GAIA's model server isn't running."
+
+
+@pytest.mark.parametrize("saved", [None, "gaiapy"])
+def test_a_chat_that_fails_on_the_python_agent_keeps_the_model_message(
+    monkeypatch, saved
+):
+    if saved:
+        _save(flagship_agent=saved)
+    problem, row = _failed_agent_row(monkeypatch)
+    assert row["kind"] == "agent"
+    assert "agent" not in row and "agent_error" not in row
+    assert "choose another chat model" in problem
+    assert "gaiacpp" not in problem
+
+
+def test_the_setup_status_carries_the_failed_agent(monkeypatch):
+    _save(flagship_agent="gaiacpp")
+    _problem, row = _failed_agent_row(monkeypatch, "it ended without an answer")
+    assert row["agent"] == "gaiacpp"
+    assert row["agent_error"] == "it ended without an answer"

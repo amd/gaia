@@ -294,12 +294,14 @@
     animation: fade-cut-inline both;
     animation-timeline: scroll(self inline);
 }
-/* dir="auto" gives each title its own text order, so the fade lands at the
- * end of its own text. The row, not the title, decides the side it sits on. */
-.sb-row-main:dir(rtl) .sb-row-title {
+/* dir="auto" gives each title and snippet its own text order, so the fade lands at the
+ * end of its own text. The row, not the text, decides the side it sits on. */
+.sb-row-main:dir(rtl) .sb-row-title,
+.sb-row-main:dir(rtl) .sb-row-snippet {
     text-align: right;
 }
-.sb-row-main:dir(ltr) .sb-row-title {
+.sb-row-main:dir(ltr) .sb-row-title,
+.sb-row-main:dir(ltr) .sb-row-snippet {
     text-align: left;
 }
 

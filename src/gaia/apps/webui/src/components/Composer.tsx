@@ -194,7 +194,7 @@ export function Composer({
                 aria-expanded={skillMenu.open && skillMenu.matches.length > 0}
                 aria-controls={skillMenu.open && skillMenu.matches.length > 0 ? SKILL_MENU_ID : undefined}
                 aria-activedescendant={skillMenu.open && skillMenu.matches.length > 0 ? skillOptionId(skillMenu.selected) : undefined}
-                dir="auto"
+                dir={value ? 'auto' : undefined}
             />
             {tooLong && (
                 <p className="composer-limit-error" role="alert">

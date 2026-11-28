@@ -264,7 +264,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package: call it with plain `fetch`. Contract version **2.31**; the stream is
+package: call it with plain `fetch`. Contract version **2.32**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -288,6 +288,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
 | `max_steps` | no | ≥ 1. Defaults to **1000** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
+| `time_limit`, `disallowed_tools`, `no_web`, `no_skills`, `skip_permissions`, `full_access` | no | Contract ≥ 2.32. The `gaia -p` flags, for a run with **no** `session_id` (with one, a **422**), so they never outlive the run. `time_limit` is seconds (≥ 1); `final.time_limit_reached` says it stopped the turn. `disallowed_tools` (globs), `no_web` and `no_skills` withhold tools; a glob that matches nothing is a **400**, and `final.withheld_tools` lists them. `skip_permissions` runs gated tools without asking; `full_access` also lifts the shell guardrails. Both need a caller token (**403** without one). A chat's full access is the bypass route (§8). The native harness (`gaiacpp`) reports an older contract but applies them, listing them on `/version` as `capabilities.one_shot_fields`; there an unmatched glob ends the stream with an `error` of `status` 400. Check `/version` first: a binary that neither speaks 2.32 nor lists the field would run without it. |
 
 ```ts
 import { randomUUID } from "node:crypto";
@@ -562,8 +563,11 @@ data: {"type":"final","failed":true,"usage":{"steps":1,"input_tokens":5120,"toke
 
 That is deny-by-default, not an oversight: parking a batch run on a prompt
 nobody will ever see reads as a hang. So a one-shot integration cannot run those
-nine tools — pass a `session_id` and answer, or perform the mutation from your
-own code and let the agent do the reading and reasoning.
+nine tools unless it says so up front — pass a `session_id` and answer, send
+`skip_permissions: true` (contract ≥ 2.32, a caller token required) to run them
+unasked for that one run, as `gaia -p --dangerously-skip-permissions` does, or
+perform the mutation from your own code and let the agent do the reading and
+reasoning. With `surface: "cli"` the refusal names the `gaia -p` flag instead.
 
 ## 9. File-access scope
 
@@ -830,7 +834,7 @@ Then, in another terminal, with `TOKEN` read from the file `serve` printed:
 ```bash
 TOKEN=$(cat /path/printed/by/serve/launch-secret)
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.31","agentVersion":"0.3.6"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.32","agentVersion":"0.3.6"}
 curl -s -H "authorization: Bearer $TOKEN"   http://127.0.0.1:8141/v1/gaia/init          # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H "authorization: Bearer $TOKEN" \

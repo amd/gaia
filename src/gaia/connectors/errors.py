@@ -503,12 +503,10 @@ class ScopeNotAllowedError(ConnectorsError):
 class GrantAfterConnectError(ConnectorsError):
     """A connection was persisted but the agent grant that should follow it failed.
 
-    Deliberately its own type — never merged into a generic ``ConnectorsError``
-    — so a caller that must not echo an arbitrary exception's text (it might
-    carry a credential) can still tell apart "the connection itself is fine,
-    only the grant write failed" from every other failure, and report that
-    honestly instead of a blanket "nothing was changed." See
-    ``onboarding_tools._setup_mailbox_access``.
+    Raised by ``flow._commit_grants_for_provider`` when the provider granted
+    none of an agent's scopes or the grant write failed. Its message says the
+    connection was saved and how to grant the agent by hand. No caller catches
+    this type specifically; ``ConnectorsError`` handlers report it.
     """
 
     def __init__(self, provider: str, agent_id: str, *, reason: str):

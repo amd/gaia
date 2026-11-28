@@ -65,16 +65,21 @@ export function useTurnChanges(sessionId: string, messageId: number) {
         () => cache.get(sessionId)?.byMessage.get(messageId) ?? null,
     );
     const [error, setError] = useState<Param | null>(null);
+    // True once a listing that covers this message has been read.
+    const [checked, setChecked] = useState(false);
 
     useEffect(() => {
+        setChecked(false);
         if (messageId <= 0) return;
+        let live = true;
+        const read = () => { if (live) setChecked(true); };
         const entry = entryFor(sessionId);
         const sync = () => setTurn(entry.byMessage.get(messageId) ?? null);
         entry.listeners.add(sync);
         if (!entry.byMessage.has(messageId) && !entry.checked.has(messageId)) {
             entry.checked.add(messageId);
             load(sessionId).then(
-                () => setError(null),
+                () => { setError(null); read(); },
                 (err: unknown) => {
                     // Let a later mount of this message try again.
                     entry.checked.delete(messageId);
@@ -83,10 +88,12 @@ export function useTurnChanges(sessionId: string, messageId: number) {
             );
         } else {
             sync();
+            // A remount can land while the listing it shares is still on its way.
+            (entry.inFlight ?? Promise.resolve()).then(read, () => undefined);
         }
-        return () => { entry.listeners.delete(sync); };
+        return () => { live = false; entry.listeners.delete(sync); };
     }, [sessionId, messageId]);
 
     const refresh = useCallback(() => load(sessionId), [sessionId]);
-    return { turn, error, refresh };
+    return { turn, error, checked, refresh };
 }

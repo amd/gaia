@@ -24,6 +24,7 @@ import { pluralKey, type MessageKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
 import { ChangePreview, fileChange } from './PermissionChangePreview';
+import { riskNoteText } from './riskNote';
 import './PermissionPrompt.css';
 
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
@@ -211,8 +212,18 @@ export function shownScript(tool: string | undefined, args: Record<string, unkno
     return { text: null, hiddenLines: 0, unreadable: reason };
 }
 
+/** Longest command a button shows whole; a longer one keeps both ends around a visible "…". */
+const SCOPE_COMMAND_CHARS = 64;
+
 /** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
 export function shortScope(scope: string): string {
+    // A command (gaiacpp quotes it in backticks) is never shortened by its paths: `cp /a/x /b/y`
+    // would read `cp y`, and `mkdir /a && rm -rf /b` would read `mkdir b`. It is shown as written,
+    // or cut where the cut shows.
+    if (scope.includes('`')) {
+        if (scope.length <= SCOPE_COMMAND_CHARS) return scope;
+        return `${scope.slice(0, SCOPE_COMMAND_CHARS - 20)} … ${scope.slice(-16)}`;
+    }
     // A translated scope wraps its path in direction isolates (U+2068 ... U+2069).
     return scope.replace(/(\s\u2068?)((?:[A-Za-z]:)?[\\/][^\u2069]*)(\u2069?)$/, (_, lead: string, path: string, close: string) => {
         const name = path.split(/[\\/]/).filter(Boolean).pop();
@@ -305,7 +316,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const hasArgs = Object.keys(args).length > 0;
     // A call GAIA's own checks don't cover is approved on its exact text, once:
     // show that text unwrapped, the folder it runs in, and its risk note.
-    const riskNote = typeof args._risk_note === 'string' ? args._risk_note : '';
+    const riskNote = typeof args._risk_note === 'string' ? riskNoteText(args._risk_note, t) : '';
     const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
     // Code is approved as written, so all of it is one click away, never only a summary.
     // A file is approved on its content too: the path alone does not say what runs.

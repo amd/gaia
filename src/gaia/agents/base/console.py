@@ -29,6 +29,7 @@ from gaia.agents.base.write_safety import (
 )
 from gaia.env import child_env
 from gaia.llm.surface_hints import surface_wording
+from gaia.utils.sizes import format_size
 
 logger = logging.getLogger(__name__)
 
@@ -2235,7 +2236,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             self.console.print(
                 f"\n[bold green]📄 New file detected:[/bold green] [cyan]{filename}[/cyan]"
             )
-            size_str = self._format_file_size(size)
+            size_str = format_size(size)
             self.console.print(f"   [dim]Size:[/dim] {size_str}")
             self.console.print(f"   [dim]Type:[/dim] {extension or 'unknown'}")
         else:
@@ -2286,17 +2287,6 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             )
         else:
             print(f"\n📦 File moved: {src_filename} → {dest_filename}")
-
-    def _format_file_size(self, size_bytes: int) -> str:
-        """Format file size in human-readable format."""
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        elif size_bytes < 1024 * 1024 * 1024:
-            return f"{size_bytes / (1024 * 1024):.1f} MB"
-        else:
-            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
     # === VLM/Model Progress Output Methods ===
 

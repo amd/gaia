@@ -415,6 +415,7 @@ async def _refresh_locked(
             # forwarded across rotation, or the next disconnect would
             # revoke the host app's own grant.
             forwarded=bool(stored.get("forwarded")),
+            background_refresh=True,
         ):
             raise _replaced_error(provider_id)
 
