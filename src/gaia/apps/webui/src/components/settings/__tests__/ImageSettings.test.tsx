@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImageSettings } from '../ImageSettings';
 import { ApiError } from '../../../services/api';
 import * as api from '../../../services/imageApi';
+import { useActiveAgentStore } from '../../../stores/activeAgentStore';
 import { useChatStore } from '../../../stores/chatStore';
 import { useModelStore } from '../../../stores/modelStore';
 
@@ -36,6 +37,8 @@ const text = (el: Element) => (el.textContent ?? '').replace(/[⁦⁩]/g, '');
 
 beforeEach(() => {
     vi.clearAllMocks();
+    useActiveAgentStore.setState({ current: null });
+    useChatStore.setState({ settingsSection: null });
     mockedApi.getImageSettings.mockResolvedValue(SETTINGS);
     mockedApi.updateImageSettings.mockImplementation(async (change) => ({ ...SETTINGS, ...change }));
 });
@@ -112,5 +115,17 @@ describe('ImageSettings', () => {
         expect(screen.getByText(raw)).toBeTruthy();
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         expect(await screen.findByLabelText('Model')).toBeTruthy();
+    });
+
+    it('tells Fast and light users image creation only applies to Full-featured and links to Agent & model', () => {
+        useActiveAgentStore.setState({ current: 'gaiacpp' });
+        render(<ImageSettings />);
+        const notice = screen.getByRole('status');
+        expect(notice.textContent).toMatch(/Fast and light/i);
+        expect(notice.textContent).toMatch(/Full-featured/i);
+        expect(mockedApi.getImageSettings).not.toHaveBeenCalled();
+        expect(screen.queryByLabelText('Model')).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: /Agent & model/i }));
+        expect(useChatStore.getState().settingsSection).toBe('model');
     });
 });
