@@ -128,7 +128,7 @@ function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions, pla
                             )}
                         </span>
                         <span className="mc-note" id={`${id}-note`}>
-                            {t.compose((say) => [purposeLine(e, say), fitLine(e, say), e.fits === null ? say('setup.models.fit.unknown') : null].filter(Boolean).join(' '))}
+                            {t.compose((say) => [purposeLine(e, say), fitLine(e, say), e.fits === null ? say(e.capacity_gb != null && e.need_gb == null ? 'setup.models.fit.unknownNeed' : 'setup.models.fit.unknown') : null].filter(Boolean).join(' '))}
                         </span>
                     </span>
                 </label>

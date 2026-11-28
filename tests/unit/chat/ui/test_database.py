@@ -259,6 +259,54 @@ class TestTitleIsCustom:
         assert updated["title_is_custom"] == 1
 
 
+class TestRenameKeepsPlace:
+    """Renaming a chat isn't activity, so it stays where it was in the list."""
+
+    @staticmethod
+    def _three_chats(db):
+        ids = []
+        for n, stamp in enumerate(["2026-11-01", "2026-11-02", "2026-11-03"]):
+            sid = db.create_session(title=f"Chat {n}")["id"]
+            db._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?", (stamp, sid)
+            )
+            ids.append(sid)
+        db._conn.commit()
+        return ids  # oldest first; the list shows them newest first
+
+    def test_rename_and_pin_leave_the_list_order_alone(self, db):
+        oldest, middle, newest = self._three_chats(db)
+
+        db.update_session(oldest, title="Renamed", title_is_custom=True)
+        db.update_session(middle, title="Also renamed")
+
+        listed = db.list_sessions()
+        assert [s["id"] for s in listed] == [newest, middle, oldest]
+        assert [s["title"] for s in listed][1:] == ["Also renamed", "Renamed"]
+        assert db.get_session(oldest)["updated_at"] == "2026-11-01"
+
+    def test_changing_the_model_still_counts_as_activity(self, db):
+        oldest, _, newest = self._three_chats(db)
+
+        db.update_session(oldest, model="some-model")
+
+        assert [s["id"] for s in db.list_sessions()][0] == oldest
+
+    def test_attaching_a_document_still_counts_as_activity(self, db):
+        oldest, _, _ = self._three_chats(db)
+
+        db.update_session(oldest, document_ids=[])
+
+        assert [s["id"] for s in db.list_sessions()][0] == oldest
+
+    def test_a_new_message_still_moves_a_chat_to_the_top(self, db):
+        oldest, _, _ = self._three_chats(db)
+
+        db.add_message(oldest, "user", "Hello")
+
+        assert [s["id"] for s in db.list_sessions()][0] == oldest
+
+
 class TestTitleIsCustomMigration:
     """Pre-#2165 DBs get the title_is_custom column; existing rows with a
     non-placeholder title are backfilled as pinned (can't tell user-set from

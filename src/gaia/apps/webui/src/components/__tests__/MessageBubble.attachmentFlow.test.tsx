@@ -7,11 +7,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, renderHook, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, waitFor } from '@testing-library/react';
 
 const apiBase = vi.hoisted(() => ({ value: '/api' }));
 vi.mock('../../utils/apiBase', () => ({ getApiBase: () => apiBase.value }));
 vi.mock('../../services/api', () => ({
+    UI_HEADER: {},
     uploadFile: vi.fn(async (file: File) => {
         const ext = file.name.slice(file.name.lastIndexOf('.'));
         const id = file.type.startsWith('image/')
@@ -68,9 +69,15 @@ describe.each([
         const img = container.querySelector('.image-thumb img');
         expect(img?.getAttribute('src')).toBe(`${expected}0b9e7a52-1c2d-4e5f-8a9b-0c1d2e3f4a5b.png`);
         expect(container.querySelector('.image-thumb')?.getAttribute('aria-label')).toContain('sunset.png');
-        expect(getByText('notes.txt').closest('a')?.getAttribute('href')).toBe(
-            `${expected}6f1e2d3c-4b5a-4968-8776-655443322110.txt`,
-        );
+        const fetchMock = vi.fn().mockResolvedValue(new Response('hello', { status: 200 }));
+        vi.stubGlobal('fetch', fetchMock);
+        try {
+            fireEvent.click(getByText('notes.txt').closest('button')!);
+            await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+            expect(fetchMock.mock.calls[0][0]).toBe(`${expected}6f1e2d3c-4b5a-4968-8776-655443322110.txt`);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 
     it('does not let a look-alike link in the same message through', () => {

@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 
 import gaia.config
+import gaia.sd.settings  # noqa: F401  # loaded before the fixture fakes LemonadeClient
 from gaia.installer import model_choice
 from gaia.installer.init_command import InitCommand
 from gaia.llm import lemonade_client

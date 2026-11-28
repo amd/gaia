@@ -399,8 +399,9 @@ def _catalog(
     selected: List[str],
     system_info: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Every model setup can pull or use: the plan, GAIA's chat models, and
-    each chat model already downloaded in this Lemonade (FLM included).
+    """Every model setup can pull or use: the plan, GAIA's chat models, each
+    chat model already downloaded in this Lemonade (FLM included), and each
+    image model Settings › Image creation offers that is on this PC.
 
     *system_info* is Lemonade's ``/system-info``: a model whose backend can't
     run on this PC doesn't fit. None when it couldn't be read."""
@@ -416,6 +417,7 @@ def _catalog(
         is_cloud_model_entry,
         runs_on_npu,
     )
+    from gaia.sd.settings import image_model_choices
 
     same = model_choice.ids_match
     lemonade_list = (
@@ -435,7 +437,11 @@ def _catalog(
         # One already downloaded stays listed, so Settings can still remove it.
         if not model_choice.withheld_reason(m) or (entry_for(m) or {}).get("downloaded")
     ]
-    known = [*planned, *_known_chat_models(capacity), *offered]
+    # Listed so Settings can remove them; setup never offers to download one.
+    image_models = [
+        c["id"] for c in image_model_choices(lemonade_list) if c["downloaded"]
+    ]
+    known = [*planned, *_known_chat_models(capacity), *offered, *image_models]
     # GAIA's own models: a Lemonade-only model the user made the chat model is
     # planned, but stays in the Lemonade list where they found it.
     gaia_known = [
@@ -443,6 +449,7 @@ def _catalog(
         *(INIT_PROFILES[profile]["models"] or []),
         *_known_chat_models(capacity),
         *offered,
+        *image_models,
     ]
     for model_id in known:
         if not listed(model_id, order):
@@ -483,7 +490,12 @@ def _catalog(
             0.0 if downloaded else remaining_download_gb(full, on_disk.get(model_id))
         )
         is_planned = listed(model_id, planned)
-        roles = model_choice.roles_for(model_id, chat_id)
+        is_image = listed(model_id, image_models)
+        roles = (
+            [model_choice.ROLE_IMAGE_CREATION]
+            if is_image
+            else model_choice.roles_for(model_id, chat_id)
+        )
         # Lemonade lists no FLM model before its backend is in; GAIA knows it anyway.
         recipe = (entry or {}).get("recipe") or (
             "flm" if runs_on_npu(model_id) else None
@@ -523,7 +535,7 @@ def _catalog(
                 and not model_choice.optional_role(model_id)
                 and not model_choice.is_vision_only(model_id)
                 and (entry is None or model_choice.is_chat_catalog_entry(entry)),
-                "support": model_choice.support_label(model_id),
+                "support": None if is_image else model_choice.support_label(model_id),
                 "reads_images": model_choice.reads_images(model_id),
                 "feature_tier": model_choice.feature_tier(model_id),
                 "source": _model_source(entry),

@@ -81,6 +81,19 @@ it('renders the latest message after closing and reopening a long conversation',
     expect(offsets).toEqual([0, 100, 200, 0, 100, 200]);
 });
 
+it('opens a long conversation at its latest message as soon as it shows', async () => {
+    // A frozen clock: the history arrives within the 100 ms streaming throttle, however long it renders.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'], now: new Date(session.created_at) });
+    const landedOnLatest: boolean[] = [];
+    vi.mocked(HTMLElement.prototype.scrollIntoView).mockImplementation(function (this: HTMLElement) {
+        landedOnLatest.push(!this.nextElementSibling && !!this.parentElement?.textContent?.includes('Transcript entry 205'));
+    });
+    render(<ChatView sessionId={session.id} />);
+    await waitFor(() => expect(screen.getByText('Transcript entry 205')).toBeInTheDocument());
+    // A wheel this early would cancel a scroll still waiting on a timer, leaving the chat at its top.
+    expect(landedOnLatest).toContain(true);
+});
+
 it('refreshes external messages beyond the first page during normal polling', async () => {
     render(<ChatView sessionId={session.id} />);
     await waitFor(() => expect(screen.getByText('Transcript entry 205')).toBeInTheDocument());

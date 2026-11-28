@@ -14,6 +14,7 @@ import {
 } from '../stores/modelStore';
 import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
+import { SupportTag } from './SupportTag';
 import { formatPrice } from './settings/cloudPrice';
 import { useT } from '../i18n/useT';
 import { providerName, providerNotice } from '../utils/providerText';
@@ -62,14 +63,6 @@ function orderGroups(groups: ProviderModels[], activeProvider: string | undefine
             ...g,
             models: [...g.models].sort((a, b) => rank(a) - rank(b)),
         }));
-}
-
-/** Setup's Verified / Untested tag. */
-function SupportTag({ support }: { support: ProviderModel['support'] }) {
-    const t = useT();
-    if (support === 'verified') return <span className="mc-chip is-verified">{t('setup.label.verified')}</span>;
-    if (support === 'untested') return <span className="mc-chip is-untested">{t('setup.label.untested')}</span>;
-    return null;
 }
 
 /** Loaded (green dot), downloaded, or a download button — always with a text label. */
