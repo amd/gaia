@@ -120,6 +120,9 @@ std::string outcomeOf(const std::string& tool, const json& r) {
         }
         const long long code = r["exit_code"].get<long long>();
         if (code == 0) return said.empty() ? "Finished with no output" : clip(said, 200);
+        if (r.contains("expected_exit") && r["expected_exit"].is_string()) {
+            return r["expected_exit"].get<std::string>() + " (exit " + std::to_string(code) + ")";
+        }
         return "Failed (exit " + std::to_string(code) + ")" + (said.empty() ? "" : ": " + clip(said, 160));
     }
     if (tool == "web_fetch" && number("total_chars")) {
