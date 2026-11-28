@@ -268,6 +268,31 @@ class TestActivityLines:
         assert result["success"] is False
         assert result["summary"] == summary
 
+    def test_a_search_with_no_match_is_an_answer_not_a_failure(self):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "bash_execute",
+                "args": {"command": "grep foo ."},
+            },
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 1,
+                    "expected_exit": "grep exits 1 when nothing matches",
+                    "timed_out": False,
+                    "cwd": "/tmp",
+                },
+            },
+        )
+
+        result = handler.events[-1]
+        assert result["success"] is True
+        assert result["summary"] == "grep exits 1 when nothing matches (exit 1)"
+
     def test_a_search_result_is_named_as_its_call_was(self):
         handler = _relay(
             {

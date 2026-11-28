@@ -2646,6 +2646,65 @@ TEST(GaiaAgentTest, PromptListsAtMostTwentyIndexedDocuments) {
     EXPECT_EQ(listed, 20u) << line;
 }
 
+TEST(GaiaAgentTest, NodesOwnTestRunnerBacksATestsPassClaim) {
+    const std::string spec = "\xE2\x9C\x94 spaces become dashes (0.4ms)\n\xE2\x84\xB9 tests 2\n\xE2\x84\xB9 pass 2\n\xE2\x84\xB9 fail 0\n";
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("Both tests pass.", {edit("slug.js"), shellRun("node --test", 0, spec)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("Both tests pass.",
+                                                 {edit("slug.js"), shellRun("node --test 2>&1 | tail -12", 0, spec)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "Both tests pass.", {shellRun("node --test test/", 0, "# tests 2\n# pass 2\n# fail 0\n")}));
+    const std::string failing = "\xE2\x84\xB9 tests 2\n\xE2\x84\xB9 pass 1\n\xE2\x84\xB9 fail 1\n";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("Both tests pass.", {shellRun("node --test", 1, failing)})),
+              "the tests run this turn didn't pass");
+    // A run that found no tests backs nothing.
+    EXPECT_TRUE(GaiaAgent::unsupportedTestClaim(
+        "Both tests pass.", {shellRun("node --test", 0, "\xE2\x84\xB9 tests 0\n\xE2\x84\xB9 pass 0\n\xE2\x84\xB9 fail 0\n")}));
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("Both tests pass.", {shellRun("node slug.js", 0, "")})),
+              "no tests were run this turn");
+}
+
+TEST(GaiaAgentTest, SourceFilesAnAnswerSaysItWroteAreClaimedFilesToo) {
+    using Files = std::vector<std::string>;
+    EXPECT_EQ(GaiaAgent::claimedFiles("Done. I created `primes.c`, compiled it with gcc and ran it."), Files{"primes.c"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I wrote src/app/main.tsx and created `server.go`."),
+              (Files{"src/app/main.tsx", "server.go"}));
+    EXPECT_EQ(GaiaAgent::claimedFiles("`slug.test.js` has been created."), Files{"slug.test.js"});
+    // A library with a file's ending is not a file.
+    EXPECT_TRUE(GaiaAgent::claimedFiles("I created the server with Node.js and Express.js.").empty());
+    EXPECT_TRUE(GaiaAgent::claimedFiles("I built the frontend with Svelte.js, not Angular.js or jQuery.js.").empty());
+    // A component file with a capital letter is still a file.
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created `App.js`. I wrote `Button.jsx`."), (Files{"App.js", "Button.jsx"}));
+    EXPECT_TRUE(GaiaAgent::claimedFiles("The bug is in utils.js, on line 4.").empty());
+}
+
+TEST(GaiaAgentTest, AnAnswerThatSaysItWroteASourceFileNothingWroteIsNotASuccess) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    const std::string invented = "Done. I created `primes.c`, compiled it with gcc and ran it. It prints 2 3 5 7.";
+    for (int i = 0; i < 4; ++i) mock.pushResponse(answer(invented));
+    AgentConfig c = cfgFor(mock);
+    c.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(c, optionsFor(w));
+    json r = agent.processQuery("write primes.c, compile it and run it");
+    EXPECT_GE(mock.receivedBodies().size(), 2u) << "sent back before it is believed";
+    EXPECT_NE(r.value("result", "").find("primes.c was saved, but no such file exists"), std::string::npos) << r.dump();
+}
+
+TEST(GaiaAgentTest, ATestsPassClaimIsSeenThroughAnAdverbOrAClosingRemark) {
+    // Gemma-4-E4B on the rename task, after `python test_api.py` printed nothing and ran no test.
+    const std::vector<GaiaAgent::CallSeen> silent = {edit("api.py"), shellRun("python test_api.py", 0, "")};
+    for (const char* claim :
+         {"The function was renamed everywhere. The tests were then run and passed successfully.",
+          "The tests were run successfully, confirming that the renaming did not introduce any functional errors.",
+          "The tests were also re-run and they passed."}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(claim, silent)), "no tests were run this turn") << claim;
+    }
+    // Still honest reports, not claims.
+    for (const char* honest : {"The tests were run, but two did not pass.", "The tests were not run successfully."}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(honest, silent)) << honest;
+    }
+}
+
 TEST(GaiaAgentTest, NewlyInstalledSkillIsDiscoveredOnTheNextTurn) {
     Workdir w;
     Workdir home;
