@@ -10,7 +10,6 @@ import { requestErrorText } from '../../utils/requestErrors';
 import { SkillDescription } from './SkillDescription';
 import type { FeaturedLibrary, LinkAddResult, LinkPreview, LinkSkill } from '../../types';
 
-/** Ready to add: readable, not blocked, new or an update, and code only when allowed. */
 /** A link with nothing behind it in the user's language, naming the link they pasted; other errors as sent. */
 function linkErrorText(err: unknown, t: Translate): string {
     if (err instanceof api.ApiError && err.reason === 'link_not_found') {
@@ -22,6 +21,7 @@ function linkErrorText(err: unknown, t: Translate): string {
     return requestErrorText(err, t);
 }
 
+/** Ready to add: readable, not blocked, new or an update, and code only when allowed. */
 const addable = (s: LinkSkill, allowCode: boolean) =>
     !s.error && (!s.installed || s.update) && (allowCode || !s.has_code);
 

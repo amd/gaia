@@ -349,6 +349,33 @@ def test_a_link_with_nothing_behind_it_names_no_terminal_command(
     assert "reopen" not in message
 
 
+def test_a_missing_link_message_matches_the_apps_english_text(client, monkeypatch):
+    """The app translates the message only while it equals en.ts word for word."""
+    import re
+
+    from gaia.skills import link
+
+    pasted = "https://github.com/acme/none"
+
+    def missing(*args, **kwargs):
+        raise link.SkillLinkNotFoundError(
+            f"Nothing found at {pasted}. {link._PRIVATE_REPO}", pasted
+        )
+
+    monkeypatch.setattr(link, "preview_link", missing)
+    message = client.post("/api/skills/link/preview", json={"url": pasted}).json()[
+        "detail"
+    ]["message"]
+
+    en = (
+        Path(__file__).resolve().parents[4]
+        / "src/gaia/apps/webui/src/i18n/locales/en.ts"
+    ).read_text(encoding="utf-8")
+    found = re.search(r"'settings\.skills\.link\.notFound': \"(.*)\",", en)
+    assert found, "settings.skills.link.notFound is missing from en.ts"
+    assert message == found.group(1).replace("{link}", pasted)
+
+
 def test_add_passes_the_chosen_names_and_code_opt_in(client, monkeypatch):
     from gaia.skills import link
 
