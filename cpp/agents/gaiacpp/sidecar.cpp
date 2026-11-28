@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -1132,9 +1133,12 @@ private:
     void query(const httplib::Request& req, httplib::Response& res) {
         json body = json::parse(req.body, nullptr, false);
         if (!body.is_object()) throw BadRequest(422, "Body must be a JSON object");
-        const std::string text = body.value("query", "");
+        const std::string text = body.contains("query") && body["query"].is_string()
+                                     ? body["query"].get<std::string>() : "";
         const std::string runId = body.value("run_id", "");
-        if (text.empty()) throw BadRequest(422, "query must be a non-empty string");
+        if (text.find_first_not_of(" \t\r\n") == std::string::npos) {
+            throw BadRequest(422, "query must be a non-empty string");
+        }
         if (runId.empty()) throw BadRequest(422, "run_id is required");
         if (!validSessionId(runId)) throw BadRequest(422, "run_id may hold letters, digits and _ . : - only");
         if (!body.contains("context") || !body["context"].is_array()) throw BadRequest(422, "context must be a list");
@@ -1152,10 +1156,21 @@ private:
         const auto allowed = absolutePaths(body, "allowed_paths");
         std::string workdir;
         if (body.contains("working_directory") && !body["working_directory"].is_null()) {
-            if (!body["working_directory"].is_string() || !fs::path(body["working_directory"].get<std::string>()).is_absolute()) {
+            if (!body["working_directory"].is_string()) {
                 throw BadRequest(422, "working_directory must be an absolute path");
             }
             workdir = body["working_directory"].get<std::string>();
+            const fs::path workdirPath = fs::u8path(workdir);
+            if (!workdirPath.is_absolute()) {
+                throw BadRequest(422, "working_directory must be an absolute path");
+            }
+            std::error_code ec;
+            if (!fs::exists(workdirPath, ec) || ec) {
+                throw BadRequest(422, "working_directory does not exist: " + workdir);
+            }
+            if (!fs::is_directory(workdirPath, ec) || ec) {
+                throw BadRequest(422, "working_directory is not a directory: " + workdir);
+            }
         }
         const std::string memory = body.contains("memory") && body["memory"].is_string() ? body["memory"].get<std::string>() : "";
         if (!memory.empty() && memory != "on" && memory != "private" && memory != "off") {
@@ -1165,7 +1180,14 @@ private:
         if (undoRequested && sid.empty()) throw BadRequest(422, "changes_turn_id needs a session_id");
         const bool reasoning = body.value("reasoning", false);
         const std::string model = body.value("model", "");
-        const int maxSteps = body.value("max_steps", 0);
+        int maxSteps = 0;
+        if (body.contains("max_steps") && !body["max_steps"].is_null()) {
+            const json& m = body["max_steps"];
+            if (!m.is_number_integer() || m < 1 || m > (std::numeric_limits<int>::max)()) {
+                throw BadRequest(422, "max_steps must be a whole number, 1 or more");
+            }
+            maxSteps = m.get<int>();
+        }
 
         // The gaia -p flags: one run only, so a chat can never inherit them.
         int timeLimit = 0;
@@ -1273,7 +1295,6 @@ private:
         // Folder scope only grows within a chat; an attached file is granted as that file.
         for (const auto& p : allowed) s->roots.insert(p);
         for (const auto& d : documents) s->roots.insert(d);
-        if (!workdir.empty()) s->workingDirectory = workdir;
         if (!memory.empty()) {
             s->memoryOff->store(memory == "off");
             s->memoryPrivate->store(memory == "private");
@@ -1285,13 +1306,14 @@ private:
             json folders = json::array();
             for (const auto& r : s->roots) folders.push_back(r);
             std::cerr << "turn " << runId << " session " << s->id << " folders=" << dumps(folders)
-                      << " cwd=" << dumps(s->workingDirectory) << " memory_off=" << s->memoryOff->load()
+                      << " cwd=" << dumps(workdir.empty() ? s->workingDirectory : workdir)
+                      << " memory_off=" << s->memoryOff->load()
                       << " internet_off=" << s->internetOff->load() << std::endl;
         }
 
         try {
         std::thread([this, s, run, history = std::move(history), text, model, maxSteps, documents, reasoning,
-                     undoRequested, hasTurns]() mutable {
+                     undoRequested, hasTurns, workdir]() mutable {
             // One chat works at a time: the working folder is process-wide. A
             // chat waiting on its user lets go of it (see confirm()).
             std::unique_lock<std::timed_mutex> turnLock(turnsMu_, std::defer_lock);
@@ -1316,7 +1338,7 @@ private:
                 {
                     // A new agent reads project skills from where the process stands: the last chat's folder.
                     std::error_code moveEc;
-                    const std::string folder = chatFolder(*s);
+                    const std::string folder = chatFolder(*s, workdir);
                     if (!folder.empty()) fs::current_path(folder, moveEc);
                 }
                 const ModelServer server = modelServer();
@@ -1345,7 +1367,7 @@ private:
                 }
                 s->console->attach(run, reasoning);
                 if (run->cancelled) throw std::runtime_error("cancelled");
-                const std::string folderProblem = enterWorkingDirectory(*s);
+                const std::string folderProblem = enterWorkingDirectory(*s, workdir);
                 if (!folderProblem.empty()) throw std::runtime_error(folderProblem);
                 if (undoRequested) {
                     s->console->emit({{"type", "status"},
@@ -1522,8 +1544,8 @@ private:
     // Move the process and the shell to this chat's working folder: the one it
     // named, else its first folder, else home, so no chat starts in another's.
     // Returns what went wrong, or "".
-    static std::string chatFolder(const Session& s) {
-        std::string dir = s.workingDirectory;
+    static std::string chatFolder(const Session& s, const std::string& requestedWorkdir = "") {
+        std::string dir = !requestedWorkdir.empty() ? requestedWorkdir : s.workingDirectory;
         if (dir.empty()) {
             for (const auto& r : s.roots) {
                 std::error_code ec;
@@ -1543,8 +1565,8 @@ private:
         return dir;
     }
 
-    static std::string enterWorkingDirectory(Session& s) {
-        const std::string dir = chatFolder(s);
+    static std::string enterWorkingDirectory(Session& s, const std::string& requestedWorkdir) {
+        const std::string dir = chatFolder(s, requestedWorkdir);
         if (dir.empty()) return "";
         std::error_code ec;
         fs::current_path(dir, ec);
@@ -1554,6 +1576,7 @@ private:
             if (!s.shell->setCwd(dir)) return "Can't use " + dir + " as the working folder: not a folder";
             s.shellDir = dir;
         }
+        if (!requestedWorkdir.empty()) s.workingDirectory = requestedWorkdir;
         return "";
     }
 

@@ -2317,4 +2317,140 @@ TEST_F(GaiacppSidecar, NoWebLeavesOutWebFetchAndTellsTheModel) {
     EXPECT_NE(bodies.front().find("Web access is off for this run"), std::string::npos);
 }
 
+TEST_F(GaiacppSidecar, BlankQueryAndInvalidMaxStepsAreRejectedWith422) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const std::vector<json> bad = {
+        queryBody("r-blank-1", ""),
+        queryBody("r-blank-2", "   \t\r\n  "),
+        queryBody("r-steps-neg", "hi", {{"max_steps", -5}}),
+        queryBody("r-steps-zero", "hi", {{"max_steps", 0}}),
+        queryBody("r-steps-float", "hi", {{"max_steps", 1.5}}),
+        queryBody("r-steps-str", "hi", {{"max_steps", "5"}}),
+        queryBody("r-steps-bool", "hi", {{"max_steps", true}}),
+        queryBody("r-steps-huge", "hi", {{"max_steps", 99999999999LL}}),
+    };
+    for (const auto& body : bad) {
+        auto r = send("POST", "/v1/gaia/query", bearer(), body.dump());
+        ASSERT_TRUE(r) << body.dump();
+        EXPECT_EQ(r->status, 422) << body.dump() << " -> " << r->body;
+        const json j = json::parse(r->body, nullptr, false);
+        EXPECT_TRUE(j.is_object() && j["detail"].is_string() && !j["detail"].get<std::string>().empty())
+            << body.dump() << " -> " << r->body;
+    }
+    EXPECT_EQ(mock().requestCount(), 0) << "invalid queries must never reach the model";
+
+    mock().pushResponse(answerReply("With explicit limit."));
+    mock().pushResponse(answerReply("With null limit."));
+    {
+        Turn t(port_, queryBody("r-steps-ok", "hi", {{"max_steps", 2}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_EQ(t.status(), 200) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_EQ(t.events().back()["answer"], "With explicit limit.");
+    }
+    {
+        Turn t(port_, queryBody("r-steps-null", "hi", {{"max_steps", nullptr}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_EQ(t.status(), 200) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_EQ(t.events().back()["answer"], "With null limit.");
+    }
+}
+
+TEST_F(GaiacppSidecar, InvalidWorkingDirectoryIsRejectedAndDoesNotPoisonSession) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const fs::path missing = root_ / "does-not-exist";
+    const fs::path regularFile = work_ / "note.txt";
+
+    // Nonexistent and non-directory working_directory fail up front with 422.
+    {
+        auto r = send("POST", "/v1/gaia/query", bearer(),
+                      queryBody("r-wd-missing", "hi",
+                                {{"session_id", "chat-wd-fresh"}, {"working_directory", missing.string()}})
+                          .dump());
+        ASSERT_TRUE(r);
+        EXPECT_EQ(r->status, 422) << r->body;
+        EXPECT_NE(r->body.find("working_directory"), std::string::npos) << r->body;
+    }
+    {
+        mock().pushResponse(answerReply("Fresh session recovered."));
+        Turn t(port_, queryBody("r-wd-fresh-ok", "hi", {{"session_id", "chat-wd-fresh"}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_EQ(t.status(), 200) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_EQ(t.events().back()["answer"], "Fresh session recovered.");
+    }
+    {
+        auto r = send("POST", "/v1/gaia/query", bearer(),
+                      queryBody("r-wd-file", "hi",
+                                {{"session_id", "chat-wd-file"}, {"working_directory", regularFile.string()}})
+                          .dump());
+        ASSERT_TRUE(r);
+        EXPECT_EQ(r->status, 422) << r->body;
+        EXPECT_NE(r->body.find("working_directory"), std::string::npos) << r->body;
+    }
+
+    // Existing valid working_directory survives a rejected request and a runtime failure while queued.
+    mock().pushResponse(toolReply("file_read", {{"path", "note.txt"}}));
+    mock().pushResponse(answerReply("Read note 1."));
+    {
+        Turn t(port_, queryBody("r-wd-keep-1", "read note",
+                                {{"session_id", "chat-wd-keep"},
+                                 {"working_directory", work_.string()},
+                                 {"allowed_paths", json::array({work_.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_EQ(t.status(), 200) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_EQ(t.events().back()["answer"], "Read note 1.");
+    }
+    {
+        auto r = send("POST", "/v1/gaia/query", bearer(),
+                      queryBody("r-wd-keep-bad", "hi",
+                                {{"session_id", "chat-wd-keep"}, {"working_directory", missing.string()}})
+                          .dump());
+        ASSERT_TRUE(r);
+        EXPECT_EQ(r->status, 422) << r->body;
+    }
+
+    // A folder that vanishes after request acceptance fails its turn without poisoning the session's folder.
+    const fs::path vanishing = root_ / "vanishing";
+    fs::create_directories(vanishing);
+    const int beforeBlock = mock().requestCount();
+    Hold& held = hold();
+    Turn blocker(port_, queryBody("r-wd-blocker", "hold turn lock", {{"session_id", "chat-wd-blocker"}}));
+    ASSERT_TRUE(waitUntil([&] { return mock().requestCount() > beforeBlock; }, seconds(30))) << blocker.describe();
+
+    Turn vanishTurn(port_, queryBody("r-wd-vanish", "switch folder",
+                                     {{"session_id", "chat-wd-keep"}, {"working_directory", vanishing.string()}}));
+    ASSERT_TRUE(waitUntil(
+        [&] {
+            auto r = send("POST", "/v1/gaia/query/r-wd-vanish/followup", bearer(), R"({"text":"x"})");
+            return r && r->status == 409;
+        },
+        seconds(15)))
+        << "queued turn was never registered: " << vanishTurn.describe();
+    fs::remove_all(vanishing);
+    held.release();
+
+    ASSERT_TRUE(blocker.waitDone()) << blocker.describe();
+    ASSERT_TRUE(vanishTurn.waitDone()) << vanishTurn.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(vanishTurn.events(), "error")) << vanishTurn.describe();
+    EXPECT_EQ(vanishTurn.events().back()["status"], 500);
+
+    // Follow-up omitting working_directory still runs in work_ and reads relative note.txt.
+    mock().pushResponse(toolReply("file_read", {{"path", "note.txt"}}));
+    mock().pushResponse(answerReply("Still in work."));
+    {
+        Turn t(port_, queryBody("r-wd-keep-2", "read note again", {{"session_id", "chat-wd-keep"}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_EQ(t.status(), 200) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_EQ(t.events().back()["answer"], "Still in work.");
+        const int resIdx = indexOf(t.events(), "tool_result");
+        ASSERT_GE(resIdx, 0) << t.describe();
+        EXPECT_NE(t.events()[resIdx]["data"].dump().find("hello from the work folder"), std::string::npos)
+            << t.events()[resIdx].dump();
+    }
+}
+
 }  // namespace
