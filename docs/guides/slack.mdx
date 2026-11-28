@@ -54,7 +54,7 @@ subscription already filled in. Then:
    Bot User OAuth Token.
 4. Paste both back into the terminal.
 
-Tokens are validated against Slack and stored in your OS keyring — never in a config file.
+Tokens are validated against Slack and stored in `~/.gaia/connectors/vault.enc`, encrypted under a master key in your OS keyring — never in a plaintext config file.
 
 ### Start it
 
