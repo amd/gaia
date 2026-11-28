@@ -195,7 +195,8 @@ jobs:
           cache-dependency-path: workers/agent-hub/package-lock.json
 
       - working-directory: workers/agent-hub
-        run: npm ci
+        # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+        run: npx -y npm@11 ci
 
       # `npm run typecheck` not `tsc --noEmit`: the script also checks
       # tsconfig.test.json, and the suite below is what actually guards the
@@ -262,7 +263,8 @@ jobs:
           cache-dependency-path: workers/agent-hub/package-lock.json
 
       - working-directory: workers/agent-hub
-        run: npm ci
+        # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+        run: npx -y npm@11 ci
 
       - name: Deploy
         working-directory: workers/agent-hub

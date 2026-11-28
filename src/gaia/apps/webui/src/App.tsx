@@ -393,6 +393,7 @@ function App() {
             slowSince.current = null;
             setBackendSlow(false);
             setBackendError(null);
+            useChatStore.getState().setBackendStalled(false);
             setBackendConnected(false);
             setSystemStatus(null);
             return;
@@ -405,6 +406,7 @@ function App() {
             slowSince.current = null;
             setBackendSlow(false);
             setBackendError(`HTTP ${outcome.httpStatus}: ${outcome.message}`);
+            useChatStore.getState().setBackendStalled(false);
             setBackendConnected(true);
             return;
         }
@@ -433,6 +435,7 @@ function App() {
         slowSince.current = null;
         setBackendSlow(false);
         setBackendError(null);
+        useChatStore.getState().setBackendStalled(false);
         setBackendConnected(true);
         // One slow health probe under load is not an outage.
         failCount.current = status.lemonade_running ? 0 : failCount.current + 1;

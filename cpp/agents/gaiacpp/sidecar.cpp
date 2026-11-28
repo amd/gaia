@@ -29,6 +29,7 @@
 
 #include "bash_tools.h"
 #include "gaia_agent.h"
+#include "wire_util.h"
 
 #ifndef GAIACPP_VERSION
 #define GAIACPP_VERSION "0.0.0-dev"
@@ -39,6 +40,9 @@ namespace fs = std::filesystem;
 namespace gaia {
 
 namespace {
+
+using wire::dumps;
+using wire::randomHex;
 
 constexpr const char* kService = "gaia-agent-gaia";
 // Every request field and route up to this version is implemented; the Agent
@@ -55,15 +59,6 @@ constexpr size_t kMaxSessions = 256;      // idle chats beyond this are forgotte
 constexpr size_t kMaxEarlyCancels = 256;
 constexpr size_t kMaxBodyBytes = 64u * 1024 * 1024;
 
-std::string randomHex(size_t n) {
-    static thread_local std::mt19937_64 rng(std::random_device{}());
-    static const char* hex = "0123456789abcdef";
-    std::string s;
-    for (size_t i = 0; i < n; ++i) s.push_back(hex[rng() & 0xF]);
-    return s;
-}
-
-std::string dumps(const json& j) { return j.dump(-1, ' ', false, json::error_handler_t::replace); }
 std::string frame(const json& ev) { return "data: " + dumps(ev) + "\n\n"; }
 
 bool validSessionId(const std::string& id) {
