@@ -213,6 +213,85 @@ class TestActivityLines:
         assert handler.events[0]["tool"] == "run_shell_command"
         assert handler.events[0]["narration"] == "Running command: pytest -q"
         assert handler.events[-1]["summary"] == "3 passed"
+        assert handler.events[-1]["success"] is True
+
+    @pytest.mark.parametrize(
+        "data,summary",
+        [
+            (
+                {
+                    "stdout": "",
+                    "stderr": "ls: missing: No such file or directory",
+                    "exit_code": 1,
+                    "timed_out": False,
+                    "cwd": "/tmp",
+                },
+                "Command failed (exit 1): ls: missing: No such file or directory",
+            ),
+            (
+                {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": True,
+                    "cwd": "/tmp",
+                },
+                "Command timed out",
+            ),
+            (
+                {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": False,
+                    "cancelled": True,
+                    "cwd": "/tmp",
+                },
+                "Command stopped",
+            ),
+        ],
+    )
+    def test_a_failed_command_step_is_marked_unsuccessful(self, data, summary):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "bash_execute",
+                "args": {"command": "ls missing"},
+            },
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": data,
+            },
+        )
+        result = handler.events[-1]
+        assert result["success"] is False
+        assert result["summary"] == summary
+
+    def test_a_search_with_no_match_is_an_answer_not_a_failure(self):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "bash_execute",
+                "args": {"command": "grep foo ."},
+            },
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 1,
+                    "expected_exit": "grep exits 1 when nothing matches",
+                    "timed_out": False,
+                    "cwd": "/tmp",
+                },
+            },
+        )
+
+        result = handler.events[-1]
+        assert result["success"] is True
+        assert result["summary"] == "grep exits 1 when nothing matches (exit 1)"
 
     def test_a_search_result_is_named_as_its_call_was(self):
         handler = _relay(
@@ -241,6 +320,53 @@ class TestActivityLines:
 
         assert handler.events[0]["detail"] == "Checking git status"
         assert handler.events[0]["narration"] == "Checking git status"
+
+    @pytest.mark.parametrize("status", ["denied", "error"])
+    def test_a_denied_gaiacpp_call_is_normalized_without_raw_tool_name(self, status):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "bash_execute",
+                "args": {"command": "touch declined_demo.txt"},
+            },
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": {
+                    "status": status,
+                    "error": "Tool 'bash_execute' execution denied by user",
+                },
+            },
+        )
+        result = handler.events[-1]
+        assert result["tool"] == "run_shell_command"
+        assert result["data"]["status"] == "denied"
+        assert result["summary"] == "Declined by user"
+        assert "bash_execute" not in result["summary"]
+
+    def test_an_already_declined_gaiacpp_call_stays_denied_without_raw_tool_name(self):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "file_write",
+                "args": {"path": "declined_demo.txt", "content": "x"},
+            },
+            {
+                "type": "tool_result",
+                "tool": "file_write",
+                "data": {
+                    "status": "denied",
+                    "not_executed": True,
+                    "already_declined": True,
+                    "error": "Not run, and not put to the user again",
+                },
+            },
+        )
+        result = handler.events[-1]
+        assert result["tool"] == "write_file"
+        assert result["data"]["status"] == "denied"
+        assert result["summary"] == "Not run (declined earlier)"
+        assert "file_write" not in result["summary"]
 
 
 @pytest.mark.parametrize(
@@ -280,6 +406,28 @@ def test_a_finished_step_reads_in_plain_words(tool, data, summary):
 def test_a_failed_step_keeps_the_tools_own_sentence():
     data = {"error": "old_string not found in file: a.py", "replacements": 0}
     assert native_result_summary("file_edit", data) is None
+
+
+def test_a_failed_web_fetch_uses_plain_error_without_status_prefix():
+    data = {
+        "status": "error",
+        "url": "https://nonexistent.invalid/demo",
+        "error": "Could not look up nonexistent.invalid. Check the host name and network connection.",
+    }
+    assert (
+        native_result_summary("web_fetch", data)
+        == "Could not look up nonexistent.invalid. Check the host name and network connection."
+    )
+
+
+def test_a_failed_web_fetch_preserves_http_status_when_missing_from_text():
+    data = {
+        "status": "error",
+        "url": "https://example.com/private",
+        "http_status": 403,
+        "error": "Forbidden",
+    }
+    assert native_result_summary("web_fetch", data) == "HTTP 403: Forbidden"
 
 
 @pytest.fixture(scope="module")
@@ -323,3 +471,93 @@ def test_only_gaiacpps_search_code_is_read_as_the_code_index():
     )
     python_call = {"pattern": "TODO", "directory": "."}
     assert as_flagship_call("search_code", python_call) == ("search_code", python_call)
+
+
+@pytest.mark.parametrize(
+    "data,expected_success,expected_text",
+    [
+        (
+            {
+                "status": "error",
+                "has_errors": True,
+                "indexed": [],
+                "failed": [
+                    {
+                        "document": "budget_sheet.xlsx",
+                        "error": "Can't index budget_sheet.xlsx: Excel (.xlsx) files aren't supported.",
+                    },
+                    {
+                        "document": "pitch_deck.pptx",
+                        "error": "Can't index pitch_deck.pptx: PowerPoint (.pptx) files aren't supported.",
+                    },
+                ],
+                "summary": (
+                    "Couldn't index 2 documents:\n"
+                    "- budget_sheet.xlsx: Excel (.xlsx) files aren't supported for automatic indexing.\n"
+                    "- pitch_deck.pptx: PowerPoint (.pptx) files aren't supported for automatic indexing."
+                ),
+            },
+            False,
+            "pitch_deck.pptx",
+        ),
+        (
+            {
+                "status": "partial",
+                "has_errors": True,
+                "indexed": [{"document": "memo.txt", "chunks": 1}],
+                "failed": [
+                    {
+                        "document": "budget_sheet.xlsx",
+                        "error": "Can't index budget_sheet.xlsx: Excel (.xlsx) files aren't supported.",
+                    }
+                ],
+                "summary": "Indexed memo.txt (1 passage); couldn't index budget_sheet.xlsx.",
+            },
+            False,
+            "Indexed memo.txt",
+        ),
+        (
+            {
+                "status": "ok",
+                "indexed": [{"document": "quarterly_report.pdf", "chunks": 2}],
+                "failed": [],
+                "summary": "Indexed quarterly_report.pdf (2 passages)",
+            },
+            True,
+            "Indexed quarterly_report.pdf (2 passages)",
+        ),
+    ],
+)
+def test_relayed_index_documents_preserves_status_and_full_summary(
+    data, expected_success, expected_text
+):
+    handler = _relay(
+        {
+            "type": "tool_call",
+            "tool": "index_documents",
+            "args": {"documents": ["budget_sheet.xlsx", "pitch_deck.pptx"]},
+        },
+        {
+            "type": "tool_result",
+            "tool": "index_documents",
+            "data": data,
+        },
+    )
+    result = handler.events[-1]
+    assert result["type"] == "tool_result"
+    assert result["tool"] == "index_documents"
+    assert result["success"] is expected_success
+    assert expected_text in result["summary"]
+    assert result["summary"] == data["summary"]
+
+
+def test_index_document_path_arg_is_mapped_to_file_path():
+    assert as_flagship_call("index_document", {"path": "/docs/report.pdf"}) == (
+        "index_document",
+        {"file_path": "/docs/report.pdf"},
+    )
+    python_call = {"file_path": "/docs/report.pdf"}
+    assert as_flagship_call("index_document", python_call) == (
+        "index_document",
+        python_call,
+    )

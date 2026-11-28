@@ -5,7 +5,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
-import { AGENT_PROGRAMS, SETTINGS } from '../../../test/setupApiMocks';
+import { AGENT_PROGRAMS, SETTINGS, withoutGaiacpp } from '../../../test/setupApiMocks';
 import type { SetupTest } from '../../../types';
 import { TestStep } from '../TestStep';
 import { GEMMA, QWEN, runStatus } from './fixtures';
@@ -93,6 +93,44 @@ describe('Test step, when the chat failed on gaiacpp', () => {
         expect(screen.getByText("GAIA's assistant didn't answer a test message.")).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Choose another model' })).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Finish setup on Full-featured' })).not.toBeInTheDocument();
+    });
+
+    it('says a missing gaiacpp is missing and offers to download it or use the Python agent (#8772)', async () => {
+        vi.mocked(api.getAgentPrograms).mockResolvedValue({ ...withoutGaiacpp(), current: 'gaiacpp' });
+        const detail = 'gaiacpp is chosen as the agent but it is not installed on this PC (looked in: C:\\gaia\\bin\\gaiacpp.exe).';
+        show([passedModel, { ...failedOnNative, agent_error: detail, agent_problem: { code: 'gaiacpp_missing', detail } }]);
+        expect(await screen.findByText("gaiacpp, the agent you chose, isn't on this PC, so GAIA can't start it.")).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: 'Download gaiacpp again' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use Full-featured' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Test again' })).toBeInTheDocument();
+        // One way to switch, not two, and the path stays behind Details.
+        expect(screen.queryByRole('button', { name: 'Finish setup on Full-featured' })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Fast and light said:/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Choose another model' })).not.toBeInTheDocument();
+    });
+
+    it('downloads the missing gaiacpp on the button, then runs the test again', async () => {
+        vi.mocked(api.getAgentPrograms).mockResolvedValue({ ...withoutGaiacpp(), current: 'gaiacpp' });
+        vi.mocked(api.startAgentDownload).mockResolvedValue({ state: 'done', bytes_done: 10, bytes_total: 10, error: null });
+        const detail = 'gaiacpp is chosen as the agent but it is not installed on this PC.';
+        const { onRetry } = show([passedModel, { ...failedOnNative, agent_error: detail, agent_problem: { code: 'gaiacpp_missing', detail } }]);
+        await userEvent.click(await screen.findByRole('button', { name: 'Download gaiacpp again' }));
+        await waitFor(() => expect(api.startAgentDownload).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(onRetry).toHaveBeenCalledTimes(1));
+        expect(api.updateSettings).not.toHaveBeenCalled();
+    });
+
+    it('holds Test again while the gaiacpp download runs, and announces the failure once', async () => {
+        vi.mocked(api.getAgentPrograms).mockResolvedValue({ ...withoutGaiacpp(), current: 'gaiacpp' });
+        vi.mocked(api.startAgentDownload).mockResolvedValue({ state: 'downloading', bytes_done: 1, bytes_total: 10, error: null });
+        vi.mocked(api.getAgentDownload).mockResolvedValue({ state: 'downloading', bytes_done: 2, bytes_total: 10, error: null });
+        const detail = 'gaiacpp is chosen as the agent but it is not installed on this PC.';
+        const { onRetry } = show([passedModel, { ...failedOnNative, agent_error: detail, agent_problem: { code: 'gaiacpp_missing', detail } }]);
+        expect(screen.getByRole('button', { name: 'Test again' })).toBeEnabled();
+        expect(screen.getAllByRole('alert')).toHaveLength(1);
+        await userEvent.click(await screen.findByRole('button', { name: 'Download gaiacpp again' }));
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Test again' })).toBeDisabled());
+        expect(onRetry).not.toHaveBeenCalled();
     });
 
     it('offers no switch while the tests are still running', () => {

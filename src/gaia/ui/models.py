@@ -845,6 +845,8 @@ class MessageResponse(BaseModel):
     stopped: bool = False
     # A model failure ended this reply's turn; its content says why.
     failed: bool = False
+    # The flagship program that answered this turn (gaiapy or gaiacpp), if any.
+    agent_program: Optional[str] = None
 
 
 class MessageListResponse(BaseModel):

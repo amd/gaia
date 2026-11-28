@@ -46,7 +46,7 @@ import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
-import { localizeLiveStatus } from '../utils/liveStatus';
+import { localizeLiveStatus, localizeNarration } from '../utils/liveStatus';
 import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
 import { visibleName, markStrayDirection } from './CalendarApproval';
@@ -216,7 +216,7 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     if (GAIA_WRITTEN_TOOLS.has(step.tool ?? '')) return toolFallbackLabel(step, t);
     // A present-tense narration would read as if a call that never ran had run.
     if ((step.declined || step.timedOut || step.refused || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
-    return step.narration ? compactNarration(markStrayDirection(step.narration)) : toolFallbackLabel(step, t);
+    return step.narration ? localizeNarration(t, compactNarration(markStrayDirection(step.narration))) : toolFallbackLabel(step, t);
 }
 
 const COMPACT_DETAIL_CHARS = 48;
@@ -227,14 +227,13 @@ const MCP_OUTPUT_PREVIEW_LINES = 5;
 /** Below this many call rows the list is short enough to scan without a filter. */
 const FILTER_MIN_TOOL_ROWS = 6;
 
-const FETCH_ERROR = /^Error fetching page:\s*(\d{3})?/;
+const FETCH_HTTP_STATUS = /(?:^Error fetching page:\s*|\bHTTP\s+)(\d{3})\b/;
 
-/** What a failed page fetch shows on its row; the library's own error stays in the opened step. */
+/** What a failed page fetch shows on its row; the tool's own error stays in the opened step. */
 export function failureText(step: AgentStep, t: Translate): string {
     const result = step.result ?? '';
-    const match = step.tool === 'fetch_page' ? FETCH_ERROR.exec(result) : null;
-    if (!match) return result;
-    const code = match[1];
+    if (step.tool !== 'fetch_page') return result;
+    const code = FETCH_HTTP_STATUS.exec(result)?.[1];
     if (code && ['401', '403', '429'].includes(code)) return t('activity.fetchBlocked', { code });
     return t('activity.fetchFailed');
 }
@@ -993,7 +992,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    {/* The model's narration is English in every UI language; it truncates at its own end. */}
+                    {/* A narration GAIA has no label for stays English; it truncates at its own end. */}
                     <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (
                         <span className="flow-tool-count" aria-label={t('activity.identicalCalls', { n: count })}>{'×'}{count}</span>

@@ -19,6 +19,26 @@ runs. That needs hardware and is the job of the eval and hardware lanes.
 Every request is appended to --log, so a turn that fails shows which endpoint
 the client wanted and what it was told.
 
+With --api-key it is a server that has a key, as GAIA's own Lemonade does: a
+request without ``Authorization: Bearer <key>`` gets 401, and each log line
+says whether the key was ``ok``, ``missing`` or ``wrong`` (never the key).
+
+With --script FILE the chat endpoint plays a model that calls tools. The file
+is JSON, read on every request so a test can rewrite it between turns: a list
+of rules; a rule applies to the conversation whose user message contains its
+``when`` text, so give each turn a text of its own.
+
+    [{"when": "write the note",
+      "tool_calls": [{"name": "write_file", "arguments": {"path": "a.txt"}}],
+      "then": "Done."}]
+
+The rule's ``tool_calls`` are the reply to the user's message; once their
+results are in the conversation the reply is ``then``, followed by what the
+tools returned (without its JSON punctuation) when ``echo_results`` is true, so
+a test reads what the model was told. A rule with no ``tool_calls`` answers
+``then`` straight away, and ``delay`` seconds pass before each of a rule's
+replies.
+
 With --catalog it plays a Lemonade on a PC that has downloaded nothing, for the
 first-run setup journey. Only --model ids start downloaded. /pull streams
 Lemonade's progress events, slowly enough for a bar to move, and refuses the
@@ -144,6 +164,9 @@ _catalog: Dict[str, Dict[str, Any]] = {}
 _downloaded: Dict[str, bool] = {}
 _installed_backends: Dict[str, bool] = {}
 _pull_failures_left = 0
+#: --api-key: the bearer token every request must carry; empty means none.
+_api_key = ""
+_script_path: Optional[Path] = None
 
 
 def _log(entry: Dict[str, Any]) -> None:
@@ -414,6 +437,64 @@ def _finish_pull(model: str, body: Dict[str, Any]) -> None:
             }
 
 
+def _text(content: Any) -> str:
+    """A message's text, whether it is a string or a list of parts."""
+    if isinstance(content, list):
+        return " ".join(
+            str(part.get("text", "")) for part in content if isinstance(part, dict)
+        )
+    return "" if content is None else str(content)
+
+
+def _scripted(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The --script reply to this chat request: ``content`` or ``tool_calls``."""
+    if _script_path is None or not _script_path.is_file():
+        return None
+    rules = json.loads(_script_path.read_text(encoding="utf-8"))
+    messages = [m for m in body.get("messages") or [] if isinstance(m, dict)]
+    rule, asked = None, 0
+    for i, message in enumerate(messages):
+        if message.get("role") != "user":
+            continue
+        text = _text(message.get("content"))
+        rule = next((r for r in rules if r.get("when") and r["when"] in text), None)
+        if rule is not None:
+            # The first message that says it: an agent may quote the request
+            # back in a later user-role note about a failed tool.
+            asked = i
+            break
+    if rule is None:
+        return None
+    results = [
+        _text(m.get("content"))
+        for m in messages[asked + 1 :]
+        if m.get("role") == "tool"
+    ]
+    delay = float(rule.get("delay") or 0)
+    if rule.get("tool_calls") and not results:
+        return {"tool_calls": rule["tool_calls"], "delay": delay}
+    answer = rule.get("then", ANSWER)
+    if rule.get("echo_results"):
+        # Plain words: an agent reads braces in an answer as a tool call.
+        answer = " ".join([answer, *(re.sub(r'[{}\[\]"\\]', " ", r) for r in results)])
+    return {"content": answer, "delay": delay}
+
+
+def _tool_calls(calls: List[Dict[str, Any]], streamed: bool) -> List[Dict[str, Any]]:
+    return [
+        {
+            **({"index": i} if streamed else {}),
+            "id": f"call_fake_{i}",
+            "type": "function",
+            "function": {
+                "name": call["name"],
+                "arguments": json.dumps(call.get("arguments") or {}),
+            },
+        }
+        for i, call in enumerate(calls)
+    ]
+
+
 class LoopbackServer(ThreadingHTTPServer):
     """HTTPServer without the reverse-DNS lookup in server_bind.
 
@@ -489,13 +570,29 @@ class Handler(BaseHTTPRequestHandler):
                 "status": status,
                 "body_keys": sorted(body) if body else [],
                 "model": (body or {}).get("model") or (body or {}).get("model_name"),
+                **({"auth": self._auth()} if _api_key else {}),
             }
         )
+
+    def _auth(self) -> str:
+        sent = (self.headers.get("Authorization") or "").strip()
+        if not sent:
+            return "missing"
+        return "ok" if sent == f"Bearer {_api_key}" else "wrong"
+
+    def _refused_for_key(self) -> bool:
+        """Answer 401 when --api-key is set and this request lacks it."""
+        if not _api_key or self._auth() == "ok":
+            return False
+        self._json(401, {"error": {"message": "Invalid or missing API key"}})
+        return True
 
     # ── GET ──
     def do_GET(self) -> None:  # noqa: N802 - stdlib name
         self._request_body, self._unrecorded = None, True
         path = self._path()
+        if self._refused_for_key():
+            return
         if path == "/health":
             with _lock:
                 models = sorted(_loaded)
@@ -547,6 +644,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self._path()
         body = self._body()
         self._request_body, self._unrecorded = body, True
+        if self._refused_for_key():
+            return
         model = body.get("model") or body.get("model_name")
         if path in _NEEDS_A_DOWNLOADED_MODEL and not _is_downloaded(model):
             self._refuse(404, f"{model} is not downloaded", body)
@@ -724,6 +823,13 @@ class Handler(BaseHTTPRequestHandler):
         created = int(time.time())
         usage = {"prompt_tokens": 12, "completion_tokens": 12, "total_tokens": 24}
         answer = VISION_ANSWER if _has_image(body) else ANSWER
+        scripted = _scripted(body) or {}
+        time.sleep(scripted.get("delay", 0))
+        answer = scripted.get("content", answer)
+        calls = scripted.get("tool_calls")
+        if calls:
+            self._call_tools(body, model, calls, created, usage)
+            return
         if not body.get("stream"):
             self._json(
                 200,
@@ -786,9 +892,62 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         self.close_connection = True
 
+    def _call_tools(
+        self,
+        body: Dict[str, Any],
+        model: str,
+        calls: List[Dict[str, Any]],
+        created: int,
+        usage: Dict[str, int],
+    ) -> None:
+        """Reply with tool calls instead of text, in OpenAI's wire format."""
+        streamed = bool(body.get("stream"))
+        message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _tool_calls(calls, streamed),
+        }
+        if not streamed:
+            self._json(
+                200,
+                {
+                    "id": "chatcmpl-fake",
+                    "object": "chat.completion",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {"index": 0, "finish_reason": "tool_calls", "message": message}
+                    ],
+                    "usage": usage,
+                },
+            )
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        base = {
+            "id": "chatcmpl-fake",
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+        }
+        for choice in (
+            {"index": 0, "delta": message, "finish_reason": None},
+            {"index": 0, "delta": {}, "finish_reason": "tool_calls"},
+        ):
+            chunk = {**base, "choices": [choice]}
+            if choice["finish_reason"]:
+                chunk["usage"] = usage
+            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+        self.close_connection = True
+
 
 def main(argv: Optional[List[str]] = None) -> int:
-    global _log_path, _lemonade_version, _pull_failures_left
+    global _log_path, _lemonade_version, _pull_failures_left, _api_key, _script_path
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -809,7 +968,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="play a PC with nothing downloaded: only --model ids start downloaded",
     )
+    ap.add_argument(
+        "--api-key", default="", help="refuse requests without this bearer token"
+    )
+    ap.add_argument(
+        "--script", help="JSON rules for chat replies that call tools; see above"
+    )
     args = ap.parse_args(argv)
+    _api_key = args.api_key
+    _script_path = Path(args.script) if args.script else None
     fail = os.environ.get("FAKE_LEMONADE_PULL_FAIL")
     if fail and fail not in PULL_ERRORS:
         print(

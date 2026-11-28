@@ -145,7 +145,9 @@ def test_a_link_with_nothing_behind_it_names_no_terminal_command(monkeypatch):
     """The terminal app's user may have no `gaia` on PATH either (#7973)."""
 
     def missing(url, manager=None):
-        raise link.SkillLinkNotFoundError("Nothing found at https://x/y.")
+        raise link.SkillLinkNotFoundError(
+            "Nothing found at https://x/y.", "https://x/y"
+        )
 
     monkeypatch.setattr(link, "preview_link", missing)
     detail = _events(_Agent(), "/skills add acme/none")[-1]["detail"]

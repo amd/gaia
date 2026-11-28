@@ -276,12 +276,23 @@ TEST(WorkspaceTest, JudgeNamesThePlaceToAskAboutAndAddRootOpensIt) {
     EXPECT_FALSE(command.refusal.empty());
     EXPECT_EQ(command.askPath, fs::canonical(d.other).u8string());
     EXPECT_TRUE(ws.judgeCommand("ls //server/share").askPath.empty()) << "a network share is not asked about";
+    // A wildcard is read from one folder: that folder is asked about, as without the wildcard.
+    const Workspace::Outside listing = ws.judgeCommand("ls " + (d.other / "*.h").string());
+    EXPECT_FALSE(listing.refusal.empty());
+    EXPECT_EQ(listing.askPath, fs::canonical(d.other).u8string());
+    EXPECT_TRUE(ws.judgeCommand("ls /*").askPath.empty()) << "a wildcard in the root asks about no whole disk";
+#ifdef _WIN32
+    for (const char* root : {"ls C:/*", "ls C:\\*", "ls /c/*"}) {
+        EXPECT_TRUE(ws.judgeCommand(root).askPath.empty()) << root;
+    }
+#endif
 
     ws.addRoot(file.askPath);
     EXPECT_TRUE(ws.checkPath(outside).empty());
     EXPECT_FALSE(ws.checkPath((d.other / "y").string()).empty()) << "only the path that was added opens";
     ws.addRoot(command.askPath);
     EXPECT_TRUE(ws.checkCommand("ls " + d.other.string()).empty());
+    EXPECT_TRUE(ws.checkCommand("ls " + (d.other / "*.h").string()).empty()) << "the folder it was asked about is open";
 }
 
 TEST(WorkspaceTest, RemedyReplacesTheAllowDirAdvice) {
@@ -411,6 +422,53 @@ TEST(WorkspaceTest, AShortNameForAnOutsideFolderIsRefused) {
     EXPECT_FALSE(staysInside(ws, "cat " + upLong, d.work.string())) << upLong;
 }
 #endif
+
+TEST(WorkspaceTest, ARelativeCdOutOfTheFolderIsRefused) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    fs::create_directories(d.work / "sub");
+    InFolder in(d.work);
+    for (const bool posix : {true, false}) {
+        EXPECT_NE(ws.checkCommand("cd .. && cat other/secret.txt", posix), "") << posix;
+        EXPECT_NE(ws.checkCommand("cd sub && cd ../..", posix), "") << posix;
+        EXPECT_EQ(ws.checkCommand("cd sub && cd ..", posix), "") << posix;
+        EXPECT_EQ(ws.checkCommand("cd sub", posix), "") << posix;
+    }
+    EXPECT_NE(ws.checkCommand("cd /d .. && type other\\secret.txt", false), "");
+    // From a subfolder the shell stands in, one step up is still inside.
+    EXPECT_EQ(ws.judgeCommand("cd ..", true, (d.work / "sub").string()).refusal, "");
+    EXPECT_NE(ws.judgeCommand("cd ../..", true, (d.work / "sub").string()).refusal, "");
+}
+
+// The wrapped shell tool judges a relative `cd` from where the shell stands, not the process's folder.
+TEST(WorkspaceTest, AConfinedShellJudgesCdFromTheShellsFolder) {
+    Dirs d;
+    std::ofstream(d.work / "in.txt") << "inside text";
+    auto ws = std::make_shared<Workspace>(std::vector<std::string>{d.work.string()});
+    InFolder in(d.work);
+    std::string shellAt = d.work.string();
+    ToolInfo sh;
+    sh.name = "sh";
+    sh.parameters = {{"command", ToolParamType::STRING, true, ""}};
+    sh.callback = [&shellAt, &d](const json& args) -> json {
+        const std::string command = args["command"].get<std::string>();
+        if (command == "cd sub") shellAt = (d.work / "sub").string();
+        if (command == "cd ..") shellAt = fs::path(shellAt).parent_path().string();
+        return json{{"status", "success"}};
+    };
+    ToolRegistry reg;
+    reg.registerTool(Workspace::confineShell(sh, ws, "command", true, nullptr, [&shellAt] { return shellAt; }));
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd sub"}})["status"], "success");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cat ../in.txt"}})["status"], "success");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd .."}})["status"], "success");
+    EXPECT_EQ(shellAt, d.work.string());
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cat in.txt"}})["status"], "success");
+    // From the root itself, one step up leaves the folder.
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd .."}})["status"], "error");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd sub/../.."}})["status"], "error");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "cd ../other"}})["status"], "error");
+    EXPECT_EQ(shellAt, d.work.string());
+}
 
 TEST(WorkspaceTest, ACommandNamingALinkOutOfTheFolderIsRefused) {
     Dirs d;

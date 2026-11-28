@@ -217,7 +217,7 @@ describe('RunModeChip modes', () => {
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
         expect(useModelStore.getState().queued).toBe(GEMMA);
         // The chip names the mode that comes next, not a model id.
-        expect(screen.getByRole('button', { name: /^Cloud\s*→ Local next/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^Cloud\s*Local\s*next/ })).toBeInTheDocument();
     });
 
     it('shows a refused switch and stays in the mode it was in', async () => {

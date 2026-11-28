@@ -739,3 +739,126 @@ TEST_F(GaiacppCli, AStdioSessionKeepsItsFirstTurnPastFortyMessages) {
         << "the first turn was dropped from a conversation of about 2.4K tokens";
     EXPECT_EQ(r.stdout_output.find("no longer sent to the model"), std::string::npos) << "nothing was dropped";
 }
+
+TEST_F(GaiacppCli, PrintModeAcceptsDashPrefixedPromptsAndEndOfOptions) {
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    auto runRaw = [&](const std::string& args) {
+        return gaia::ProcessRunner::run(bin + " " + args, 60000, (dir_ / "work").string(), isolated());
+    };
+    auto lastUserPrompt = [](const bench::MockLlmServer& mock) {
+        const json body = json::parse(mock.receivedBodies().back());
+        std::string last;
+        for (const auto& m : body["messages"]) {
+            if (m["role"] == "user" && m["content"].is_string()) last = m["content"].get<std::string>();
+        }
+        return last;
+    };
+
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"-p \"-5 + 12 = ?\"", "-5 + 12 = ?"},
+        {"-p \"- item one\"", "- item one"},
+        {"-p \"---\"", "---"},
+        {"-p \"-v vs -V\"", "-v vs -V"},
+        {"-p -- \"-5 + 12 = ?\"", "-5 + 12 = ?"},
+        {"-p -- \"--help\"", "--help"},
+        {"-p -- \"--model\"", "--model"},
+    };
+    for (const auto& [promptArgs, expected] : cases) {
+        bench::MockLlmServer mock;
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        const std::string base = "-m mock-model --base-url " + mock.baseUrl() +
+                                 " --native-tools always --output-format json --no-memory --no-skills --no-web ";
+        const gaia::ProcessResult r = runRaw(base + promptArgs);
+        ASSERT_EQ(r.exitCode, 0) << promptArgs << ": " << r.stderr_output;
+        ASSERT_EQ(mock.requestCount(), 1) << promptArgs;
+        EXPECT_NE(lastUserPrompt(mock).find(expected), std::string::npos) << promptArgs << " -> " << lastUserPrompt(mock);
+    }
+
+    // Leading flags after `-p` with `--` before a flag-shaped prompt also work.
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        const std::string args = "-p -m mock-model --base-url " + mock.baseUrl() +
+                                 " --native-tools always --output-format json --no-memory --no-skills --no-web -- \"--version\"";
+        const gaia::ProcessResult r = runRaw(args);
+        ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+        ASSERT_EQ(mock.requestCount(), 1);
+        EXPECT_NE(lastUserPrompt(mock).find("--version"), std::string::npos) << lastUserPrompt(mock);
+    }
+
+    // Unknown option-shaped tokens without `--`, and extra positionals after `--`, remain usage errors.
+    {
+        bench::MockLlmServer mock;
+        const std::string base = "-m mock-model --base-url " + mock.baseUrl() + " --no-memory --no-skills --no-web ";
+        const gaia::ProcessResult badFlag = runRaw("-p --bogus-flag " + base);
+        EXPECT_EQ(badFlag.exitCode, 2) << badFlag.stderr_output;
+        EXPECT_NE(badFlag.stderr_output.find("--bogus-flag"), std::string::npos) << badFlag.stderr_output;
+
+        // `--name=value` is option-shaped too: a mistyped flag is refused, not sent to the model.
+        const gaia::ProcessResult eqFlag = runRaw("-p --output-format=json " + base);
+        EXPECT_EQ(eqFlag.exitCode, 2) << eqFlag.stderr_output;
+        EXPECT_NE(eqFlag.stderr_output.find("--output-format=json"), std::string::npos) << eqFlag.stderr_output;
+
+        const gaia::ProcessResult extra = runRaw(base + "-p -- \"first\" \"second\"");
+        EXPECT_EQ(extra.exitCode, 2) << extra.stderr_output;
+        EXPECT_NE(extra.stderr_output.find("second"), std::string::npos) << extra.stderr_output;
+        EXPECT_EQ(mock.requestCount(), 0);
+    }
+}
+
+TEST_F(GaiacppCli, PrintModeRejectsBothInlinePromptAndPromptFile) {
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const fs::path pfile = dir_ / "prompt.txt";
+    std::ofstream(pfile) << "prompt from file";
+
+    auto runRaw = [&](const std::string& args) {
+        return gaia::ProcessRunner::run(bin + " " + args, 60000, (dir_ / "work").string(), isolated());
+    };
+
+    bench::MockLlmServer mock;
+    const std::string common = "-m mock-model --base-url " + mock.baseUrl() +
+                               " --native-tools always --output-format json --no-memory --no-skills --no-web";
+
+    const gaia::ProcessResult both1 = runRaw("-p \"inline\" --prompt-file \"" + pfile.string() + "\" " + common);
+    EXPECT_EQ(both1.exitCode, 2) << both1.stderr_output;
+    EXPECT_NE(both1.stderr_output.find("--prompt-file"), std::string::npos) << both1.stderr_output;
+
+    const gaia::ProcessResult both2 = runRaw("--prompt-file \"" + pfile.string() + "\" -p \"inline\" " + common);
+    EXPECT_EQ(both2.exitCode, 2) << both2.stderr_output;
+    EXPECT_NE(both2.stderr_output.find("--prompt-file"), std::string::npos) << both2.stderr_output;
+
+    const gaia::ProcessResult both3 = runRaw("--prompt-file \"" + pfile.string() + "\" " + common + " -p -- \"inline\"");
+    EXPECT_EQ(both3.exitCode, 2) << both3.stderr_output;
+    EXPECT_EQ(mock.requestCount(), 0);
+
+    // Bare `-p` combined with `--prompt-file` has no inline prompt and reads the file.
+    mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+    const gaia::ProcessResult ok = runRaw("-p --prompt-file \"" + pfile.string() + "\" " + common);
+    ASSERT_EQ(ok.exitCode, 0) << ok.stderr_output;
+    ASSERT_EQ(mock.requestCount(), 1);
+    EXPECT_NE(mock.receivedBodies().back().find("prompt from file"), std::string::npos);
+}
+
+TEST_F(GaiacppCli, SkillsAndModelsHelpExitZeroWithUsage) {
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    auto runRaw = [&](const std::string& args) {
+        return gaia::ProcessRunner::run(bin + " " + args, 30000, (dir_ / "work").string(), isolated());
+    };
+
+    for (const char* cmd : {"skills --help", "skills -h", "skills list --help", "skills install --help",
+                            "skills remove --help"}) {
+        const gaia::ProcessResult r = runRaw(cmd);
+        EXPECT_EQ(r.exitCode, 0) << cmd << ": " << r.stderr_output;
+        EXPECT_NE(r.stdout_output.find("gaiacpp skills"), std::string::npos) << cmd << ": " << r.stdout_output;
+        EXPECT_TRUE(r.stderr_output.empty()) << cmd << ": " << r.stderr_output;
+    }
+    for (const char* cmd : {"models --help", "models -h", "models list --help", "models pull --help"}) {
+        const gaia::ProcessResult r = runRaw(cmd);
+        EXPECT_EQ(r.exitCode, 0) << cmd << ": " << r.stderr_output;
+        EXPECT_NE(r.stdout_output.find("gaiacpp models"), std::string::npos) << cmd << ": " << r.stdout_output;
+        EXPECT_TRUE(r.stderr_output.empty()) << cmd << ": " << r.stderr_output;
+    }
+}

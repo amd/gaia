@@ -700,10 +700,34 @@ export function MemoryDashboard() {
     const loadAll = useCallback(async () => {
         setLoading(true);
         setLoadFailed(false);
+        const clearAdvanced = () => {
+            setStats(null);
+            setActivity([]);
+            setKnowledge(null);
+            setTools([]);
+            setConversations([]);
+            setUpcoming([]);
+            setEmbeddingCoverage(null);
+            setEntities([]);
+            setConvSearchResults(null);
+            setConvDetail(null);
+            setShowMaintenanceMenu(false);
+        };
+        const clearGoals = () => {
+            setGoals([]);
+            setGoalStats(null);
+            setGoalsLoadError(null);
+        };
         try {
             const found = await loadStore();
             // No store, no reads: the other agent's memory must not stand in.
-            if (!found) return;
+            if (!found) {
+                clearAdvanced();
+                clearGoals();
+                return;
+            }
+            if (!found.supports.advanced) clearAdvanced();
+            if (!found.supports.goals) clearGoals();
             await Promise.all([
                 loadSettings(),
                 // A store without these answers 409, so they are never asked for.
@@ -1364,7 +1388,7 @@ export function MemoryDashboard() {
                         aria-selected={activeTab === 'goals'}
                     >
                         <Target size={14} /> {t('mem.tab.goals')}
-                        {goalStats && (goalStats.goals['pending_approval'] ?? 0) > 0 && (
+                        {store?.supports.goals && goalStats && (goalStats.goals['pending_approval'] ?? 0) > 0 && (
                             <span className="mem-tab-badge">{goalStats.goals['pending_approval']}</span>
                         )}
                     </button>
@@ -2563,7 +2587,7 @@ export function MemoryDashboard() {
                             </div>
 
                             {/* DB size footer */}
-                            {stats && (
+                            {canAdvanced && stats && (
                                 <div className="mem-db-footer">
                                     <span>
                                         {t('mem.footer.database')}: <bdi dir="ltr">{formatSize(stats.db_size_bytes)}</bdi>
@@ -2924,8 +2948,8 @@ export function MemoryDashboard() {
                                                     <span className={`mem-goal-status-dot status-${goal.status.replace('_','-')}`} />
                                                     <bdi className="mem-goal-title">{goal.title}</bdi>
                                                     <span className={`mem-goal-priority mem-priority-${goal.priority}`}><Code value={goal.priority} keys={PRIORITY_KEYS} /></span>
-                                                    {goal.status === 'cancelled' && (
-                                                        <span className="mem-goal-priority mem-goal-cancelled-label">{t(STATUS_KEYS.cancelled)}</span>
+                                                    {(goal.status === 'cancelled' || goal.status === 'failed') && (
+                                                        <span className={`mem-goal-priority mem-goal-${goal.status}-label`}>{t(STATUS_KEYS[goal.status])}</span>
                                                     )}
                                                     {goal.source !== 'user' && (
                                                         <span className="mem-goal-source-badge">
@@ -2945,6 +2969,15 @@ export function MemoryDashboard() {
                                                                 runGoalAction(() => memoryApi.cancelGoal(goal.id), 'mem.goals.cancelFailed');
                                                             }}>
                                                             {t('mem.cancel')}
+                                                        </button>
+                                                    )}
+                                                    {goal.status === 'failed' && (
+                                                        <button className="mem-goal-action-btn mem-goal-retry-btn"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                runGoalAction(() => memoryApi.retryGoal(goal.id), 'mem.goals.retryFailed');
+                                                            }}>
+                                                            {t('mem.goals.retry')}
                                                         </button>
                                                     )}
                                                     {confirmGoalDeleteId === goal.id ? (

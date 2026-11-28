@@ -424,6 +424,37 @@ class TestGoalActions:
         assert goal_store.get_goal(created["id"]).status == "completed"
         stop_tick.assert_not_called()
 
+    def test_retry_failed_goal_requeues_it(self, client, goal_store):
+        created = _create_goal(client)
+        for _ in range(3):
+            goal_store.record_unfinished_run(
+                created["id"], "blocked", max_tries=3, first_wait_s=0
+            )
+
+        resp = client.put(f"/api/goals/{created['id']}/retry")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "queued"
+        assert goal_store.get_goal(created["id"]).attempts == 0
+
+    def test_retry_from_a_stale_window_never_resets_a_running_goal(
+        self, client, goal_store
+    ):
+        created = _create_goal(client)
+        goal_store.record_unfinished_run(
+            created["id"], "blocked", max_tries=3, first_wait_s=0
+        )
+        goal_store.update_goal_status(created["id"], "in_progress")
+
+        resp = client.put(f"/api/goals/{created['id']}/retry")
+
+        assert resp.status_code == 409
+        kept = goal_store.get_goal(created["id"])
+        assert kept.status == "in_progress" and kept.attempts == 1
+
+    def test_retry_missing_returns_404(self, client):
+        assert client.put("/api/goals/no-such/retry").status_code == 404
+
 
 # ===========================================================================
 # Delete Goal

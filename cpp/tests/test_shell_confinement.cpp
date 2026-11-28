@@ -461,6 +461,15 @@ TEST(ShellConfinement, JudgementSeparatesCheckedOpaqueAndOutside) {
                                 "python3 ../outside/tool.py", "ln -s ../outside l"}) {
         EXPECT_FALSE(judge(outside).outsideWord.empty()) << outside;
     }
+    // A wildcard is read from one folder, so the card can ask about that folder, as it does without the wildcard.
+    std::ofstream(base / "outside" / "a.h") << "x";
+    const std::string outsideReal = fs::canonical(base / "outside").string();
+    for (const std::string& listing : {std::string("ls ../outside/*.h"), "ls " + (base / "outside").string() + "/*.h",
+                                       std::string("ls ../outside")}) {
+        const gaia::ShellJudgement j = judge(listing);
+        EXPECT_FALSE(j.outsideWord.empty()) << listing;
+        EXPECT_EQ(fs::path(j.outsidePath).lexically_normal(), fs::path(outsideReal).lexically_normal()) << listing;
+    }
     EXPECT_TRUE(judge("mkdir a && rm -rf b").compound);
     EXPECT_TRUE(judge("echo $(date)").compound);
     EXPECT_FALSE(judge("mkdir -p a/b").compound);

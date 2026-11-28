@@ -709,7 +709,7 @@ def parse_project_skill_file(
     root: Optional[str] = None,
     read_only: bool = True,
 ) -> Skill:
-    """Parse a repository's ``.claude/skills`` skill the way Claude Code reads it.
+    """Parse a ``.claude/skills`` skill the way Claude Code reads it.
 
     A GAIA-valid skill parses exactly as :func:`parse_skill_file` would. One
     GAIA's schema rejects is still loaded, with a warning naming why, when

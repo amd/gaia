@@ -3429,6 +3429,17 @@
   "MessageResponse": {
     "description": "A single message.",
     "properties": {
+      "agent_program": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Agent Program"
+      },
       "agent_steps": {
         "anyOf": [
           {

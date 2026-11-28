@@ -1076,6 +1076,8 @@ export interface ActiveModel {
         status: 'restored' | 'failed' | 'none' | 'pending';
         message: string | null;
         retry?: boolean;
+        /** The saved model that failed to restore; absent for a config error. */
+        model_id?: string;
         /** A failed restore's parts, so the UI can word it in the user's language. */
         model?: string;
         reason?: string;

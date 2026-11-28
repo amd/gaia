@@ -1030,6 +1030,7 @@ def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
                 "reason": reason,
                 "reason_code": _REASON_CODES.get(reason),
                 "retry": provider_of(last) != LOCAL and not cloud_blocked(),
+                "model_id": last,
             }
         return _restore_result
 

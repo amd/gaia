@@ -978,7 +978,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <div className="msg-route-notice" role="status">{message.stats.route.notice}</div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
-                        <TurnChanges sessionId={message.session_id} messageId={message.id} ranChangingTool={ranChangingTool(agentSteps)} />
+                        <TurnChanges
+                            sessionId={message.session_id}
+                            messageId={message.id}
+                            ranChangingTool={ranChangingTool(agentSteps)}
+                            agentProgram={message.agentProgram}
+                        />
                     )}
                     {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
                     {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}

@@ -87,6 +87,36 @@ TEST(GaiaAgentTest, MissingClaimedFileSendsTheAnswerBackOnce) {
     EXPECT_NE(bodies[1].find("no such file exists"), std::string::npos);
 }
 
+TEST(GaiaAgentTest, AFileTheUserAllowedByItselfIsAccepted) {
+    Workdir w, elsewhere;
+    const fs::path file = elsewhere.path / "report.md";
+    std::ofstream(file) << "# Report\n";
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Saved report.md in your Documents folder."));
+    GaiaAgent::Options o = optionsFor(w);
+    o.workspaceRoots.push_back(file.u8string());
+    GaiaAgent agent(cfgFor(mock), o);
+    json r = agent.processQuery("summarize");
+    EXPECT_EQ(r["result"], "Saved report.md in your Documents folder.");
+    EXPECT_EQ(mock.receivedBodies().size(), 1u) << "a file that is itself an allowed location was reported missing";
+}
+
+TEST(GaiaAgentTest, AnAllowedFileDoesNotStandInForOneInAnotherFolder) {
+    Workdir w, elsewhere;
+    const fs::path file = elsewhere.path / "report.md";
+    std::ofstream(file) << "# Report\n";
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("All done: I saved the summary to out/report.md."));
+    mock.pushResponse(answer("Correction: I could not write out/report.md; here is the summary inline."));
+    GaiaAgent::Options o = optionsFor(w);
+    o.workspaceRoots.push_back(file.u8string());
+    GaiaAgent agent(cfgFor(mock), o);
+    agent.processQuery("summarize");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u) << "out/report.md does not exist, yet an allowed report.md elsewhere vouched for it";
+    EXPECT_NE(bodies[1].find("no such file exists"), std::string::npos);
+}
+
 TEST(GaiaAgentTest, ExistingFileInASubfolderIsAccepted) {
     Workdir w;
     std::ofstream(w.path / "out" / "report.md") << "# Report\n";
@@ -96,6 +126,24 @@ TEST(GaiaAgentTest, ExistingFileInASubfolderIsAccepted) {
     json r = agent.processQuery("summarize");
     EXPECT_EQ(r["result"], "Saved report.md in the out folder.");
     EXPECT_EQ(mock.receivedBodies().size(), 1u);
+}
+
+TEST(GaiaAgentTest, AStoryIsAnsweredInChatWithoutAFile) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    const std::string story =
+        "The Keeper of Thorn Point\n\nElias had kept the light for thirty-one years. Every evening he climbed "
+        "the one hundred and twelve steps, trimmed the wick and watched the beam sweep 19 miles out to sea.";
+    mock.pushResponse(answer(story));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("Write a 400-word story about a lighthouse keeper.");
+
+    // The story is the answer: it is not sent back for a file or for its figures.
+    EXPECT_EQ(r["result"], story);
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(system.find("a story, poem, essay, letter or explanation) goes in your reply, not in a file"),
+              std::string::npos);
 }
 
 TEST(GaiaAgentTest, ToolsAreConfinedByDefault) {
@@ -2493,4 +2541,605 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
         EXPECT_NE(r.value("error", "").find("internet is off"), std::string::npos) << c << ": " << r.dump();
     }
     EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
+}
+
+TEST(GaiaAgentTest, ClaimedFilesHandlesSpacesAndSpecialCharacters) {
+    using Files = std::vector<std::string>;
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created `meeting notes.txt` in the current folder."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created 'meeting notes.txt' in the current folder."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created \"meeting notes.txt\" in the current folder."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created **meeting notes.txt** in the current folder."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Saved `my notes (2026) & $10.txt` in the working folder."),
+              Files{"my notes (2026) & $10.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Saved 'my notes (2026) & $10.txt' in the working folder."),
+              Files{"my notes (2026) & $10.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Wrote `/tmp/my folder/meeting notes.txt`."),
+              Files{"/tmp/my folder/meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Saved \"C:\\My Docs\\Q4 report (final).xlsx\"."),
+              Files{"C:\\My Docs\\Q4 report (final).xlsx"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("`meeting notes.txt` has been created."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("'my notes (2026) & $10.txt' was saved."),
+              Files{"my notes (2026) & $10.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I saved notes(2026).txt and wrote a&b.csv."),
+              (Files{"notes(2026).txt", "a&b.csv"}));
+}
+
+TEST(GaiaAgentTest, ThirdPartyAndFictionalProseIsNotAClaimedFile) {
+    using Files = std::vector<std::string>;
+    for (const char* prose : {
+             "In 1920, the explorer wrote journal.txt before vanishing.",
+             "She saved diary.txt before leaving the city.",
+             "He created notes.md last year.",
+             "He walked in and wrote journal.txt.",
+             "They exported data.csv before retiring.",
+             "Alice wrote report.txt in 1995.",
+             "The character created secret.txt in chapter 3.",
+             "journal.txt was written by the explorer in 1920.",
+         }) {
+        EXPECT_TRUE(GaiaAgent::claimedFiles(prose).empty()) << prose;
+    }
+    EXPECT_EQ(GaiaAgent::claimedFiles("The script wrote output.csv."), Files{"output.csv"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("GAIA saved summary.md."), Files{"summary.md"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("File created: recon_tables.xlsx."), Files{"recon_tables.xlsx"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Report saved to report.md."), Files{"report.md"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Presentation created with 5 slides in deck.pptx."), Files{"deck.pptx"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Invoice generated for March: invoice.pdf."), Files{"invoice.pdf"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("report.md was generated by running the script."), Files{"report.md"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Summary created by combining the two CSVs into out.csv."), Files{"out.csv"});
+    EXPECT_TRUE(GaiaAgent::claimedFiles("I created the chart above. The data came from sales.csv.").empty());
+}
+
+TEST(GaiaAgentTest, SavedFilesWithSpacesOrSpecialCharsAreAcceptedWithoutRetry) {
+    Workdir w;
+    std::ofstream(w.path / "meeting notes.txt") << "Q4 kickoff\n";
+    std::ofstream(w.path / "my notes (2026) & $10.txt") << "budget\n";
+
+    for (const char* reply : {
+             "I created `meeting notes.txt` containing 'Q4 kickoff'.",
+             "I created 'meeting notes.txt' containing 'Q4 kickoff'.",
+             "I created meeting notes.txt in the current folder.",
+             "Saved `my notes (2026) & $10.txt` in the current folder.",
+             "I created my notes (2026) & $10.txt in the current folder.",
+         }) {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(reply));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        json r = agent.processQuery("create the note");
+        EXPECT_EQ(r["result"], reply);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << "false send-back on: " << reply;
+    }
+
+    // A genuinely missing spaced file is still caught and reported by its full name.
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer("I created 'missing notes.txt' in the current folder."));
+        mock.pushResponse(answer("Correction: I did not create 'missing notes.txt'."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        json r = agent.processQuery("create missing notes.txt");
+        EXPECT_EQ(r["result"], "Correction: I did not create 'missing notes.txt'.");
+        ASSERT_EQ(mock.receivedBodies().size(), 2u);
+        EXPECT_NE(mock.receivedBodies()[1].find("missing notes.txt"), std::string::npos);
+    }
+
+    // Fictional prose naming a file does not trigger a false missing-file loop.
+    {
+        bench::MockLlmServer mock;
+        const std::string story = "In 1920, the explorer wrote journal.txt before vanishing.";
+        mock.pushResponse(answer(story));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        json r = agent.processQuery("Write a one-sentence story about an explorer.");
+        EXPECT_EQ(r["result"], story);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u);
+    }
+}
+
+TEST(GaiaAgentTest, PromptListsIndexedDocumentsAndPrefersQueryDocuments) {
+    Workdir w;
+    const fs::path report = w.path / "quarterly_report.txt";
+    std::ofstream(report) << "Total Active Units: 1,480 robots. Battery Replacement Cost: $18,200.";
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    mock.pushResponse(answer("ok"));
+
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    agent.processQuery("hello");
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string before = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(before.find("query_documents"), std::string::npos) << before;
+    EXPECT_EQ(before.find("Indexed documents"), std::string::npos);
+
+    ASSERT_NE(agent.documents(), nullptr);
+    EXPECT_GT(agent.documents()->indexFile(report.string()), 0u);
+    agent.rebuildSystemPrompt();
+    agent.processQuery("what is the battery replacement cost?");
+    ASSERT_EQ(mock.receivedBodies().size(), 2u);
+    const std::string after = json::parse(mock.receivedBodies()[1])["messages"][0]["content"];
+    EXPECT_NE(after.find("Indexed documents"), std::string::npos) << after;
+    EXPECT_NE(after.find("quarterly_report.txt"), std::string::npos) << after;
+}
+
+TEST(GaiaAgentTest, ShellAttemptOnIndexedPdfRedirectsToQueryDocumentsBeforeAsking) {
+    Workdir w;
+    // Use .docx so the test exercises the PDF/Word redirect without depending on pdftotext in CI.
+    const fs::path doc = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "orion_onboarding.docx";
+    ASSERT_TRUE(fs::exists(doc)) << doc;
+    const fs::path copy = w.path / "report.docx";
+    fs::copy_file(doc, copy);
+
+    bench::MockLlmServer mock;
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    ASSERT_NE(agent.documents(), nullptr);
+    ASSERT_GT(agent.documents()->indexFile(copy.string()), 0u);
+
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+    const json cmd = {{"command", "python3 -c \"print('report.docx')\""}};
+    const json first = agent.toolRegistry().executeTool("bash_execute", cmd);
+    EXPECT_EQ(first.value("status", ""), "error") << first.dump();
+    EXPECT_EQ(first.value("executed", true), false) << first.dump();
+    EXPECT_NE(first.value("error", "").find("query_documents"), std::string::npos) << first.dump();
+    EXPECT_EQ(asked, 0) << "redirect must happen before any approval card";
+
+    // A genuine follow-up script on the same turn is not blocked permanently.
+    const json second = agent.toolRegistry().executeTool("bash_execute", cmd);
+    EXPECT_EQ(asked, 1) << second.dump();
+}
+
+TEST(GaiaAgentTest, IndexedPdfRedirectMatchesTheWholeFileNameOnly) {
+    Workdir w;
+    const fs::path doc = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "orion_onboarding.docx";
+    ASSERT_TRUE(fs::exists(doc)) << doc;
+    fs::copy_file(doc, w.path / "report.docx");
+
+    bench::MockLlmServer mock;
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    ASSERT_NE(agent.documents(), nullptr);
+    ASSERT_GT(agent.documents()->indexFile((w.path / "report.docx").string()), 0u);
+
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+    for (const char* other : {"annual_report.docx", "report.docx.bak", "old-report.docx"}) {
+        const json cmd = {{"command", std::string("python3 -c \"print('") + other + "')\""}};
+        const json r = agent.toolRegistry().executeTool("bash_execute", cmd);
+        EXPECT_EQ(r.value("error", "").find("is already indexed"), std::string::npos) << other << ": " << r.dump();
+    }
+    EXPECT_EQ(asked, 3) << "a different file whose name contains report.docx goes to approval, not the redirect";
+}
+
+TEST(GaiaAgentTest, PromptListsAtMostTwentyIndexedDocuments) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    ASSERT_NE(agent.documents(), nullptr);
+    for (int i = 0; i < 23; ++i) {
+        const fs::path f = w.path / ("note_" + std::to_string(100 + i) + ".txt");
+        std::ofstream(f) << "Note number " << i << " says the meeting is on day " << i << ".";
+        ASSERT_GT(agent.documents()->indexFile(f.string()), 0u);
+    }
+    agent.rebuildSystemPrompt();
+    agent.processQuery("hello");
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(system.find("and 3 more"), std::string::npos) << system;
+    const size_t start = system.find("- Indexed documents");
+    ASSERT_NE(start, std::string::npos) << system;
+    const std::string line = system.substr(start, system.find('\n', start) - start);
+    size_t listed = 0;
+    for (size_t at = line.find("note_1"); at != std::string::npos; at = line.find("note_1", at + 1)) ++listed;
+    EXPECT_EQ(listed, 20u) << line;
+}
+
+TEST(GaiaAgentTest, GeneralKnowledgeAbsenceIsNotSentBack) {
+    struct Case {
+        const char* request;
+        const char* reply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"What does HTTP 404 mean? Answer in one short sentence.",
+              "HTTP 404 means that the server could not find the requested resource."},
+             {"What does HTTP 404 Not Found mean?",
+              "HTTP 404 means the requested file or page was not found on the server."},
+             {"What does ENOENT mean in POSIX?",
+              "ENOENT stands for 'No such file or directory' - the path does not exist."},
+             {"Is there a largest prime number?", "No, a largest prime number does not exist."},
+             {"What is wrong with 'The cat sat on mat'?", "The article 'the' is missing before 'mat'."},
+             {"What does Python's dict.get() return when a key is not present?",
+              "It returns None if the key is not found."},
+             {"What happens in Python when you open a file that doesn't exist?",
+              "Python raises FileNotFoundError: No such file or directory."},
+             {"What is Node.js?", "Node.js is a JavaScript runtime; browser DOM APIs do not exist in it."},
+             {"Write a short story about lost keys.",
+              "I looked everywhere, but I couldn't find my keys. They were missing from the hook."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("unexpected retry"));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << tc.request << " -> " << tc.reply;
+        EXPECT_EQ(r["result"], tc.reply) << tc.request;
+    }
+}
+
+TEST(GaiaAgentTest, UnlookedWorkspaceAbsenceIsStillSentBack) {
+    struct Case {
+        const char* request;
+        const char* firstReply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"total budget.xlsx", "budget.xlsx doesn't exist in your folder."},
+             {"Read stats.py", "stats.py was not found."},
+             {"Summarize the README", "I could not find a README."},
+             {"List the files in this folder", "I couldn't find any files."},
+             {"Check /tmp/data for errors", "/tmp/data does not exist."},
+             {"Do you remember my Wi-Fi password?", "I couldn't find anything about your Wi-Fi password."},
+             {"What skills are installed?", "I couldn't find any installed skills."},
+             {"Fetch https://example.com/status", "That page was not found."},
+             {"What is the early termination fee?", "I couldn't find an early termination fee in your folder."},
+             {"Open the invoice and sum the totals.", "The invoice is missing."},
+             {"Is there a file called todo in here?", "No, it doesn't exist."},
+             {"Where are my tax returns?", "I couldn't find them."},
+             {"Any luck?", "I couldn't find your tax returns."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.firstReply));
+        mock.pushResponse(answer("I checked and confirmed it."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        ASSERT_EQ(mock.receivedBodies().size(), 2u) << tc.request << " -> " << tc.firstReply;
+        EXPECT_NE(mock.receivedBodies()[1].find("you didn't look"), std::string::npos) << tc.request;
+        EXPECT_EQ(r["result"], "I checked and confirmed it.") << tc.request;
+    }
+}
+
+TEST(GaiaAgentTest, OrdinaryProseGreenIsNotATestClaim) {
+    struct Case {
+        const char* request;
+        const char* reply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"Write one short sentence: 'Spring has arrived in the park and everything is green.'",
+              "Spring has arrived in the park and everything is green."},
+             {"Describe Ireland in April.", "The hills are all green in April."},
+             {"Describe the traffic on your commute.", "Lucky morning - the traffic lights were all green."},
+             {"Fix the grammar in 'spring came and everything is green'.",
+              "Spring came, and everything is green."},
+             {"Describe the birds outside.", "3 passed by the window."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer(tc.reply));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << tc.request << " -> " << tc.reply;
+        EXPECT_EQ(r["status"], "success") << tc.request;
+        EXPECT_EQ(r["result"], tc.reply) << tc.request;
+    }
+
+    // Shorthand test claims in coding/test requests are still caught even with no tool calls.
+    for (const auto& tc : std::vector<Case>{
+             {"Run the tests", "All green."},
+             {"Fix the bug in stats.py", "Everything is green."},
+             {"How did the tests go?", "All tests pass."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("I did not run the tests."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        ASSERT_EQ(mock.receivedBodies().size(), 2u) << tc.request << " -> " << tc.reply;
+        EXPECT_NE(mock.receivedBodies()[1].find("no tests were run this turn"), std::string::npos) << tc.request;
+        EXPECT_EQ(r["status"], "success") << tc.request;
+    }
+}
+
+TEST(GaiaAgentTest, OrdinaryProseIRanIsNotACommandClaim) {
+    struct Case {
+        const char* request;
+        const char* reply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"Write a 2-sentence first-person story about a morning jog. Start with 'I ran'.",
+              "I ran before the sun had cleared the rooftops. My breath fogged in the cold air."},
+             {"What happened while reading the notes?", "I ran into an interesting contradiction in the text."},
+             {"Why did you stop?", "I've run out of examples to share."},
+             {"Describe the ballet performance.", "The dancer executed the turn cleanly."},
+             {"Write a story about a 5K race.", "I ran it in twenty minutes."},
+             {"How did you check the proposal?", "I ran it by the team."},
+             {"What if you ran the script?", "If I ran the script, it would overwrite the output."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("unexpected retry"));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << tc.request << " -> " << tc.reply;
+        EXPECT_EQ(r["result"], tc.reply) << tc.request;
+    }
+
+    // Genuine unrun command claims are still sent back when no bash_execute succeeded.
+    for (const auto& tc : std::vector<Case>{
+             {"Check stats.py", "I ran `python stats.py` and got 42."},
+             {"Check the script", "I ran the script and it worked."},
+             {"Check the tests", "I've run pytest and checked the log."},
+             {"Run the build", "I have run the build."},
+             {"Run stats.py", "I ran it and got 42."},
+             {"Run the migration", "Executed the migration script."},
+             {"Check whether main.c compiles", "I ran it and it compiled cleanly."},
+             {"Does main.go work?", "I ran it and it printed 42."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("I did not run it yet."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        ASSERT_EQ(mock.receivedBodies().size(), 2u) << tc.request << " -> " << tc.reply;
+        EXPECT_NE(mock.receivedBodies()[1].find("no command ran successfully"), std::string::npos) << tc.request;
+        EXPECT_EQ(r["result"], "I did not run it yet.") << tc.request;
+    }
+}
+
+namespace {
+std::set<std::string> advertisedToolNames(const std::string& requestBody) {
+    std::set<std::string> names;
+    const json body = json::parse(requestBody);
+    if (!body.contains("tools") || !body["tools"].is_array()) return names;
+    for (const auto& t : body["tools"]) {
+        if (t.contains("function") && t["function"].contains("name")) {
+            names.insert(t["function"]["name"].get<std::string>());
+        }
+    }
+    return names;
+}
+
+std::string systemMessageText(const std::string& requestBody) {
+    const json body = json::parse(requestBody);
+    if (!body.contains("messages") || !body["messages"].is_array()) return "";
+    for (const auto& m : body["messages"]) {
+        if (m.value("role", "") == "system" && m.contains("content") && m["content"].is_string()) {
+            return m["content"].get<std::string>();
+        }
+    }
+    return "";
+}
+}  // namespace
+
+TEST(GaiaAgentTest, MemoryOffDisablesMemoryToolsAndNotesItInPrompt) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Memory is off for this chat."));
+    mock.pushResponse(answer("Memory is back on."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryOff = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Qwen3-30B-A3B-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("Remember that I live in Oslo, and tell me my favorite color.");
+    o.memoryOff->store(false);
+    agent.processQuery("Hello again.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+
+    const auto offTools = advertisedToolNames(bodies[0]);
+    for (const char* name : {"remember", "recall", "update_memory", "forget"}) {
+        EXPECT_EQ(offTools.count(name), 0u) << name << " should be disabled while memory is off";
+    }
+    EXPECT_NE(systemMessageText(bodies[0]).find("Memory is off for this chat"), std::string::npos);
+
+    const auto onTools = advertisedToolNames(bodies[1]);
+    for (const char* name : {"remember", "recall", "update_memory", "forget"}) {
+        EXPECT_EQ(onTools.count(name), 1u) << name << " should re-enable once memory turns back on";
+    }
+    EXPECT_EQ(systemMessageText(bodies[1]).find("Memory is off for this chat"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, PrivateChatDisablesMemoryWriteToolsWhileKeepingRecall) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("This chat is private."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryPrivate = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("Remember that I live in Oslo.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 1u);
+
+    const auto tools = advertisedToolNames(bodies[0]);
+    EXPECT_EQ(tools.count("recall"), 1u) << "private chat still allows recall";
+    for (const char* name : {"remember", "update_memory", "forget"}) {
+        EXPECT_EQ(tools.count(name), 0u) << name << " should be disabled in a private chat";
+    }
+    EXPECT_NE(systemMessageText(bodies[0]).find("This chat is private"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, ReenablingMemoryOnCompactModelKeepsCompactWithheldMemoryToolsOff) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Off."));
+    mock.pushResponse(answer("On."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryOff = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Gemma-4-E2B-it-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("First turn.");
+    o.memoryOff->store(false);
+    agent.processQuery("Second turn.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const auto onTools = advertisedToolNames(bodies[1]);
+    EXPECT_EQ(onTools.count("remember"), 1u);
+    EXPECT_EQ(onTools.count("recall"), 1u);
+    EXPECT_EQ(onTools.count("update_memory"), 0u);
+    EXPECT_EQ(onTools.count("forget"), 0u);
+}
+
+TEST(GaiaAgentTest, MemorySwitchesDoNotUndoTheCompactTierOrOtherTools) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Private."));
+    mock.pushResponse(answer("Normal."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryPrivate = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Gemma-4-E2B-it-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("First turn.");
+    o.memoryPrivate->store(false);
+    agent.processQuery("Second turn.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const auto privateTools = advertisedToolNames(bodies[0]);
+    EXPECT_EQ(privateTools.count("recall"), 1u);
+    EXPECT_EQ(privateTools.count("remember"), 0u);
+    const auto normalTools = advertisedToolNames(bodies[1]);
+    EXPECT_EQ(normalTools.count("remember"), 1u);
+    for (const auto& tools : {privateTools, normalTools}) {
+        for (const char* name : {"update_memory", "forget", "git_status", "env_inspect"}) {
+            EXPECT_EQ(tools.count(name), 0u) << name << " stays withheld from a compact model";
+        }
+    }
+}
+
+TEST(GaiaAgentTest, NodesOwnTestRunnerBacksATestsPassClaim) {
+    const std::string spec = "\xE2\x9C\x94 spaces become dashes (0.4ms)\n\xE2\x84\xB9 tests 2\n\xE2\x84\xB9 pass 2\n\xE2\x84\xB9 fail 0\n";
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("Both tests pass.", {edit("slug.js"), shellRun("node --test", 0, spec)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("Both tests pass.",
+                                                 {edit("slug.js"), shellRun("node --test 2>&1 | tail -12", 0, spec)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "Both tests pass.", {shellRun("node --test test/", 0, "# tests 2\n# pass 2\n# fail 0\n")}));
+    const std::string failing = "\xE2\x84\xB9 tests 2\n\xE2\x84\xB9 pass 1\n\xE2\x84\xB9 fail 1\n";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("Both tests pass.", {shellRun("node --test", 1, failing)})),
+              "the tests run this turn didn't pass");
+    // A run that found no tests backs nothing.
+    EXPECT_TRUE(GaiaAgent::unsupportedTestClaim(
+        "Both tests pass.", {shellRun("node --test", 0, "\xE2\x84\xB9 tests 0\n\xE2\x84\xB9 pass 0\n\xE2\x84\xB9 fail 0\n")}));
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("Both tests pass.", {shellRun("node slug.js", 0, "")})),
+              "no tests were run this turn");
+}
+
+TEST(GaiaAgentTest, SourceFilesAnAnswerSaysItWroteAreClaimedFilesToo) {
+    using Files = std::vector<std::string>;
+    EXPECT_EQ(GaiaAgent::claimedFiles("Done. I created `primes.c`, compiled it with gcc and ran it."), Files{"primes.c"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I wrote src/app/main.tsx and created `server.go`."),
+              (Files{"src/app/main.tsx", "server.go"}));
+    EXPECT_EQ(GaiaAgent::claimedFiles("`slug.test.js` has been created."), Files{"slug.test.js"});
+    // A library with a file's ending is not a file.
+    EXPECT_TRUE(GaiaAgent::claimedFiles("I created the server with Node.js and Express.js.").empty());
+    EXPECT_TRUE(GaiaAgent::claimedFiles("I built the frontend with Svelte.js, not Angular.js or jQuery.js.").empty());
+    // A component file with a capital letter is still a file.
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created `App.js`. I wrote `Button.jsx`."), (Files{"App.js", "Button.jsx"}));
+    EXPECT_TRUE(GaiaAgent::claimedFiles("The bug is in utils.js, on line 4.").empty());
+}
+
+TEST(GaiaAgentTest, AnAnswerThatSaysItWroteASourceFileNothingWroteIsNotASuccess) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    const std::string invented = "Done. I created `primes.c`, compiled it with gcc and ran it. It prints 2 3 5 7.";
+    for (int i = 0; i < 4; ++i) mock.pushResponse(answer(invented));
+    AgentConfig c = cfgFor(mock);
+    c.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(c, optionsFor(w));
+    json r = agent.processQuery("write primes.c, compile it and run it");
+    EXPECT_GE(mock.receivedBodies().size(), 2u) << "sent back before it is believed";
+    EXPECT_NE(r.value("result", "").find("primes.c was saved, but no such file exists"), std::string::npos) << r.dump();
+}
+
+TEST(GaiaAgentTest, ATestsPassClaimIsSeenThroughAnAdverbOrAClosingRemark) {
+    // Gemma-4-E4B on the rename task, after `python test_api.py` printed nothing and ran no test.
+    const std::vector<GaiaAgent::CallSeen> silent = {edit("api.py"), shellRun("python test_api.py", 0, "")};
+    for (const char* claim :
+         {"The function was renamed everywhere. The tests were then run and passed successfully.",
+          "The tests were run successfully, confirming that the renaming did not introduce any functional errors.",
+          "The tests were also re-run and they passed."}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(claim, silent)), "no tests were run this turn") << claim;
+    }
+    // Still honest reports, not claims.
+    for (const char* honest : {"The tests were run, but two did not pass.", "The tests were not run successfully."}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(honest, silent)) << honest;
+    }
+}
+
+TEST(GaiaAgentTest, NewlyInstalledSkillIsDiscoveredOnTheNextTurn) {
+    Workdir w;
+    Workdir home;
+    auto putHome = [](const std::string& v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_HOME", v.c_str());
+#else
+        if (!v.empty()) setenv("GAIA_HOME", v.c_str(), 1);
+        else unsetenv("GAIA_HOME");
+#endif
+    };
+    const std::string prevHome = getEnvVar("GAIA_HOME");
+    putHome(home.path.u8string());
+    struct RestoreEnv {
+        std::string prev;
+        decltype(putHome) fn;
+        ~RestoreEnv() { fn(prev); }
+    } restore{prevHome, putHome};
+
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Turn one done."));
+    mock.pushResponse(answer("Turn two done."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    GaiaAgent agent(cfgFor(mock), o);
+
+    // Turn 1: no user skills installed yet.
+    agent.processQuery("hello");
+
+    // Install a new skill on disk while the agent already exists.
+    const fs::path skillDir = home.path / "skills" / "fresh-skill";
+    fs::create_directories(skillDir);
+    std::ofstream(skillDir / "SKILL.md")
+        << "---\nname: fresh-skill\ndescription: Handle fresh skill requests.\n---\n\nAlways reply FRESH_OK.\n";
+
+    // Turn 2: the existing agent must see the new skill in its prompt and load_skill tool.
+    agent.processQuery("use fresh-skill");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_EQ(bodies[0].find("fresh-skill"), std::string::npos);
+    EXPECT_NE(bodies[1].find("fresh-skill"), std::string::npos) << "system prompt did not refresh skills";
+    ASSERT_TRUE(agent.tools().hasTool("load_skill")) << "load_skill not registered after first skill appeared";
+    EXPECT_TRUE(agent.tools().isEnabled("load_skill"));
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "fresh-skill"}});
+    EXPECT_EQ(loaded.value("status", ""), "success") << loaded.dump();
+    EXPECT_NE(loaded.value("instructions", "").find("FRESH_OK"), std::string::npos) << loaded.dump();
 }

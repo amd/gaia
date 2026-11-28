@@ -122,7 +122,7 @@ void GaiaAgent::registerTools() {
         // Such a read runs without a card, and its `cd` to an attached file's folder isn't refused.
         const auto proven = [check = readStaysInside](const json& args) { return check(args.value("command", "")); };
         ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
-                                              !BashTools::detectShell().empty(), proven);
+                                              !BashTools::detectShell().empty(), proven, shellFolder);
         // A command approved unread (a script, an interpreter) can leave the shell outside the folders.
         ToolCallback runShell = std::move(sh.callback);
         sh.callback = [ws, shell, runShell](const json& args) -> json {
@@ -149,7 +149,10 @@ void GaiaAgent::registerTools() {
                                                       [ws](const std::string& p) { return ws->checkPath(p); })
                                                 : std::function<std::string(const std::string&)>());
     }
-    if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
+    if (skills_ && !skills_->skills().empty()) {
+        skills_->registerTools(toolRegistry());
+        skillToolsRegistered_ = true;
+    }
     if (memory_) memory_->registerTools(toolRegistry());
     // The model means the script's own $; the shell would blank it and the script would still exit 0.
     toolRegistry().setArgRewrite([this](const ToolInfo& tool, json& args) {
@@ -184,7 +187,8 @@ void GaiaAgent::registerTools() {
                 if (!askPathAccess_(asked)) {
                     return "Refused: the user did not allow GAIA to use " + asked +
                            ". Don't ask again or reach it another way this turn. Tell the user what you "
-                           "could not do without it.";
+                           "could not do without it. That no is for this turn only: if the user asks for it "
+                           "again in a later message, try again so they can be asked.";
                 }
                 ws->addRoot(asked);
                 std::lock_guard<std::mutex> lock(turnListingMu_);
@@ -201,7 +205,8 @@ void GaiaAgent::registerTools() {
                 if (!beside.empty()) why = openOutside([&] { return ws->judgePath(beside); });
                 if (why.empty()) {
                     why = openOutside([&] {
-                        return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty());
+                        return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty(),
+                                                shellFolder ? shellFolder() : "");
                     });
                 }
                 // What the command reaches once the shell has expanded and resolved its words.
@@ -256,6 +261,39 @@ void GaiaAgent::registerTools() {
                         why = "Not run yet. " + table + " is a small table: read it with file_read first. That "
                               "returns its rows that are not data and totals computed from every row, which is "
                               "often all the request needs. Run a script after that only for what it doesn't give.";
+                    }
+                }
+                if (why.empty() && docs_) {
+                    auto mentionsFilename = [](const std::string& cmd, const std::string& name) {
+                        auto isNameChar = [](unsigned char c) {
+                            return std::isalnum(c) || c == '_' || c == '-' || c == '.';
+                        };
+                        size_t pos = 0;
+                        while ((pos = cmd.find(name, pos)) != std::string::npos) {
+                            const bool leftOk = pos == 0 || !isNameChar(static_cast<unsigned char>(cmd[pos - 1]));
+                            const size_t after = pos + name.size();
+                            const bool rightOk = after == cmd.size() || !isNameChar(static_cast<unsigned char>(cmd[after]));
+                            if (leftOk && rightOk) return true;
+                            pos += 1;
+                        }
+                        return false;
+                    };
+                    for (const auto& [path, _] : docs_->files()) {
+                        const fs::path p = fs::u8path(path);
+                        std::string ext = p.extension().u8string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(),
+                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                        if (ext != ".pdf" && ext != ".docx") continue;
+                        const std::string name = p.filename().u8string();
+                        if (name.empty() || !mentionsFilename(advised, name)) continue;
+                        std::lock_guard<std::mutex> lock(turnListingMu_);
+                        if (turnIndexedDocsPointedAt_.insert(name).second) {
+                            why = "Not run yet. " + name +
+                                  " is already indexed: use query_documents to read it and answer directly from its "
+                                  "passages. If the user asked to copy, move, rename, convert or edit the file, or "
+                                  "for raw metadata query_documents does not return, run the command again.";
+                            break;
+                        }
                     }
                 }
                 if (why.empty()) {
@@ -369,13 +407,13 @@ void GaiaAgent::setPathAccessPrompt(std::function<bool(const std::string& path)>
 }
 
 std::string GaiaAgent::getSystemPrompt() const {
-    return R"(You are GAIA, an AI agent running locally on the user's PC. You do real work for the user: you read and write files, analyze documents and data, write and fix code, and run programs. You work in the current directory unless the user names another place.
+    return R"(You are GAIA, an AI agent running locally on the user's PC. You do real work for the user: you read and write files, analyze documents and data, write and fix code, and run programs. You work in the current directory unless the user names another place. You also talk and write for the user: a question, an explanation, an essay, a poem or a draft of any length is answered in your reply, with no tool, when nothing has to be read or saved.
 
 ## How to work
 1. Look before you answer. If the request names files or a folder, list and read them first. Never say a file or fact does not exist without checking.
-2. Use tools to do the work, not to describe it. A request to create, fix, convert or save something is done only when the file exists on disk; write it with file_write or a program, then confirm it is there.
-3. For formats you cannot read as text (PDF, Word, Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with pypdf/pdfplumber, python-docx, openpyxl/pandas or python-pptx, or pdftotext. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
-4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source.
+2. Use tools to do the work, not to describe it. A request to create, fix, convert or save a file is done only when the file exists on disk; write it with file_write or a program, then confirm it is there. Writing for the user to read (a story, poem, essay, letter or explanation) goes in your reply, not in a file, unless they ask for a file or name a place to save it.
+3. For PDF and Word (.docx) documents, use query_documents to read and search them (calling index_document first if the file is not already listed as indexed under Environment). Once query_documents returns passages that answer the question, answer directly from them instead of running bash_execute to re-read or verify the file. For formats query_documents cannot index (Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with openpyxl/pandas or python-pptx. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
+4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source. A sum the user states outright, with no file or data behind it (17 times 23), is not data work: answer it yourself, with no tool.
 5. Verify. After a change, re-read the file, run the test or the program, and look at the output.
 6. Keep going until the task is finished or you are truly blocked, then answer.
 
@@ -438,13 +476,24 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
     if (memoryOff() && (reads.count(tool.name) || writes.count(tool.name))) {
         return refuse("Memory is off for this chat: nothing is read from or saved to it.");
     }
-    if (options_.memoryPrivate && options_.memoryPrivate->load() && writes.count(tool.name)) {
+    if (memoryPrivate() && writes.count(tool.name)) {
         return refuse("This chat is private: nothing from it is saved to memory.");
     }
     return std::nullopt;
 }
 
 namespace {
+// The user's profile folder, "" when the environment names none.
+std::string userHomeFolder() {
+#ifdef _WIN32
+    // Read wide: the narrow environment is in the code page, not UTF-8.
+    const wchar_t* profile = _wgetenv(L"USERPROFILE");
+    return profile ? fs::path(profile).u8string() : std::string();
+#else
+    return getEnvVar("HOME");
+#endif
+}
+
 // What is in `dir`, two levels deep, for the prompt. Empty for the home folder
 // or a drive root: those names are the user's business until they ask.
 std::string folderListing(const fs::path& dir) {
@@ -616,13 +665,35 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
 void GaiaAgent::onTurnStart() {
     // A page read last turn may have changed, and fetching it again is the user's call.
     webPages_->clear();
+    // Rescan installed skills so skills added or removed mid-chat take effect immediately.
+    if (skills_) {
+        skills_->refresh();
+        const bool hasSkills = !skills_->skills().empty();
+        if (hasSkills && !skillToolsRegistered_) {
+            skills_->registerTools(toolRegistry());
+            skillToolsRegistered_ = true;
+        }
+        for (const char* name : {"list_skills", "load_skill"}) {
+            if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != hasSkills) {
+                toolRegistry().setEnabled(name, hasSkills);
+            }
+        }
+        rebuildSystemPrompt();
+    }
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
-    for (const auto& name : compactWithheldTools()) {
+    // Memory tools also follow the chat's switch, so the model isn't offered a tool it would be refused.
+    const bool memOff = memoryOff();
+    const bool memPrivate = memoryPrivate();
+    const auto& withheld = compactWithheldTools();
+    std::set<std::string> gated(withheld.begin(), withheld.end());
+    gated.insert({"recall", "remember", "update_memory", "forget"});
+    for (const auto& name : gated) {
+        bool on = !(compact && std::find(withheld.begin(), withheld.end(), name) != withheld.end());
+        if (name == "recall") on = on && !memOff;
+        if (name == "remember" || name == "update_memory" || name == "forget") on = on && !memOff && !memPrivate;
         // Written only on a change, so a turn doesn't race readers on other threads for nothing.
-        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) == compact) {
-            toolRegistry().setEnabled(name, !compact);
-        }
+        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != on) toolRegistry().setEnabled(name, on);
     }
     // A compact model gets helpers only when asked for by number: its evals have not earned them.
     if (toolRegistry().hasTool("delegate_task")) {
@@ -645,6 +716,7 @@ void GaiaAgent::onTurnStart() {
     turnTextSize_ = std::move(size);
     turnHostileNames_ = std::move(hostile);
     turnTablesPointedAt_.clear();
+    turnIndexedDocsPointedAt_.clear();
 }
 
 std::string GaiaAgent::systemContext() const {
@@ -653,6 +725,11 @@ std::string GaiaAgent::systemContext() const {
     std::error_code ec;
     // UTF-8, not the code page: the prompt goes into a JSON request body.
     out << "- Working directory: " << fs::current_path(ec).u8string() << "\n";
+    if (const std::string home = userHomeFolder(); !home.empty()) {
+        out << "- The user's own folders (Documents, Desktop, Downloads) are under " << home
+            << ". When the user names one of them, use its full path there, not the working directory, even "
+               "when that has a similar name.\n";
+    }
     // A small model guesses at file names and concludes a file is missing; this shows it what is there.
     std::optional<std::string> listing;
     {
@@ -678,12 +755,41 @@ std::string GaiaAgent::systemContext() const {
         out << "- Folders you may use:";
         if (options_.workspaceRoots.empty()) out << " " << fs::current_path(ec).u8string();
         for (const auto& r : options_.workspaceRoots) out << " " << r;
+        {
+            std::lock_guard<std::mutex> lock(turnListingMu_);
+            for (const auto& opened : openedFolders_) out << " " << opened << " (the user allowed it in this chat)";
+        }
         out << ". Tools refuse other locations, so don't search the whole disk or the home "
                "folder. If a file the user needs isn't in these folders, say so.\n";
+    }
+    if (docs_) {
+        const auto indexed = docs_->files();
+        if (!indexed.empty()) {
+            constexpr size_t kMaxListedDocs = 20;
+            out << "- Indexed documents (already indexed; use query_documents to answer questions about them, not bash_execute):";
+            size_t shown = 0;
+            for (const auto& [path, chunks] : indexed) {
+                if (shown >= kMaxListedDocs) break;
+                out << " " << fs::path(path).filename().u8string() << " (" << chunks
+                    << (chunks == 1 ? " passage" : " passages") << ")";
+                ++shown;
+            }
+            if (indexed.size() > kMaxListedDocs) {
+                out << " and " << (indexed.size() - kMaxListedDocs) << " more (search them with query_documents)";
+            }
+            out << ".\n";
+        }
     }
     if (options_.webOff) {
         out << "- Web access is off for this run. Do not search the web or fetch pages, repositories or "
                "answers through the shell or a script either. Installing a package the task needs is fine.\n";
+    }
+    if (memoryOff()) {
+        out << "- Memory is off for this chat: nothing is read from or saved to memory. Do not search "
+               "local files to substitute for memory; tell the user memory is off.\n";
+    } else if (memoryPrivate()) {
+        out << "- This chat is private: you may recall earlier memories, but nothing from this chat is "
+               "saved to memory.\n";
     }
     if (pythonCommand().empty()) {
         out << "- Python: none found on PATH. Don't plan around it; say so if a task needs it.\n";
@@ -936,47 +1042,354 @@ std::vector<std::string> requestPaths(const std::string& request) {
     return out;
 }
 
+// Source files: a coding answer that says it wrote main.c is checked like one that says it saved report.md.
+const std::string kCodeKinds =
+    "c|h|cc|cpp|hpp|cs|java|kt|go|rs|rb|php|swift|js|jsx|mjs|cjs|ts|tsx|css|scss|sql|toml|bat|ps1|ipynb";
+
+const std::string kFileExts =
+    "(?:md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml|" + kCodeKinds + ")";
+
+std::string asciiLower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+// Node.js, Vue.js: a library with a file's ending, not a file the answer says it made.
+bool isLibraryName(const std::string& name) {
+    static const std::set<std::string> libraries = {"node.js",  "next.js",  "nuxt.js",  "vue.js",   "react.js",
+                                                    "three.js", "d3.js",    "express.js", "nest.js", "chart.js",
+                                                    "p5.js",    "alpine.js", "ember.js", "backbone.js", "moment.js",
+                                                    "discord.js", "angular.js", "svelte.js", "solid.js",
+                                                    "electron.js", "jquery.js", "preact.js", "knockout.js"};
+    return libraries.count(asciiLower(name)) > 0;
+}
+
+std::string normalizeQuotes(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text.compare(i, 3, "\xE2\x80\x98") == 0 || text.compare(i, 3, "\xE2\x80\x99") == 0) {
+            out += '\'';
+            i += 2;
+        } else if (text.compare(i, 3, "\xE2\x80\x9C") == 0 || text.compare(i, 3, "\xE2\x80\x9D") == 0) {
+            out += '"';
+            i += 2;
+        } else {
+            out += text[i];
+        }
+    }
+    return out;
+}
+
+bool hasKnownFileExt(const std::string& path) {
+    static const std::regex ext(R"(\.)" + kFileExts + R"($)", std::regex::icase);
+    std::smatch m;
+    if (!std::regex_search(path, m, ext)) return false;
+    const size_t dot = static_cast<size_t>(m.position(0));
+    if (dot == 0) return false;
+    // The stem must contain at least one visible filename character, not only separators.
+    for (size_t i = 0; i < dot; ++i) {
+        const unsigned char c = static_cast<unsigned char>(path[i]);
+        if (c > ' ' && c != '/' && c != '\\' && c != '.') return true;
+    }
+    return false;
+}
+
+bool validDelimitedPath(const std::string& inner) {
+    if (inner.empty() || inner.size() > 220) return false;
+    if (std::isspace(static_cast<unsigned char>(inner.front())) ||
+        std::isspace(static_cast<unsigned char>(inner.back()))) {
+        return false;
+    }
+    for (const char c : inner) {
+        if (c == '\n' || c == '\r' || c == '<' || c == '>' || c == '|' || c == '*') return false;
+    }
+    if (inner.find("; ") != std::string::npos) return false;
+    return hasKnownFileExt(inner);
+}
+
+bool opensQuotedPath(const std::string& s, size_t at) {
+    if (at == 0) return true;
+    const unsigned char prev = static_cast<unsigned char>(s[at - 1]);
+    return std::isspace(prev) || prev == '(' || prev == '[' || prev == ':' || prev == '=' || prev == ',';
+}
+
+bool isThirdPartyAgentAfterPassive(const std::string& text, size_t afterVerb) {
+    static const std::regex byThirdParty(
+        R"(\s+by\s+(?!(?:me|us|gaia|(?:the\s+)?(?:agent|assistant|script|command|tool|code|program|python|pipeline|build|system))\b|\w+ing\b)[A-Za-z])",
+        std::regex::icase);
+    return std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(afterVerb), text.end(), byThirdParty,
+                             std::regex_constants::match_continuous);
+}
+
+bool isThirdPartyPronoun(const std::string& w) {
+    static const std::set<std::string> pronouns = {
+        "he", "she", "they", "who", "someone", "somebody", "anyone", "anybody", "everyone", "everybody", "nobody"};
+    return pronouns.count(w) > 0;
+}
+
+std::string stripWordEdgeRaw(std::string w) {
+    auto isEdge = [](unsigned char c) { return !std::isalnum(c) && c != '_' && c != '\''; };
+    while (!w.empty() && isEdge(static_cast<unsigned char>(w.front()))) w.erase(w.begin());
+    while (!w.empty() && isEdge(static_cast<unsigned char>(w.back()))) w.pop_back();
+    return w;
+}
+
+std::vector<std::string> splitRawWords(const std::string& s) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+        const size_t start = i;
+        while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+        if (i > start) {
+            std::string w = stripWordEdgeRaw(s.substr(start, i - start));
+            if (!w.empty()) out.push_back(std::move(w));
+        }
+    }
+    return out;
+}
+
+// "In 1920, the explorer wrote journal.txt": a third-person actor is prose, not a claim that GAIA saved a file.
+bool isThirdPartyWrite(const std::string& text, size_t verb, size_t verbEnd) {
+    constexpr size_t kReach = 200;
+    size_t sentStart = verb;
+    while (sentStart > 0 && verb - sentStart < kReach && !endsSentence(text, sentStart - 1)) --sentStart;
+
+    size_t clauseStart = verb;
+    while (clauseStart > sentStart) {
+        const char c = text[clauseStart - 1];
+        if (c == ',' || c == ';' || c == ':' || c == '(' || c == '[') break;
+        --clauseStart;
+    }
+
+    const std::string verbWord = asciiLower(text.substr(verb, verbEnd - verb));
+    std::vector<std::string> rawWords = splitRawWords(text.substr(clauseStart, verb - clauseStart));
+    std::vector<std::string> words;
+    words.reserve(rawWords.size());
+    for (const auto& w : rawWords) words.push_back(asciiLower(w));
+
+    static const std::set<std::string> adverbs = {
+        "now", "already", "just", "also", "then", "successfully", "finally", "actually", "still", "automatically",
+        "recently", "quickly", "quietly", "secretly", "carefully"};
+    while (!words.empty() && adverbs.count(words.back())) {
+        words.pop_back();
+        rawWords.pop_back();
+    }
+
+    static const std::set<std::string> passiveAux = {"was", "were", "is", "are", "been", "be", "got", "gets"};
+    if (!words.empty() && passiveAux.count(words.back())) {
+        return isThirdPartyAgentAfterPassive(text, verbEnd);
+    }
+
+    static const std::set<std::string> perfAux = {"have", "has", "had"};
+    while (!words.empty() && (perfAux.count(words.back()) || adverbs.count(words.back()))) {
+        words.pop_back();
+        rawWords.pop_back();
+    }
+
+    if (words.empty()) return false;
+
+    const std::string& last = words.back();
+    if (last == "i" || last == "we" || last == "i've" || last == "we've" || last == "i'd" || last == "we'd") {
+        return false;
+    }
+    if (isThirdPartyPronoun(last)) return true;
+
+    // Reduced passive ("File created: x.xlsx", "Presentation created with 5 slides in deck.pptx").
+    if (verbWord != "wrote") {
+        static const std::regex reducedPassive(
+            R"(^\s*(?::|(?:to|in|into|at|as|with|for|from|using|via)\b|by\s+\w+ing\b))", std::regex::icase);
+        if (std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(verbEnd), text.end(), reducedPassive,
+                              std::regex_constants::match_continuous)) {
+            return false;
+        }
+    }
+
+    static const std::set<std::string> conjunctions = {"and", "but", "or", "so", "then"};
+    if (conjunctions.count(last)) {
+        const std::vector<std::string> prior = splitRawWords(text.substr(sentStart, clauseStart - sentStart));
+        if (!prior.empty() && isThirdPartyPronoun(asciiLower(prior.front()))) return true;
+        if (words.size() > 1 && isThirdPartyPronoun(words.front())) return true;
+        return false;
+    }
+
+    static const std::set<std::string> agentSubjects = {
+        "gaia",     "agent",     "assistant", "script",   "command",   "tool",     "code",      "program",
+        "python",   "node",      "bash",      "shell",    "compiler",  "build",    "step",      "job",
+        "process",  "run",       "pipeline",  "converter","generator", "exporter", "parser",    "renderer",
+        "helper",   "worker",    "handler",   "system",   "model",     "it",       "this",      "that",
+        "file_write", "bash_execute", "file", "files",    "report",    "summary",  "output",    "result",
+        "results",  "table",     "chart",     "document", "draft",     "notes",    "data",      "copy",
+        "backup",   "log",       "nothing",   "none"};
+    if (agentSubjects.count(last) > 0) return false;
+
+    static const std::set<std::string> determiners = {
+        "the", "a", "an", "my", "his", "her", "their", "our", "that", "this", "each", "every", "one", "some",
+        "another"};
+    if ((words.size() >= 2 && determiners.count(words[words.size() - 2])) ||
+        (words.size() >= 3 && determiners.count(words[words.size() - 3]))) {
+        return true;
+    }
+
+    const bool startsUpper = !rawWords.back().empty() &&
+                             std::isupper(static_cast<unsigned char>(rawWords.back().front())) != 0;
+    if (startsUpper && (words.size() >= 2 || verbWord == "wrote")) return true;
+
+    return false;
+}
+
+struct ExtractedPath {
+    size_t start = std::string::npos;
+    size_t end = 0;
+    std::string path;
+};
+
+ExtractedPath findNextClaimedPath(const std::string& prose, size_t from) {
+    constexpr size_t kWindow = 180;
+    const size_t limit = std::min(prose.size(), from + kWindow);
+    size_t stop = from;
+    while (stop < limit && prose[stop] != '\n' && !endsSentence(prose, stop)) ++stop;
+    const std::string window = prose.substr(from, stop - from);
+
+    ExtractedPath best;
+
+    // 1. Delimited filenames (`...`, "...", '...', **...**) preserve spaces and special characters.
+    auto considerDelimited = [&](size_t openPos, const std::string& closeDelim, size_t innerStart) {
+        if (openPos >= best.start) return;
+        const size_t closePos = window.find(closeDelim, innerStart);
+        if (closePos == std::string::npos) return;
+        const std::string inner = window.substr(innerStart, closePos - innerStart);
+        if (!validDelimitedPath(inner)) return;
+        best = {openPos, closePos + closeDelim.size(), inner};
+    };
+
+    for (size_t i = 0; i < window.size() && i < best.start; ++i) {
+        const char c = window[i];
+        if (c == '`') {
+            considerDelimited(i, "`", i + 1);
+        } else if (c == '"' && opensQuotedPath(window, i)) {
+            considerDelimited(i, "\"", i + 1);
+        } else if (c == '\'' && opensQuotedPath(window, i)) {
+            considerDelimited(i, "'", i + 1);
+        } else if (c == '*' && i + 1 < window.size() && window[i + 1] == '*' && opensQuotedPath(window, i)) {
+            considerDelimited(i, "**", i + 2);
+        }
+    }
+
+    // 2. Bare/unquoted filename or path token.
+    static const std::regex bare(
+        R"(([A-Za-z]:[\\/][^\s`'"*<>|]+?|(?:[A-Za-z0-9_~./\\$&-][A-Za-z0-9_~./\\$&+@#%()-]*)?[A-Za-z0-9_~)&-])\.)" +
+            kFileExts + R"(\b)",
+        std::regex::icase);
+    std::smatch m;
+    if (std::regex_search(window, m, bare)) {
+        const size_t start = static_cast<size_t>(m.position(0));
+        if (start < best.start) {
+            std::string p = m[0].str();
+            while (!p.empty() && (p.back() == '.' || p.back() == ',')) p.pop_back();
+            best = {start, start + static_cast<size_t>(m.length(0)), std::move(p)};
+        }
+    }
+
+    return best;
+}
+
+std::optional<std::string> extractPrecedingPath(const std::string& prose, size_t beforePos) {
+    size_t end = beforePos;
+    while (end > 0 && std::isspace(static_cast<unsigned char>(prose[end - 1]))) --end;
+    if (end == 0) return std::nullopt;
+
+    const size_t minStart = end > 220 ? end - 220 : 0;
+    auto scanDelimited = [&](const std::string& delim, bool checkOpen) -> std::optional<std::string> {
+        if (end < delim.size() || prose.compare(end - delim.size(), delim.size(), delim) != 0) return std::nullopt;
+        const size_t innerEnd = end - delim.size();
+        for (size_t i = innerEnd; i-- > minStart;) {
+            if (prose[i] == '\n') break;
+            if (i + delim.size() <= innerEnd && prose.compare(i, delim.size(), delim) == 0) {
+                if (checkOpen && !opensQuotedPath(prose, i)) continue;
+                const std::string inner = prose.substr(i + delim.size(), innerEnd - (i + delim.size()));
+                if (validDelimitedPath(inner)) return inner;
+                return std::nullopt;
+            }
+        }
+        return std::nullopt;
+    };
+
+    if (auto p = scanDelimited("`", false)) return p;
+    if (auto p = scanDelimited("\"", true)) return p;
+    if (auto p = scanDelimited("'", true)) return p;
+    if (auto p = scanDelimited("**", true)) return p;
+
+    // Unquoted token immediately before passive verb (also handling parenthesized `(b.txt)`).
+    if (prose[end - 1] == ')') {
+        size_t open = end - 1;
+        while (open > minStart && prose[open] != '(' && prose[open] != '\n') --open;
+        if (prose[open] == '(' && open + 1 < end - 1) {
+            const std::string inside = prose.substr(open + 1, end - 1 - (open + 1));
+            if (inside.find_first_of(" \t\r\n") == std::string::npos && hasKnownFileExt(inside)) {
+                return inside;
+            }
+        }
+    }
+
+    size_t start = end;
+    while (start > minStart) {
+        const char c = prose[start - 1];
+        if (std::isspace(static_cast<unsigned char>(c)) || c == '`' || c == '"' || c == '\'' || c == '*' ||
+            c == '<' || c == '>' || c == '|') {
+            break;
+        }
+        if (c == '(' && start == end) break;
+        --start;
+    }
+    std::string token = prose.substr(start, end - start);
+    while (!token.empty() && (token.front() == '(' || token.front() == '[')) token.erase(token.begin());
+    while (!token.empty() && (token.back() == '.' || token.back() == ',')) token.pop_back();
+    if (hasKnownFileExt(token)) return token;
+    return std::nullopt;
+}
+
 }  // namespace
 
 std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
-    static const std::regex claim(
-        R"(\b)" + kWriteVerbs + R"(\b[^\n]{0,80}?)"
-        R"(([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
-        R"((md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))\b)",
-        std::regex::icase);
-    static const std::regex verbEnd(kWriteVerbs, std::regex::icase);
-    const std::string prose = dropCounterfactual(plainPunctuation(answer, ";"));
+    static const std::regex verbRe(R"(\b)" + kWriteVerbs + R"(\b)", std::regex::icase);
+    const std::string prose = dropCounterfactual(normalizeQuotes(plainPunctuation(answer, ";")));
     std::vector<std::string> out;
     size_t pos = 0;
     std::smatch m;
     while (pos < prose.size() &&
-           std::regex_search(prose.begin() + static_cast<std::ptrdiff_t>(pos), prose.end(), m, claim,
+           std::regex_search(prose.begin() + static_cast<std::ptrdiff_t>(pos), prose.end(), m, verbRe,
                              pos ? std::regex_constants::match_prev_avail
                                  : std::regex_constants::match_default)) {
         const size_t verb = pos + static_cast<size_t>(m.position(0));
-        std::smatch v;
-        std::regex_search(prose.begin() + static_cast<std::ptrdiff_t>(verb), prose.end(), v, verbEnd,
-                          std::regex_constants::match_continuous);
-        const size_t afterVerb = verb + static_cast<size_t>(v.length(0));
-        if (isDeniedWrite(prose, verb, afterVerb)) {
-            pos = afterVerb;  // a later verb in the same span may still claim a save
+        const size_t afterVerb = verb + static_cast<size_t>(m.length(0));
+        if (isDeniedWrite(prose, verb, afterVerb) || isThirdPartyWrite(prose, verb, afterVerb)) {
+            pos = afterVerb;
             continue;
         }
-        std::string p = m[1].str();
-        while (!p.empty() && (p.back() == '.' || p.back() == ',')) p.pop_back();
-        if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
-        pos = verb + static_cast<size_t>(m.length(0));
+        const ExtractedPath found = findNextClaimedPath(prose, afterVerb);
+        if (found.start != std::string::npos) {
+            if (!isLibraryName(found.path) && std::find(out.begin(), out.end(), found.path) == out.end()) {
+                out.push_back(found.path);
+            }
+            pos = afterVerb + found.end;
+        } else {
+            pos = afterVerb;
+        }
     }
-    // "`summary.md` has been created": the file comes before the verb. The name starts after a
-    // character that can't be in one, so a long word is tried once, not at every letter.
-    static const std::regex passive(
-        R"((?:^|[^A-Za-z0-9_~./\\:-])([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
-        R"((?:md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))[`'"*]*\s+)"
-        R"((?:has been|have been|has now been|is now|was)\s+(?:successfully\s+)?)" + kWriteVerbs + R"(\b)",
+
+    // "`summary.md` has been created": find the passive verb first so scanning stays linear.
+    static const std::regex passiveVerb(
+        R"(\s+(?:has been|have been|has now been|is now|was)\s+(?:successfully\s+)?)" + kWriteVerbs + R"(\b)",
         std::regex::icase);
-    for (auto it = std::sregex_iterator(prose.begin(), prose.end(), passive); it != std::sregex_iterator(); ++it) {
-        const std::string p = (*it)[1].str();
-        if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
+    for (auto it = std::sregex_iterator(prose.begin(), prose.end(), passiveVerb); it != std::sregex_iterator(); ++it) {
+        const size_t vStart = static_cast<size_t>(it->position(0));
+        const size_t vEnd = vStart + static_cast<size_t>(it->length(0));
+        if (isThirdPartyAgentAfterPassive(prose, vEnd)) continue;
+        if (auto p = extractPrecedingPath(prose, vStart)) {
+            if (!isLibraryName(*p) && std::find(out.begin(), out.end(), *p) == out.end()) out.push_back(std::move(*p));
+        }
     }
     return out;
 }
@@ -1173,6 +1586,81 @@ std::optional<std::string> GaiaAgent::unopenedFilesNote(const std::string& answe
            "say which files you checked.";
 }
 
+namespace {
+
+bool hasLookupTarget(const std::string& request, const std::string& answer) {
+    if (!GaiaAgent::namedFiles(request).empty() || !requestPaths(request).empty()) return true;
+
+    // Code, script, config, or media file names beyond namedFiles() (excluding bare JS brand names).
+    static const std::regex extraFile(
+        R"((?:^|[\s`'"(\\/])([A-Za-z0-9_-][\w.-]*)\.(?:py|pyw|cc|cpp|cxx|hh|hpp|hxx|cs|go|rs|java|kt|swift|rb|php|pl|sh|bash|zsh|bat|cmd|ps1|sql|lua|ts|tsx|jsx|mjs|cjs|js|css|scss|sass|less|vue|svelte|env|cfg|conf|properties|gradle|cmake|mk|lock|rtf|odt|ods|odp|png|jpg|jpeg|gif|svg|webp|bmp|ico|mp3|wav|mp4|mov|db|sqlite|sqlite3|parquet|gz|tar|tgz|bz2|xz|7z|rar|pem|crt|key|pub|ics)\b)"
+        R"(|(?:^|[\s`'"(\\/])([A-Za-z0-9_-]{2,})\.(?:c|h|r)\b)",
+        std::regex::icase);
+    static const std::set<std::string> jsBrands = {
+        "node",   "next",   "vue",   "react", "nuxt",   "nest",  "express",  "three", "chart", "d3",
+        "p5",     "alpine", "ember", "svelte","solid",  "astro", "remix",    "angular",
+        "electron", "bun",  "deno",
+    };
+    for (auto it = std::sregex_iterator(request.begin(), request.end(), extraFile);
+         it != std::sregex_iterator(); ++it) {
+        const std::string full = lowered((*it)[0].str());
+        const std::string stem = lowered((*it)[1].matched ? (*it)[1].str() : (*it)[2].str());
+        const bool hasSlash = full.find('/') != std::string::npos || full.find('\\') != std::string::npos;
+        const bool isJs = full.size() >= 3 && full.compare(full.size() - 3, 3, ".js") == 0;
+        if (!hasSlash && isJs && jsBrands.count(stem)) continue;
+        return true;
+    }
+
+    static const std::regex requestTarget(
+        R"((?:^|[\s`'"(])(?:~[\\/]\S|\.\.?[\\/]\S|https?://\S))"
+        R"(|\b(?:readme|makefile|dockerfile|jenkinsfile|procfile|gemfile|rakefile|vagrantfile|cmakelists|license|changelog|contributing)\b)"
+        R"(|(?:^|[\s`'"(])\.(?:gitignore|gitattributes|env|dockerignore|editorconfig|bashrc|zshrc|npmrc|eslintrc|prettierrc)\b)"
+        R"(|\b(?:this|the|my|our|your|current|working|local)\s+(?:[\w-]+\s+){0,2}?(?:folders?|director(?:y|ies)|workspace|repo(?:sitory)?|project|codebase)\b)"
+        R"(|\b(?:current|working)\s+(?:folder|directory|dir)\b)"
+        R"(|\b(?:my|this|these|our|your|attached|uploaded|indexed)\s+(?:[\w-]+\s+){0,2}?(?:files?|documents?|docs?|spreadsheets?|sheets?|reports?|notes?|logs?|configs?|configurations?|scripts?|datasets?|tables?|invoices?|receipts?|contracts?|leases?|budgets?|resumes?|csvs?|pdfs?)\b)"
+        R"(|\b(?:read|open|check|inspect|search|list|summarize|summarise|total|sum|parse|load|scan|grep|find|edit|update|fix|delete|remove|show)\s+(?:[\w-]+\s+){0,2}?the\s+(?:[\w-]+\s+){0,2}?(?:files?|documents?|docs?|spreadsheets?|sheets?|reports?|notes?|logs?|configs?|configurations?|scripts?|datasets?|tables?|invoices?|receipts?|contracts?|leases?|budgets?|resumes?|csvs?|pdfs?)\b)"
+        R"(|\b(?:my|the|this|installed|available|loaded|gaia)\s+skills?\b|\b(?:list|load|run|use)\s+(?:the\s+)?(?:[\w-]+\s+)?skills?\b|\bskills?\s+(?:are\s+)?(?:installed|available|loaded)\b)"
+        R"(|\b(?:do\s+you\s+remember|what\s+do\s+you\s+remember|did\s+i\s+(?:tell|ask)\s+you\s+to\s+remember|saved\s+in\s+memory|in\s+(?:your|my)\s+memory|memory\s+store|recall)\b)"
+        R"(|\bmcp\b)"
+        R"(|\ba\s+file\s+(?:called|named)\b|\bin\s+here\b|\bwhere\s+(?:is|are)\s+my\b)",
+        std::regex::icase);
+    if (std::regex_search(request, requestTarget)) return true;
+
+    // Even on a brief request, claiming absence in the user's folder, or of the user's own things, needs a check.
+    static const std::regex localAbsence(
+        R"(\b(?:in|under|inside|from)\s+(?:the|this|your|our)\s+(?:working\s+|current\s+|project\s+)?(?:folder|directory|workspace|repo(?:sitory)?|project)\b)"
+        R"(|\b(?:the|this|your)\s+(?:working\s+|current\s+)?(?:folder|directory|workspace)\s+(?:does(?:n't| not)\s+(?:have|contain)|has\s+no|is\s+empty)\b)"
+        R"(|\bcould(?:n't| not)\s+find\s+(?:any\s+)?(?:of\s+)?your\b)",
+        std::regex::icase);
+    return std::regex_search(answer, localAbsence);
+}
+
+}  // namespace
+
+std::optional<std::string> GaiaAgent::unlookedAbsentNote(const std::string& request,
+                                                         const std::string& answer,
+                                                         const std::vector<CallSeen>& calls) {
+    if (asksForNoAction(request)) return std::nullopt;
+    static const std::set<std::string> lookupTools = {
+        "file_search", "file_read", "bash_execute", "list_skills", "query_documents",
+        "index_document", "read_mcp_resource", "list_mcp_resources", "web_fetch", "recall",
+    };
+    if (std::any_of(calls.begin(), calls.end(),
+                    [](const CallSeen& c) { return lookupTools.count(c.name) > 0; })) {
+        return std::nullopt;
+    }
+    static const std::regex absentClaim(
+        R"(\b(does(n't| not) exist|do(n't| not) exist|is(n't| not) (there|present|in the folder)|)"
+        R"(could(n't| not) find|no such file|not found|is missing|are missing)\b)",
+        std::regex::icase);
+    const std::string plain = plainPunctuation(answer, "-");
+    if (!std::regex_search(plain, absentClaim)) return std::nullopt;
+    if (!hasLookupTarget(plainPunctuation(request, "-"), plain)) return std::nullopt;
+    return "Your answer says something is missing or not found, but you didn't "
+           "look. Check (list the folder, search, or read the file) before "
+           "saying it isn't there.";
+}
+
 std::optional<std::string> GaiaAgent::handBackNote(const std::string& answer, const std::vector<CallSeen>& calls) {
     static const std::regex offer(
         R"(\b(?:would you like (?:me )?to|do you want me to|shall i|should i|want me to)"
@@ -1354,13 +1842,13 @@ bool reportsOutstandingFailure(const std::string& text) {
 // Sentence by sentence and clause by clause, as the Python agent reads it: a negation or a
 // piece of advice ("run pytest to confirm the tests pass") only covers its own clause, and a
 // sentence that also reports a failure still standing is an honest mixed report.
-std::string passingTestClaim(const std::string& answer) {
+std::string passingTestClaim(const std::string& answer, bool allowShorthand) {
     // "Pass" with an object is the verb of a call, not a result: "the test passes an empty list".
 #define GAIA_PASS                                                                                              \
     R"(pass(?:es|ed|ing)?\b(?!\s+(?:a|an|the|to|into|through|along|none|null|nil|true|false|it|them|this|that|)" \
     R"(these|those|its|their|his|her|my|our|your|some|every|one|two|three|several)\b|\s+[`'"]))"
-    static const std::regex claim(
-        R"(\b(?:\d+\s+(?:(?:sub)?tests?\s+)" GAIA_PASS R"(|pass(?:ed|ing)\b))"
+    static const std::regex explicitClaim(
+        R"(\b(?:\d+\s+(?:sub)?tests?\s+)" GAIA_PASS
         R"(|(?:sub)?tests?:?(?:\s+(?:in|for|of)\s+\S+)?\s+(?:suite\s+)?)"
         R"((?:(?:are|is|all|now|still|were|have|has|both|each|successfully)\s+)*(?:)" GAIA_PASS
         R"(|green|succeed(?:s|ed)?))"
@@ -1370,14 +1858,17 @@ std::string passingTestClaim(const std::string& answer) {
         R"(|test\s+results?:?\s+(?:(?:are|is|all|now)\s+)*(?:green\b|)" GAIA_PASS R"())"
         R"(|confirmed\s+(?:[\w-]+\s+){0,3}?by\s+(?:re-?)?running\s+the\s+(?:unit\s+)?tests?)"
         R"(|(?:test\s+)?suite\s+(?:is\s+)?(?:green|)" GAIA_PASS R"())"
-        R"(|everything\s+(?:is\s+)?(?:green\b|)" GAIA_PASS R"())"
-        R"(|all\s+green\b)"
-        R"(|tests?\s+(?:were|was)\s+(?:run|executed)\b(?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:(?:they|all|both|each)\s+)*pass(?:ed)?)"
+        R"(|tests?\s+(?:were|was)\s+(?:(?:then|also|again|subsequently|afterwards?)\s+)?(?:re-?run|run|executed)\b)"
+        R"((?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:(?:they|all|both|each)\s+)*pass(?:ed)?)"
         R"(|\b(?:ran|run|running)\s+(?:the\s+)?(?:(?:unit|whole|full|entire)\s+)?(?:tests?|test\s+suite|suite))"
         R"((?:[^.!?\n]|[.](?!\s)){0,80}?(?:\band|\s(?:—|–|-))\s+(?:and\s+)?(?:it|they|all|both|each|everything)\s+)"
         R"((?:(?:all|now)\s+)*)" GAIA_PASS
         R"(|(?:ran|running|run)\s+the\s+tests?\s+successfully))"
         R"(\b)",
+        std::regex::icase);
+    // Shorthand phrases without a "test"/"suite" noun only count in a code or test turn.
+    static const std::regex shorthandClaim(
+        R"(\b(?:\d+\s+pass(?:ed|ing)\b|everything\s+(?:is\s+)?(?:green\b|)" GAIA_PASS R"()|all\s+green\b))",
         std::regex::icase);
 #undef GAIA_PASS
     static const std::regex negation(
@@ -1386,6 +1877,10 @@ std::string passingTestClaim(const std::string& answer) {
     static const std::regex advice(
         R"(\b(?:should|would|could|must|please|recommend|suggests?|consider|expect|try|once|if|before|need to|)"
         R"(make sure|ensure|to (?:confirm|verify|check|ensure|see))\b)",
+        std::regex::icase);
+    static const std::regex afterthought(
+        R"(,\s*(?:thus\s+|thereby\s+)?(?:confirming|verifying|ensuring|showing|demonstrating|indicating|proving|)"
+        R"(which\s+(?:confirms?|verifies|shows?|proves?|means))\b)",
         std::regex::icase);
     static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
     // A dash that only leads to the result ("ran the tests — they pass") doesn't split the claim.
@@ -1400,7 +1895,16 @@ std::string passingTestClaim(const std::string& answer) {
         for (std::sregex_token_iterator c(cleaned.begin(), cleaned.end(), contrast, -1); c != end; ++c) {
             const std::string clause = *c;
             std::smatch m;
-            if (!std::regex_search(clause, m, claim) || std::regex_search(clause, negation)) continue;
+            const bool matched = std::regex_search(clause, m, explicitClaim) ||
+                                 (allowShorthand && std::regex_search(clause, m, shorthandClaim));
+            if (!matched) continue;
+            // "..., confirming the change did not break anything" says what the pass shows, not that it failed.
+            std::string judged = clause;
+            std::smatch shows;
+            if (std::regex_search(judged, shows, afterthought) && shows.position(0) >= m.position(0) + m.length(0)) {
+                judged.resize(static_cast<size_t>(shows.position(0)));
+            }
+            if (std::regex_search(judged, negation)) continue;
             // Advice is judged on the part of the clause the claim sits in: "Ensure the suite is green: all tests pass".
             const std::string before = clause.substr(0, static_cast<size_t>(m.position(0)));
             std::string part = clause.substr(static_cast<size_t>(m.position(0)));
@@ -1476,6 +1980,8 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
     static const std::regex jest(R"([ \t]*Tests:[ \t]+(?:\d+ (?:failed|passed|skipped|todo|total)(?:, )?)+[ \t]*)");
     static const std::regex vitest(R"([ \t]*Tests[ \t]+(?:\d+ (?:failed|passed|skipped|todo)(?: \| )?)+ \(\d+\)[ \t]*)");
     static const std::regex mocha(R"([ \t]*(\d+) (passing|failing)(?: \(\d+(?:\.\d+)?m?s\))?[ \t]*)");
+    // node --test: an info mark then "pass 2" on a terminal, "# pass 2" as TAP.
+    static const std::regex nodeTest("(?:\xE2\x84\xB9|#) (tests|pass|fail) (\\d+)[ \\t]*");
     static const std::regex go(
         R"((ok|FAIL)[ \t]+\S+(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s)(?:[ \t]+\[[^\]\n]*\])?|[ \t]+\[[^\]\n]*\])(?:[ \t]+coverage:.*)?[ \t]*)");
     static const std::regex cargo(
@@ -1526,6 +2032,13 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
             note(std::regex_search(line, counted), std::regex_search(line, failure));
         } else if (std::regex_match(line, m, mocha)) {
             note(m[1].str() != "0", m[2].str() == "failing" && m[1].str() != "0");
+        } else if (std::regex_match(line, m, nodeTest)) {
+            const bool some = m[2].str() != "0";
+            if (m[1].str() == "fail") {
+                if (some) note(true, true);
+            } else if (m[1].str() == "pass" ? some : !some) {
+                note(some, false);
+            }
         } else if (std::regex_match(line, m, go)) {
             note(line.find("[no tests to run]") == std::string::npos, m[1].str() == "FAIL");
         } else if (std::regex_match(line, m, cargo)) {
@@ -1558,6 +2071,7 @@ const std::regex& testRunnerWords() {
         R"((?:^|[\s;&|(`/\\])(?:pytest|py\.test|tox|nox|ctest|jest|vitest|mocha|nose2|phpunit|rspec)(?:\.exe|\.cmd)?(?=[\s;&|)`]|$))"
         R"(|(?:^|[\s;&|(`/\\])(?:python[0-9.]*|py)(?:\.exe)?\s+(?:-\S+\s+)*-m\s*(?:pytest|unittest)\b)"
         R"(|\b(?:npm|yarn|pnpm|bun)(?:\.cmd)?\s+(?:run\s+)?test\b|\bnpx\s+(?:jest|vitest|mocha)\b)"
+        R"(|\bnode(?:\.exe)?\s+(?:\S+\s+)*?--test\b)"
         R"(|\b(?:go|cargo|dotnet|deno|swift)\s+test\b|\b(?:mvn|mvnw)\s+(?:\S+\s+)*(?:test|verify)\b)"
         R"(|\bgradlew?(?:\.bat)?\s+(?:\S+\s+)*(?:test|check)\b|\b(?:make|gmake|ninja)\s+(?:\S+\s+)*(?:tests?|check)\b)"
         R"(|\b(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+(?:\S+\s+)*?(?:pytest|python\s+-m\s+(?:pytest|unittest))\b)"
@@ -1953,9 +2467,38 @@ std::string GaiaAgent::workSoFar() const {
     return describeWork(seen);
 }
 
-std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestClaim(const std::string& answer,
-                                                                                    const std::vector<CallSeen>& calls) {
-    const std::string claim = passingTestClaim(answer);
+namespace {
+
+bool hasTestOrCodeContext(const std::string& answer, const std::vector<GaiaAgent::CallSeen>& calls,
+                          const std::string& request) {
+    static const std::regex contextWords(
+        R"(\b(?:tests?|testing|suites?|pytest|py\.test|unittest|jest|vitest|mocha|ctest|gtest|catch2|rspec|phpunit|ci|builds?|lint(?:er|ing)?|typecheck|specs?|assertions?|regressions?|codebase|repo(?:sitory)?)\b)"
+        R"(|\w\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|c|cc|cpp|cxx|h|hpp|java|kt|rb|php|cs|swift)\b)",
+        std::regex::icase);
+    if (std::regex_search(request, contextWords)) return true;
+    static const std::regex answerFail(R"(\b(?:failed|failures?)\b)", std::regex::icase);
+    if (std::regex_search(answer, contextWords) || std::regex_search(answer, answerFail)) return true;
+    for (const auto& c : calls) {
+        if (changesCode(c)) return true;
+        if (c.name != "bash_execute" || !c.args.is_object() || !c.args.contains("command") ||
+            !c.args["command"].is_string()) {
+            continue;
+        }
+        const std::string command = c.args["command"].get<std::string>();
+        if (namesTestRunner(command) || shellChangesCode(command) || std::regex_search(command, contextWords)) {
+            return true;
+        }
+        const ShellRun run = readShellRun(c.output);
+        if (run.ran && readRunnerSummary(run.text, command).found) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestClaim(
+    const std::string& answer, const std::vector<CallSeen>& calls, const std::string& request) {
+    const std::string claim = passingTestClaim(answer, hasTestOrCodeContext(answer, calls, request));
     if (claim.empty()) return std::nullopt;
     struct Run {
         size_t at;
@@ -2710,10 +3253,75 @@ std::optional<std::string> GaiaAgent::unresolvedClaims(const std::string& answer
     return reviewAnswer(reviewedPart(answer), true);
 }
 
+std::optional<std::string> GaiaAgent::unrunCommandNote(const std::string& request,
+                                                       const std::string& answer,
+                                                       const std::vector<CallSeen>& calls) {
+    const bool bashRan = std::any_of(calls.begin(), calls.end(), [](const CallSeen& c) {
+        return c.name == "bash_execute" && c.succeeded;
+    });
+    if (bashRan) return std::nullopt;
+
+    static const std::string execNoun =
+        R"((?:tests?|test\s+suite|suite|scripts?|commands?|programs?|code|builds?|compil(?:e|ation)|)"
+        R"(lint(?:er|ing)?|typecheck(?:er)?|benchmarks?|migrations?|pipelines?|binaries|binary|)"
+        R"(executables?|install(?:er|ation)?))";
+    static const std::string cliTool =
+        R"((?:pytest|py\.test|unittest|python[0-9.]*|py|pip[0-9.]*|uv|poetry|node|npm|npx|yarn|pnpm|bun|)"
+        R"(jest|vitest|mocha|cargo|rustc|go|gcc|g\+\+|clang|cmake|ctest|make|ninja|mvn|gradle|dotnet|)"
+        R"(swift|ruby|rspec|php|phpunit|perl|bash|sh|zsh|powershell|pwsh|git|gh|docker|kubectl|curl|)"
+        R"(wget|ruff|flake8|pylint|black|isort|mypy|pyright|eslint|tsc))";
+    static const std::string notPhrasal =
+        R"((?!\s+(?:into|out|across|over|through|past|by|for|to|from|away|back|up|down|around|with|against|before|after)\b))";
+    static const std::string execObject =
+        R"((?:`[^`\n]+`|(?:(?:the|this|that|your|my|our|a|an|all|both|some|each|every)\s+)?(?:[\w-]+\s+){0,2}?)" +
+        execNoun + R"(\b|)" + cliTool +
+        R"(\b|[\w./\\~-]+\.(?:py|sh|bash|zsh|ps1|bat|cmd|js|ts|mjs|cjs|rb|pl|php|exe|out|sql)\b))";
+    static const std::regex explicitRan(
+        R"(\b(?:(?:I|we)(?:\s+(?:also|already|just|now))?\s+(?:(?:re-?)?ran|(?:re-?)?executed))"
+        R"(|(?:I|we)(?:'ve|\s+have)(?:\s+(?:also|already|just|now))?\s+(?:(?:re-?)?run|(?:re-?)?executed)))" +
+            notPhrasal + R"(\s+)" + execObject +
+            R"(|\b(?:re-?)?(?:ran|executed)\s+(?:the|this|that)\s+(?:[\w-]+\s+){0,2}?)" + execNoun + R"(\b)",
+        std::regex::icase);
+    static const std::regex pronounRan(
+        R"(\b(?:(?:I|we)(?:\s+(?:also|already|just|now))?\s+(?:(?:re-?)?ran|(?:re-?)?executed))"
+        R"(|(?:I|we)(?:'ve|\s+have)(?:\s+(?:also|already|just|now))?\s+(?:(?:re-?)?run|(?:re-?)?executed))"
+        R"(\s+(?:it|them)\b(?!\s+(?:by|past|through|over|into|out)\b)))",
+        std::regex::icase);
+    // A file name starts after a character that can't be in one, so a long run is tried once, not at every letter.
+    static const std::regex commandRequest(
+        R"(\b(?:run|execute|tests?|pytest|scripts?|commands?|builds?|lint(?:er)?|compil(?:e|es|ed|ing|ation)|migrations?)\b)"
+        R"(|`[^`\n]+`|(?:^|[^\w./\\~-])[\w./\\~-]+\.(?:py|sh|bash|zsh|ps1|bat|cmd|js|jsx|ts|tsx|mjs|cjs|rb|pl|php|exe|out|sql|)"
+        R"(c|cc|cpp|cxx|h|hpp|go|rs|java|kt|cs|swift)\b)",
+        std::regex::icase);
+    static const std::regex negationOrConditional(
+        R"(n't\b|\b(?:not|never|without|if|unless|would|could|should|might|before|once|suppose|imagine)\b)",
+        std::regex::icase);
+    static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
+    static const std::regex clauseBreak(R"([,;:\n]|\s-\s|\b(?:but|however|though|whereas)\b)", std::regex::icase);
+
+    const bool expectsCommand = std::regex_search(plainPunctuation(request, "-"), commandRequest);
+    const std::string plain = plainPunctuation(answer, "-");
+    for (std::sregex_token_iterator s(plain.begin(), plain.end(), sentenceBreak, -1), end; s != end; ++s) {
+        const std::string sentence = *s;
+        for (std::sregex_token_iterator c(sentence.begin(), sentence.end(), clauseBreak, -1); c != end; ++c) {
+            const std::string clause = *c;
+            std::smatch m;
+            const bool matched = std::regex_search(clause, m, explicitRan) ||
+                                 (expectsCommand && std::regex_search(clause, m, pronounRan));
+            if (!matched) continue;
+            const std::string lead = clause.substr(0, static_cast<size_t>(m.position(0)));
+            if (std::regex_search(lead, negationOrConditional)) continue;
+            return "Your answer says a command or the tests ran, but no command ran "
+                   "successfully in this request. Run it, or say it wasn't run.";
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> GaiaAgent::unconfirmedClaims(const std::string& answer) {
     std::vector<CallSeen> seen;
     for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output, c.succeeded});
-    const auto test = unsupportedTestClaim(reviewedPart(answer), seen);
+    const auto test = unsupportedTestClaim(reviewedPart(answer), seen, turnRequest());
     if (!test) return std::nullopt;
     std::string why = test->second;
     why[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(why[0])));
@@ -2772,6 +3380,11 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         if (path.is_absolute()) return fs::exists(path, ec) ? std::optional<fs::path>(path) : std::nullopt;
         const std::string name = path.filename().string();
         for (const auto& root : roots) {
+            // A file the user allowed by itself is its own root.
+            if (root.filename() == path.filename() && fs::is_regular_file(root, ec) &&
+                (!path.has_parent_path() || fs::equivalent(fs::current_path(ec) / path, root, ec))) {
+                return root;
+            }
             if (fs::exists(root / path, ec)) return root / path;
             fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
             int budget = 20000;
@@ -2805,19 +3418,59 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         return std::nullopt;
     };
 
+    // Unquoted filenames with spaces (e.g. "I created meeting notes.txt") extract the trailing token;
+    // reconcile it against a real file in the working folders whose full name appears in the answer.
+    auto locateSpacedMatch = [&](const std::string& tail) -> std::optional<fs::path> {
+        const fs::path parsed = fs::u8path(native(tail));
+        if (parsed.has_parent_path()) return std::nullopt;
+        auto matchesTail = [&](const fs::path& cand) {
+            const std::string name = cand.filename().u8string();
+            if (name.size() <= tail.size()) return false;
+            if (name.compare(name.size() - tail.size(), tail.size(), tail) != 0) return false;
+            const unsigned char prev = static_cast<unsigned char>(name[name.size() - tail.size() - 1]);
+            if (std::isalnum(prev) || prev == '_') return false;
+            return answer.find(name) != std::string::npos;
+        };
+        for (auto c = calls.rbegin(); c != calls.rend(); ++c) {
+            if (!c->succeeded || (c->name != "file_write" && c->name != "file_edit")) continue;
+            if (!c->args.is_object() || !c->args.contains("path") || !c->args["path"].is_string()) continue;
+            const fs::path written = fs::u8path(c->args["path"].get<std::string>());
+            if (!matchesTail(written)) continue;
+            if (written.is_absolute() && fs::exists(written, ec)) return written;
+            for (const auto& root : roots) {
+                if (fs::exists(root / written, ec)) return root / written;
+            }
+        }
+        for (const auto& root : roots) {
+            if (fs::is_regular_file(root, ec) && matchesTail(root)) return root;
+            fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+            int budget = 20000;
+            for (; it != end && !ec && budget-- > 0; it.increment(ec)) {
+                if (it.depth() > 5) { it.disable_recursion_pending(); continue; }
+                if (matchesTail(it->path())) return it->path();
+            }
+        }
+        return std::nullopt;
+    };
+
     std::vector<std::string> notes;
 
     std::vector<std::string> missing;
     std::string savedText;
     bool comparable = true;  // every saved file is a small text file this check can read
     for (const auto& f : claimedFiles(answer)) {
+        std::optional<fs::path> spaced;
         if (!exists(f)) {
-            missing.push_back(f);
-            continue;
+            spaced = locateSpacedMatch(f);
+            if (!spaced) {
+                missing.push_back(f);
+                continue;
+            }
         }
+        const std::string effective = spaced ? spaced->filename().u8string() : f;
         static const std::regex textFile(R"(\.(md|txt|csv|tsv|json|html|yaml|yml|xml)$)", std::regex::icase);
-        auto at = writtenThisTurn(f);
-        const std::string leaf = fs::u8path(native(f)).filename().u8string();
+        auto at = writtenThisTurn(effective);
+        const std::string leaf = fs::u8path(native(effective)).filename().u8string();
         const bool ranOnIt = std::any_of(calls.begin(), calls.end(), [&leaf](const auto& c) {
             return (c.name == "bash_execute" || c.name == "file_write") && c.args.dump().find(leaf) != std::string::npos;
         });
@@ -2825,10 +3478,12 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
             comparable = false;
             continue;
         }
-        if (!at) at = locate(f);
-        if (!at && !fs::path(native(f)).has_parent_path()) at = writtenBesideNamedInput(fs::path(native(f)));
+        if (!at) at = spaced ? spaced : locate(effective);
+        if (!at && !fs::path(native(effective)).has_parent_path()) {
+            at = writtenBesideNamedInput(fs::path(native(effective)));
+        }
         std::string text;
-        if (at && std::regex_search(f, textFile) && fs::file_size(*at, ec) <= 200000 && !ec) {
+        if (at && std::regex_search(effective, textFile) && fs::file_size(*at, ec) <= 200000 && !ec) {
             std::ifstream in(*at, std::ios::binary);
             if (in) text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
@@ -2873,36 +3528,21 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
 
     std::vector<CallSeen> seen;
     for (const auto& c : calls) seen.push_back({c.name, c.args, c.output, c.succeeded});
-    const auto testClaim = unsupportedTestClaim(answer, seen);
+    const auto testClaim = unsupportedTestClaim(answer, seen, turnRequest());
     if (testClaim) {
         notes.push_back("Your answer says \"" + testClaim->first + "\", but " + testClaim->second +
                         ". Either run the tests now with the project's test runner (for example `python -m "
                         "pytest`), or drop the claim. Then give your complete answer again: it replaces the one "
                         "above, which the user will not see.");
     }
-    static const std::regex ranClaim(
-        R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the))",
-        std::regex::icase);
-    if (!testClaim && std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
-        notes.push_back("Your answer says a command or the tests ran, but no command ran "
-                        "successfully in this request. Run it, or say it wasn't run.");
+    if (!testClaim) {
+        if (auto note = unrunCommandNote(turnRequest(), answer, seen)) notes.push_back(*note);
     }
 
     bool lookedNote = false;
-    static const std::regex absentClaim(
-        R"(\b(does(n't| not) exist|do(n't| not) exist|is(n't| not) (there|present|in the folder)|)"
-        R"(could(n't| not) find|no such file|not found|is missing|are missing)\b)",
-        std::regex::icase);
-    // "Use no tools": the user's own words win over the nudge to look first.
-    if (std::regex_search(answer, absentClaim) && !asksForNoAction(turnRequest()) &&
-        !called({"file_search", "file_read", "bash_execute", "list_skills", "query_documents",
-                 "index_document", "read_mcp_resource", "list_mcp_resources", "web_fetch",
-                 "recall"},
-                false)) {
+    if (auto note = unlookedAbsentNote(turnRequest(), answer, seen)) {
         lookedNote = true;
-        notes.push_back("Your answer says something is missing or not found, but you didn't "
-                        "look. Check (list the folder, search, or read the file) before "
-                        "saying it isn't there.");
+        notes.push_back(*note);
     }
 
     if (!asksForNoAction(turnRequest())) {

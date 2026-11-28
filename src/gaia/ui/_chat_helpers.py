@@ -3271,6 +3271,8 @@ def _dispatch_sidecar_query(
         session_id
         and record_followup is not None
         and followups_supported(profile, handle.api_version)
+        # gaiacpp returns 409 on /followup, so tell the UI up front.
+        and not (agent_type == FLAGSHIP_AGENT_ID and _native_flagship_chosen())
     ):
 
         def _followup_taken(text: str) -> None:
@@ -3920,6 +3922,18 @@ def _turn_failure_kind(answer_event: Optional[dict], result: Any) -> Optional[st
     if isinstance(result, dict) and result.get("model_server_down"):
         return MODEL_SERVER_DOWN
     return None
+
+
+def _turn_program(agent_type: str) -> Optional[str]:
+    """``gaiapy`` or ``gaiacpp`` for a flagship turn, else None."""
+    from gaia.daemon.sidecars import fetch
+
+    if agent_type != FLAGSHIP_AGENT_ID:
+        return None
+    program = fetch.saved_flagship()
+    return (
+        program if program in (fetch.PYTHON_FLAGSHIP, fetch.NATIVE_FLAGSHIP) else None
+    )
 
 
 def _failed_turn_program(
@@ -6038,6 +6052,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 stopped=turn_cancelled,
                 # As on `done`: a Stop wins over the failure it cut short.
                 failed=turn_failed and not turn_cancelled,
+                agent_program=_turn_program(agent_type),
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -6172,6 +6187,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     ends_turn=True,
                     stopped=turn_cancelled,
                     failed=failed,
+                    agent_program=_turn_program(agent_type),
                 )
                 done_event = _done_event(
                     msg_id,

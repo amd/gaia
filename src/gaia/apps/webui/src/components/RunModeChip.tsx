@@ -1,8 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { AlertCircle, Check, ChevronDown, ChevronRight, Cloud, Cpu, Download, HelpCircle, KeyRound, Loader2, SlidersHorizontal } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { AlertCircle, ArrowRight, Check, ChevronDown, ChevronRight, Cloud, Cpu, Download, HelpCircle, KeyRound, Loader2, SlidersHorizontal } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
 import './setup/setup.css';
@@ -12,7 +12,7 @@ import { useChatStore } from '../stores/chatStore';
 import {
     useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, sameModelId, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
-import { STATE_LABELS, isDownloading, modelState, placementText, sameListedModel } from './modelMeta';
+import { RECOMMENDED_NOTES, STATE_LABELS, isDownloading, modelState, placementText, sameListedModel } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
 import { SupportTag } from './SupportTag';
 import { formatPrice } from './settings/cloudPrice';
@@ -34,17 +34,39 @@ const KEY_LOCKED = 'store_locked';
 // How many polls a picked model may show no download before the pick is given up.
 const PICK_START_POLLS = 5;
 
+type DetailItem = { key: string; content: ReactNode };
+
 /** What the info bubble lists for *m*: where it runs, size, speed, rank, price. */
-function modelDetails(m: ProviderModel, remote: boolean, t: Translate): string[] {
-    const rank = m.rank ? `#${m.rank} ${m.note ?? ''}`.trim() : null;
-    if (remote) return [rank, formatPrice(m.price)].filter((x): x is string => !!x);
-    return [
-        placementText(m.placement),
-        m.size_gb ? `${m.size_gb} GB` : null,
-        m.tokens_per_second ? t('modelMenu.speedHere', { speed: Math.round(m.tokens_per_second) }) : null,
+function modelDetails(m: ProviderModel, remote: boolean, t: Translate): DetailItem[] {
+    const noteKey = m.note ? RECOMMENDED_NOTES[m.note] : undefined;
+    const rank: DetailItem | null = m.rank ? {
+        key: 'rank',
+        content: (
+            <>
+                <bdi dir="ltr">#{m.rank}</bdi>
+                {m.note ? <> {noteKey ? t(noteKey) : <bdi>{m.note}</bdi>}</> : null}
+            </>
+        ),
+    } : null;
+    if (remote) {
+        const price = formatPrice(m.price, t);
+        const items: Array<DetailItem | null> = [
+            rank,
+            price ? { key: 'price', content: price } : null,
+        ];
+        return items.filter((x): x is DetailItem => x !== null);
+    }
+    const placement = placementText(m.placement, t);
+    const items: Array<DetailItem | null> = [
+        placement ? { key: 'placement', content: placement } : null,
+        m.size_gb ? { key: 'size', content: <bdi dir="ltr">{m.size_gb} GB</bdi> } : null,
+        m.tokens_per_second
+            ? { key: 'speed', content: <MarkedText text={t('settings.model.speed', { speed: markLtr(`${Math.round(m.tokens_per_second)} tok/s`) })} /> }
+            : null,
         rank,
-        m.custom ? t('modelMenu.addedByYou') : null,
-    ].filter((x): x is string => !!x);
+        m.custom ? { key: 'custom', content: t('settings.model.custom') } : null,
+    ];
+    return items.filter((x): x is DetailItem => x !== null);
 }
 
 /** Not on this PC yet, so listed under "Available to download"; the model in use never is. */
@@ -497,20 +519,18 @@ export function RunModeChip() {
     const queuedMode: RunModeId | null = !queued ? null
         : queuedGroup ? modeOf(queuedGroup)
         : /^(fireworks|amd)\./.test(queued) ? 'cloud' : null;
-    const queuedLabel = queued && t('runMode.next', {
-        name: queuedMode && queuedMode !== chipMode ? t.bare(`runMode.${queuedMode}`) : displayModelName(queued),
-    });
+    const queuedCrossesMode = !!queuedMode && queuedMode !== chipMode;
     const notDownloaded = active?.downloaded === false && chipModel === active.model;
     const title = autoSwitchError
         ? autoSwitchError
         : queueError
         ? queueError
         : queued
-            ? t('runMode.queuedTitle', { name: displayModelName(queued) })
+            ? t('modelChip.queuedTitle', { model: displayModelName(queued) })
             : active?.config_error
                 ? active.config_error
                 : notDownloaded
-                    ? t('runMode.notDownloadedTitle', { name })
+                    ? t('modelChip.notDownloadedTitle', { name })
                     : !place
                         ? UNKNOWN_PLACE_TITLE
                         // The server writes the model name as Markdown code; a tooltip shows backticks literally.
@@ -529,8 +549,16 @@ export function RunModeChip() {
                 title={title}
             >
                 <Icon size={13} aria-hidden="true" />
-                <span className="composer-chip-label">{label}</span>
-                {queued && <span className="composer-chip-next">{queuedLabel}</span>}
+                <span className="composer-chip-label" dir="auto">{label}</span>
+                {queued && (
+                    <span className="composer-chip-next">
+                        <ArrowRight size={11} className="composer-chip-next-arrow" aria-hidden="true" />
+                        {queuedCrossesMode
+                            ? <bdi className="composer-chip-next-model">{t.bare(`runMode.${queuedMode}`)}</bdi>
+                            : <bdi dir="ltr" className="composer-chip-next-model">{displayModelName(queued)}</bdi>}
+                        <span className="composer-chip-next-tag">{t.bare('modelChip.next')}</span>
+                    </span>
+                )}
                 {notDownloaded && <Download size={12} aria-label={t('modelChip.notDownloaded')} />}
                 {autoSwitchError && <AlertCircle size={12} aria-label={t('modelChip.switchFailed')} />}
                 <ChevronDown size={12} aria-hidden="true" />
@@ -680,7 +708,7 @@ export function RunModeChip() {
                                             </span>
                                         </button>
                                         <InfoBubble
-                                            label={t('modelMenu.about', { name: modelName })}
+                                            label={t('modelMenu.aboutModel', { name: modelName })}
                                             warning={!!m.placement?.warning}
                                             id={infoId}
                                             pinned={infoRow === m.id}
@@ -688,10 +716,10 @@ export function RunModeChip() {
                                             // The row's ArrowRight opens it, so the icon needs no Tab stop.
                                             tabIndex={-1}
                                         >
-                                            <div className="info-bubble-title">{modelName}</div>
+                                            <div className="info-bubble-title"><bdi dir="ltr">{modelName}</bdi></div>
                                             {details.length > 0 && (
                                                 <ul className="info-bubble-lines">
-                                                    {details.map((d) => <li key={d}>{d}</li>)}
+                                                    {details.map((d) => <li key={d.key}>{d.content}</li>)}
                                                 </ul>
                                             )}
                                             {m.placement?.warning && (
@@ -699,7 +727,7 @@ export function RunModeChip() {
                                                     <li className="is-warning">{m.placement.warning}</li>
                                                 </ul>
                                             )}
-                                            <div className="info-bubble-id">{m.id}</div>
+                                            <div className="info-bubble-id" dir="ltr">{m.id}</div>
                                         </InfoBubble>
                                         <span className="popover-row-state">
                                             {!provider.remote && (

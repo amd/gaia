@@ -26,6 +26,9 @@ on:
       - 'cpp/**'
       - 'util/check_glibc_floor.py'
       - '.github/workflows/build_agents.yml'
+      # The suite the build job runs on the gaiacpp it built.
+      - 'tests/integration/test_harness_surface_contract.py'
+      - 'tests/integration/harness_contract/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review, labeled]
@@ -33,6 +36,9 @@ on:
       - 'cpp/**'
       - 'util/check_glibc_floor.py'
       - '.github/workflows/build_agents.yml'
+      # The suite the build job runs on the gaiacpp it built.
+      - 'tests/integration/test_harness_surface_contract.py'
+      - 'tests/integration/harness_contract/**'
   merge_group:
   workflow_dispatch:
   # publish.yml builds the release's gaiacpp here and attaches it to the GitHub
@@ -205,6 +211,31 @@ jobs:
           set -euo pipefail
           bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
           python cpp/tests/chaos/chaos_gaiacpp.py --binary "${bin}" --runs 100 --jobs 4
+
+      # The same bytes as an installed GAIA runs them: started by the real
+      # daemon, behind the Agent UI backend, `gaia -p` and the terminal UI's
+      # stdio wire, next to the Python agent. Nothing gives either agent the
+      # model server's address: they find GAIA's own from ~/.gaia. Linux on a
+      # pull request; every platform once the commit is on main. A release
+      # build called from publish.yml skips it, so it never holds a release.
+      - name: Harness contract suite
+        if: >-
+          !inputs.version &&
+          (matrix.lemonade_os == 'linux' || github.event_name != 'pull_request')
+        shell: bash
+        timeout-minutes: 12
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
+          [ -n "${bin}" ] || { echo "::error::the build produced no gaiacpp binary"; exit 1; }
+          python -m pip install --quiet uv
+          # No flagship package: the Python agent runs from this checkout's
+          # source as the daemon's sidecar, as it does behind the apps.
+          uv pip install --system --quiet -e ".[ui]" pytest pytest-timeout
+          GAIA_TEST_GAIACPP="${bin}" python -m pytest \
+            tests/integration/test_harness_surface_contract.py -q --timeout=300
 
       - name: Package agents for ${{ matrix.platform }}
         run: >-

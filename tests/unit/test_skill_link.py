@@ -608,7 +608,7 @@ def test_a_tree_link_that_404s_explains_slashed_branch_names(monkeypatch):
     from gaia.skills.link import SkillLinkNotFoundError, fetch_library
 
     def missing(url, destination):
-        raise SkillLinkNotFoundError(f"Nothing found at {url}.")
+        raise SkillLinkNotFoundError(f"Nothing found at {url}.", url)
 
     monkeypatch.setattr(skill_link, "_download", missing)
     source = resolve_link("https://github.com/acme/skills/tree/feature/x/skills")
@@ -619,6 +619,9 @@ def test_a_tree_link_that_404s_explains_slashed_branch_names(monkeypatch):
     with pytest.raises(SkillLinkNotFoundError) as exc:
         fetch_library(plain, Path(tempfile.mkdtemp()))
     assert "branch name" not in str(exc.value)
+    # Names what the user pasted, not the codeload archive it resolved to.
+    assert str(exc.value).startswith("Nothing found at acme/skills.")
+    assert exc.value.link == "acme/skills"
 
 
 def test_a_404_names_no_surfaces_remedy(monkeypatch):
@@ -655,7 +658,9 @@ def test_cli_add_of_a_missing_link_points_at_skill_import(
     monkeypatch, tmp_path, capsys
 ):
     def missing(*args, **kwargs):
-        raise skill_link.SkillLinkNotFoundError("Nothing found at https://x/y.")
+        raise skill_link.SkillLinkNotFoundError(
+            "Nothing found at https://x/y.", "https://x/y"
+        )
 
     monkeypatch.setattr(skill_link, "preview_link", missing)
     manager = SkillManager(

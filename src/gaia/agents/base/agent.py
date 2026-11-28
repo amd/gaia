@@ -120,6 +120,10 @@ from gaia.agents.base.extraction import (
     extraction_response_format,
     read_snapshot,
 )
+from gaia.agents.base.forbidden_steps import (
+    FORBIDDEN_STEP_UNSAID,
+    undisclosed_forbidden_steps,
+)
 from gaia.agents.base.grounding import (
     LOOK,
     SCRIPT_COMPUTATION_TOOLS,
@@ -12519,11 +12523,17 @@ Do NOT wrap conversational replies in JSON.
 
         The loop sends the problems back once per turn for the model to repair,
         then names any left over in the answer. The base check catches an answer
-        that is only leftover tool-call markup.
+        that is only leftover tool-call markup, and one that leaves out a step
+        the user's request ruled out but this turn ran.
         """
         if _is_markup_debris(answer):
             return [_GARBLED_ANSWER]
-        return []
+        forbidden = undisclosed_forbidden_steps(
+            str(self._request_text(getattr(self, "_current_query", None))),
+            getattr(self, "_turn_tool_executions", None) or [],
+            answer,
+        )
+        return [forbidden] if forbidden else []
 
     def required_calls(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Calls the user's own words asked for that this turn never made.
@@ -12538,9 +12548,16 @@ Do NOT wrap conversational replies in JSON.
 
     def answer_repair_prompt(self, problems: List[str]) -> str:
         """The message that asks the model to repair :meth:`answer_problems`."""
+        disclose = (
+            " Say plainly in the answer what ran and that it went against the "
+            "user's instruction. Do not run anything else."
+            if any(p.endswith(FORBIDDEN_STEP_UNSAID) for p in problems)
+            else ""
+        )
         return (
             "[check:answer] "
             + " ".join(problems)
+            + disclose
             + " This check is internal: answer the user without mentioning it. "
             + _GIVE_ANSWER_AGAIN
         )

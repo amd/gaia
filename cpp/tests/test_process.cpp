@@ -824,6 +824,22 @@ TEST_F(ShellSessionTest, CommandsRunWhenTheTempFolderNameHoldsAnAmpersand) {
     }
 }
 
+#ifdef _WIN32
+TEST_F(ShellSessionTest, AFolderGitBashRenamesIsReportedByItsWindowsPath) {
+    for (const std::string& shell : sessionShells()) {
+        if (!posixSyntax(shell)) continue;
+        // Git Bash calls %TEMP% /tmp, which is no folder to Windows.
+        const fs::path base = freshDir("gaia-tmp-mount-");
+        fs::create_directories(base / "sub");
+        ShellSession session(base.u8string(), shell);
+        ASSERT_EQ(session.run("cd sub", 30000).exitCode, 0) << shell;
+        std::error_code ec;
+        EXPECT_TRUE(fs::is_directory(fs::u8path(session.cwd()), ec)) << shell << ": " << session.cwd();
+        EXPECT_TRUE(fs::equivalent(fs::u8path(session.cwd()), base / "sub", ec)) << shell << ": " << session.cwd();
+    }
+}
+#endif
+
 TEST_F(ShellSessionTest, CommandsRunInFoldersWithNonAsciiNames) {
     for (const std::string& shell : sessionShells()) {
         const fs::path base = freshDir("gaia-utf8-");
@@ -908,6 +924,53 @@ TEST(ShellSessionTempFiles, LeftoversOfDeadProcessesAreRemovedAndNothingElse) {
         EXPECT_TRUE(fs::exists(tmp / name)) << name;
         std::error_code ec;
         fs::remove(tmp / name, ec);
+    }
+}
+
+// grep's exit 1 is "no match" and diff's is "they differ": answers, not failures.
+TEST(BashToolsTest, AnswerExitNamesADocumentedExitOne) {
+    EXPECT_EQ(BashTools::answerExit("grep foo .", 1), "grep exits 1 when nothing matches");
+    EXPECT_EQ(BashTools::answerExit("grep -rn \"a|b\" src 2>&1", 1), "grep exits 1 when nothing matches");
+    EXPECT_EQ(BashTools::answerExit("cat log.txt | grep -i error", 1), "grep exits 1 when nothing matches");
+    EXPECT_EQ(BashTools::answerExit("/usr/bin/diff a.txt b.txt", 1), "diff exits 1 when the inputs differ");
+    EXPECT_EQ(BashTools::answerExit("FINDSTR.EXE /s needle *.txt", 1), "findstr exits 1 when nothing matches");
+    EXPECT_EQ(BashTools::answerExit("git diff --quiet", 1), "git diff --exit-code exits 1 when there are differences");
+    EXPECT_EQ(BashTools::answerExit("git grep TODO", 1), "git grep exits 1 when nothing matches");
+    EXPECT_EQ(BashTools::answerExit("which shellcheck", 1), "not found: shellcheck (which exits 1 for that)");
+    EXPECT_EQ(BashTools::answerExit("test -f out.txt", 1), "test -f out.txt is false (exit 1 is its answer)");
+}
+
+TEST(BashToolsTest, AnswerExitLeavesRealFailuresFailed) {
+    EXPECT_EQ(BashTools::answerExit("grep foo missing.txt", 2), "");
+    EXPECT_EQ(BashTools::answerExit("grep foo .", 0), "");
+    EXPECT_EQ(BashTools::answerExit("ls missing", 1), "");
+    EXPECT_EQ(BashTools::answerExit("grep foo | wc -l", 1), "");
+    EXPECT_EQ(BashTools::answerExit("git diff", 1), "");
+    // A list's exit 1 may come from an earlier command, not the grep.
+    EXPECT_EQ(BashTools::answerExit("make && grep ok log", 1), "");
+    EXPECT_EQ(BashTools::answerExit("false || grep ok log", 1), "");
+    EXPECT_EQ(BashTools::answerExit("cd build; grep ok log", 1), "");
+    EXPECT_EQ(BashTools::answerExit("grep $(cat pattern) log", 1), "");
+    EXPECT_EQ(BashTools::answerExit("echo \"x | grep y", 1), "");
+}
+
+TEST(BashToolsTest, ANoMatchSearchReportsAnExpectedExit) {
+    const fs::path dir = freshDir("gaia-answer-exit");
+    std::ofstream(dir / "notes.txt") << "nothing to see\n";
+    const bool posix = !BashTools::detectShell().empty();
+    const auto session = BashTools::newSession(dir.string());
+    const nlohmann::json miss = BashTools::bashExecute(session).callback(
+        {{"command", posix ? "grep needle notes.txt" : "findstr needle notes.txt"}});
+    const nlohmann::json fail =
+        posix ? BashTools::bashExecute(session).callback({{"command", "false"}}) : nlohmann::json::object();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    EXPECT_EQ(miss.value("exit_code", -1), 1) << miss.dump();
+    EXPECT_NE(miss.value("expected_exit", "").find("exits 1 when nothing matches"), std::string::npos) << miss.dump();
+    if (posix) {
+        EXPECT_EQ(fail.value("exit_code", -1), 1) << fail.dump();
+        EXPECT_FALSE(fail.contains("expected_exit")) << fail.dump();
     }
 }
 

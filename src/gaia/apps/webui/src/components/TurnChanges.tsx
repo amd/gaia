@@ -22,15 +22,22 @@ interface TurnChangesProps {
     messageId: number;
     /** The turn ran a tool that writes files or runs commands. */
     ranChangingTool?: boolean;
+    /** The flagship program recorded on this message (`gaiapy` or `gaiacpp`), if known. */
+    agentProgram?: string;
 }
 
 /** "Undo this turn" and "Review changes" under an answer whose turn changed files. */
-export function TurnChanges({ sessionId, messageId, ranChangingTool = false }: TurnChangesProps) {
+export function TurnChanges({ sessionId, messageId, ranChangingTool = false, agentProgram }: TurnChangesProps) {
     const t = useT();
     const { turn, error: loadError, checked, refresh } = useTurnChanges(sessionId, messageId);
     const unrecorded = !turn || (turn.files.length === 0 && !turn.incomplete);
+    const knownProgram = agentProgram === 'gaiacpp' || agentProgram === 'gaiapy' ? agentProgram : null;
     // gaiacpp keeps no record of a turn's file changes, so Undo has nothing to work from.
-    const program = useSessionProgram(sessionId, checked && !loadError && unrecorded && ranChangingTool);
+    const queriedProgram = useSessionProgram(
+        sessionId,
+        checked && !loadError && unrecorded && ranChangingTool && knownProgram === null,
+    );
+    const program = knownProgram ?? queriedProgram;
     const [phase, setPhase] = useState<Phase>('idle');
     const [message, setMessage] = useState<string | null>(null);
     const [reviewing, setReviewing] = useState(false);

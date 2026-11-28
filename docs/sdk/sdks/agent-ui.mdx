@@ -2765,6 +2765,10 @@ with a `detail` that says why and what the user can do.
     Cancel a queued or in-progress goal; cancelling an already-cancelled goal just returns it. Any other state returns 409.
   </Accordion>
 
+  <Accordion title="PUT /api/goals/{goal_id}/retry">
+    Queue a failed goal again with a fresh retry budget (the Memory page's Try again). Retrying an already-queued goal just returns it. Any other state returns 409, so a goal that is running again is never reset.
+  </Accordion>
+
   <Accordion title="PUT /api/goals/{goal_id}/status">
     Update goal status and optionally append progress notes. Queuing a goal
     again from any other status resets its unfinished-run count and any retry

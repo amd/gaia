@@ -19,6 +19,12 @@
 # RUNNER_TEMP, and the last step stops anything started from there. Models
 # come from the pool's shared HF_HOME, except the fresh-install scenario,
 # which uses an empty cache and deletes it.
+#
+# The same job then runs both agent programs, the Python agent and gaiacpp, on
+# the Gemma this lane already has on disk (tests/hardware/
+# test_halo_harness_surfaces.py): setup with gaiacpp chosen, a chat with each
+# through the Agent UI backend, and gaiacpp as the terminal UI's child. One
+# more step on a machine that is already set up, not a lane of its own.
 name: Linux Strix Halo (Hardware)
 
 on:
@@ -44,6 +50,8 @@ concurrency:
 
 permissions:
   contents: read
+  # The agent-program step runs the gaiacpp main's last green build_agents.yml run kept.
+  actions: read
 
 jobs:
   user-issues:
@@ -130,6 +138,31 @@ jobs:
           "$VENV/bin/python" -m pytest tests/hardware/test_linux_halo_user_issues.py \
             -v -s -rA --timeout=3600 -p no:cacheprovider
 
+      # gaiacpp as main last built it for Linux: this job has no C++ toolchain
+      # step, and a tag's own build is not finished when this starts.
+      - name: Fetch main's gaiacpp
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          binary="$("$VENV/bin/python" util/fetch_ci_gaiacpp.py --out "$RUNNER_TEMP/linux-halo-gaiacpp")"
+          "$binary" --version
+          echo "GAIA_TEST_GAIACPP=$binary" >> "$GITHUB_ENV"
+
+      # Fails the job on any failed check; a model-dependent check gets two tries
+      # and the evidence says which one passed.
+      - name: Run both agent programs on the real model
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        env:
+          GAIA_ALLOW_EXTERNAL_IMPORTS: '1'
+        run: |
+          mkdir -p "$GAIA_HW_ARTIFACTS"
+          "$VENV/bin/python" -m pytest tests/hardware/test_halo_harness_surfaces.py \
+            -v -s -rA --timeout=600 -p no:cacheprovider \
+            --junitxml="$GAIA_HW_ARTIFACTS/harness-surfaces-junit.xml"
+
       - name: Evidence to the job summary
         if: always()
         run: |
@@ -152,7 +185,8 @@ jobs:
             sleep 5
             kill -9 $(pgrep -f "$GAIA_HW_WORKDIR") 2>/dev/null || true
           fi
-          rm -rf "$GAIA_HW_WORKDIR" "$VENV" "$RUNNER_TEMP/uv-bin" "$RUNNER_TEMP/uv.tar.gz"
+          rm -rf "$GAIA_HW_WORKDIR" "$VENV" "$RUNNER_TEMP/uv-bin" "$RUNNER_TEMP/uv.tar.gz" \
+            "$RUNNER_TEMP/linux-halo-gaiacpp"
           for c in /sys/class/drm/card*/device; do
             if [ -f "$c/mem_info_vram_used" ]; then
               echo "$c vram_used=$(cat $c/mem_info_vram_used) gtt_used=$(cat $c/mem_info_gtt_used)"

@@ -136,7 +136,13 @@ public:
     /// command counts as a test run when it names a runner (not to install it or ask its
     /// version) or its output holds a runner's summary that the command didn't just print.
     static std::optional<std::pair<std::string, std::string>> unsupportedTestClaim(
-        const std::string& answer, const std::vector<CallSeen>& calls);
+        const std::string& answer, const std::vector<CallSeen>& calls,
+        const std::string& request = "");
+
+    /// The answer claims a shell command, script, or test ran, but no bash_execute call succeeded.
+    static std::optional<std::string> unrunCommandNote(const std::string& request,
+                                                       const std::string& answer,
+                                                       const std::vector<CallSeen>& calls);
 
     /// A file or page the turn read holds text addressed to an AI assistant, and
     /// the answer doesn't tell the user about it.
@@ -190,6 +196,12 @@ public:
     static std::optional<std::string> unopenedFilesNote(const std::string& answer,
                                                         const std::vector<std::filesystem::path>& roots,
                                                         const std::vector<CallSeen>& calls);
+
+    /// The answer says something is absent, no lookup tool ran, and the turn is about a
+    /// local or tool-checkable target rather than general knowledge or prose.
+    static std::optional<std::string> unlookedAbsentNote(const std::string& request,
+                                                         const std::string& answer,
+                                                         const std::vector<CallSeen>& calls);
 
     /// The answer offers to read or work something out instead of doing it.
     static std::optional<std::string> handBackNote(const std::string& answer,
@@ -247,14 +259,17 @@ private:
     /// folder it had drifted to, "" when it was inside.
     static std::string returnShellInside(const Workspace& ws, ShellSession& session);
     bool memoryOff() const { return options_.memoryOff && options_.memoryOff->load(); }
+    bool memoryPrivate() const { return options_.memoryPrivate && options_.memoryPrivate->load(); }
 
     Options options_;
     mutable std::mutex turnListingMu_;
     std::optional<std::string> turnListing_;  // unset until the first turn starts
     std::string turnTextSize_;                // how much text the working folder holds, in words for the prompt
     std::set<std::string> turnTablesPointedAt_;  // CSVs a command was sent to file_read for, once each
+    std::set<std::string> turnIndexedDocsPointedAt_;  // indexed PDFs/.docx a command was sent to query_documents for, once each
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
+    bool skillToolsRegistered_ = false;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
     std::unique_ptr<DocumentIndex> code_;

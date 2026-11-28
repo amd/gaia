@@ -278,7 +278,7 @@ TEST(ShellCommandScopeTest, AlwaysAllowCoversOnlyThatCommand) {
     EXPECT_EQ(reg.executeTool("sh", json{{"command", "pytest -q"}})["status"], "success");
     EXPECT_EQ(reg.executeTool("sh", json{{"command", "pytest -x"}})["status"], "success");
     EXPECT_EQ(asked, 1) << "the same program is approved";
-    EXPECT_EQ(reg.executeTool("sh", json{{"command", "rm -rf build"}})["status"], "error");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "rm -rf build"}})["status"], "denied");
     EXPECT_EQ(asked, 2) << "a different program is asked about again";
     std::filesystem::remove_all(dir);
 }
@@ -939,7 +939,7 @@ TEST(ReadOnlyShellCommandTest, NeedsConfirmSkipsTheQuestion) {
     });
     EXPECT_EQ(reg.executeTool("sh", json{{"command", "ls -la"}})["status"], "success");
     EXPECT_EQ(asked, 0);
-    EXPECT_EQ(reg.executeTool("sh", json{{"command", "rm -rf build"}})["status"], "error");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "rm -rf build"}})["status"], "denied");
     EXPECT_EQ(asked, 1);
 }
 

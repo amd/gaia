@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -178,13 +179,19 @@ public:
     }
     void printReasoningProgress(size_t words) override {
         emit({{"type", "status"}, {"phase", "reasoning"}, {"words", words},
-              {"message", "Reasoning - " + std::to_string(words) + " words so far"}});
+              {"message", "Reasoning - " + std::to_string(words) + (words == 1 ? " word so far" : " words so far")}});
     }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
     void printCompletion(int, int) override {}
     void printStreamToken(const std::string& token) override { emit({{"type", "token"}, {"delta", token}}); }
+    void printAnswerRetracted(const std::string&) override {
+        emit({{"type", "status"},
+              {"phase", "answer_check"},
+              {"message", "Checking the answer"},
+              {"retracts_answer", true}});
+    }
 
     void emit(const json& ev) {
         std::shared_ptr<Run> run;
@@ -221,12 +228,20 @@ struct Session {
     std::shared_ptr<std::atomic<bool>> internetOff = std::make_shared<std::atomic<bool>>(false);
     std::shared_ptr<std::atomic<bool>> memoryOff = std::make_shared<std::atomic<bool>>(false);
     std::shared_ptr<std::atomic<bool>> memoryPrivate = std::make_shared<std::atomic<bool>>(false);
-    std::set<std::string> roots;      // allowed folders and attached files
-    std::set<std::string> builtWith;  // roots the agent was built with
-    std::set<std::string> approved;   // outside paths the user let in at a card, or full access opened
-    std::set<std::string> declined;   // paths the user said no to in declinedRun
+    std::set<std::string> folderRoots;  // allowed folders (grow-only per chat)
+    std::set<std::string> docRoots;     // currently attached files (synced each turn)
+    std::set<std::string> builtWith;    // combined roots the agent was built with
+    std::set<std::string> approved;     // outside paths the user let in at a card, or full access opened
+    std::set<std::string> declined;     // paths the user said no to in declinedRun
     std::string declinedRun;
-    std::set<std::string> indexed;    // attached documents already indexed
+    std::set<std::string> indexed;      // attached documents already indexed
+    bool scoped = false;                // ever given a folder or file: never falls back to home
+
+    std::set<std::string> effectiveRoots() const {
+        std::set<std::string> out = folderRoots;
+        out.insert(docRoots.begin(), docRoots.end());
+        return out;
+    }
     std::string workingDirectory;
     // A one-shot run's gaia -p flags, applied when its agent is built.
     bool noWeb = false;
@@ -514,10 +529,11 @@ private:
 
     std::string defaultModel() const { return opts_.defaultModel.empty() ? resolveGaiaModel() : opts_.defaultModel; }
 
-    // Build (or rebuild, when the chat's folders grew) the session's agent.
+    // Build (or rebuild, when the chat's folders or attached documents changed) the session's agent.
     // Only called while the session holds its busy flag.
     void ensureAgent(Session& s, const ModelServer& server) {
-        if (s.agent && s.builtWith == s.roots) {
+        const std::set<std::string> roots = s.effectiveRoots();
+        if (s.agent && s.builtWith == roots) {
             AgentConfig cfg = s.agent->config();
             cfg.baseUrl = server.baseUrl;
             cfg.apiKey = server.apiKey;
@@ -539,7 +555,11 @@ private:
         cfg.apiKey = server.apiKey;
         GaiaAgent::Options o;
         o.maxHelpers = opts_.maxHelpers;
-        if (s.roots.empty()) {
+        if (roots.empty() && s.scoped) {
+            // Detaching a chat's last file must not widen it to home: a folder GAIA owns grants nothing else.
+            const std::string own = gaiaHome();
+            o.workspaceRoots = {((own.empty() ? fs::temp_directory_path() : fs::u8path(own)) / "gaiacpp-no-folders").u8string()};
+        } else if (roots.empty()) {
             // Roots are UTF-8; the environment's narrow strings are the code page on Windows.
 #ifdef _WIN32
             const wchar_t* profile = _wgetenv(L"USERPROFILE");
@@ -549,7 +569,7 @@ private:
 #endif
             o.workspaceRoots = {(home.empty() ? fs::current_path() : home).u8string()};
         } else {
-            o.workspaceRoots.assign(s.roots.begin(), s.roots.end());
+            o.workspaceRoots.assign(roots.begin(), roots.end());
         }
         o.workspaceRoots.insert(o.workspaceRoots.end(), s.approved.begin(), s.approved.end());
         // As gaiacpp -p applies the same flags.
@@ -579,7 +599,7 @@ private:
         std::lock_guard<std::mutex> lock(s.agentMu);
         s.agent = std::move(agent);
         s.console = consolePtr;
-        s.builtWith = s.roots;
+        s.builtWith = roots;
         s.indexed.clear();  // a new agent has a new document index
     }
 
@@ -950,6 +970,20 @@ private:
         });
     }
 
+    // Plain-English action names for agent_ui unattended refusals, matching relay.py's labels.
+    static std::string unattendedActionLabel(const std::string& action) {
+        if (action == "file_write") return "Writing file";
+        if (action == "file_edit") return "Editing file";
+        if (action == "bash_execute") return "Running a shell command";
+        if (action == "web_fetch") return "Reading web page";
+        if (action == "take_screenshot") return "Taking screenshot";
+        if (action == "generate_image") return "Generating image";
+        if (action == kPathAccessPrompt) return "Accessing a folder or file";
+        std::string label = action;
+        std::replace(label.begin(), label.end(), '_', ' ');
+        return label.empty() ? "tool" : label;
+    }
+
     // The turn's last word when it stopped at a gated tool nobody could approve.
     static json unattendedRefusal(const Run& run) {
         const bool path = run.refusedAction == kPathAccessPrompt;
@@ -963,6 +997,13 @@ private:
                        "asking, or --full-access to also turn the shell guardrails off.";
             answer = "I stopped before running '" + run.refusedAction +
                      "' because it needs your approval, and gaia -p has nobody to ask. " + remedy;
+        } else if (run.surface == "agent_ui") {
+            // Worded as relay.py's _unattended_approval_text() words it for the Python agent.
+            answer = "GAIA stopped this unattended run at \"" + unattendedActionLabel(run.refusedAction) +
+                     "\": that step needs your approval, and nobody is there to give it. "
+                     "Unattended runs, such as scheduled tasks and autonomous goals, "
+                     "can't use steps that ask first, such as writing files or running commands. "
+                     "Ask GAIA in a chat instead, where you can approve it.";
         } else {
             answer = "I stopped before running '" + run.refusedAction +
                      "' because it needs your explicit approval, and this request has nobody to ask: it "
@@ -1132,9 +1173,12 @@ private:
     void query(const httplib::Request& req, httplib::Response& res) {
         json body = json::parse(req.body, nullptr, false);
         if (!body.is_object()) throw BadRequest(422, "Body must be a JSON object");
-        const std::string text = body.value("query", "");
+        const std::string text = body.contains("query") && body["query"].is_string()
+                                     ? body["query"].get<std::string>() : "";
         const std::string runId = body.value("run_id", "");
-        if (text.empty()) throw BadRequest(422, "query must be a non-empty string");
+        if (text.find_first_not_of(" \t\r\n") == std::string::npos) {
+            throw BadRequest(422, "query must be a non-empty string");
+        }
         if (runId.empty()) throw BadRequest(422, "run_id is required");
         if (!validSessionId(runId)) throw BadRequest(422, "run_id may hold letters, digits and _ . : - only");
         if (!body.contains("context") || !body["context"].is_array()) throw BadRequest(422, "context must be a list");
@@ -1148,14 +1192,26 @@ private:
         const std::string sid = body.contains("session_id") && body["session_id"].is_string()
                                     ? body["session_id"].get<std::string>() : "";
         if (!sid.empty() && !validSessionId(sid)) throw BadRequest(400, "Invalid session_id");
+        const bool hasDocuments = body.contains("documents") && !body["documents"].is_null();
         const auto documents = absolutePaths(body, "documents");
         const auto allowed = absolutePaths(body, "allowed_paths");
         std::string workdir;
         if (body.contains("working_directory") && !body["working_directory"].is_null()) {
-            if (!body["working_directory"].is_string() || !fs::path(body["working_directory"].get<std::string>()).is_absolute()) {
+            if (!body["working_directory"].is_string()) {
                 throw BadRequest(422, "working_directory must be an absolute path");
             }
             workdir = body["working_directory"].get<std::string>();
+            const fs::path workdirPath = fs::u8path(workdir);
+            if (!workdirPath.is_absolute()) {
+                throw BadRequest(422, "working_directory must be an absolute path");
+            }
+            std::error_code ec;
+            if (!fs::exists(workdirPath, ec) || ec) {
+                throw BadRequest(422, "working_directory does not exist: " + workdir);
+            }
+            if (!fs::is_directory(workdirPath, ec) || ec) {
+                throw BadRequest(422, "working_directory is not a directory: " + workdir);
+            }
         }
         const std::string memory = body.contains("memory") && body["memory"].is_string() ? body["memory"].get<std::string>() : "";
         if (!memory.empty() && memory != "on" && memory != "private" && memory != "off") {
@@ -1165,7 +1221,14 @@ private:
         if (undoRequested && sid.empty()) throw BadRequest(422, "changes_turn_id needs a session_id");
         const bool reasoning = body.value("reasoning", false);
         const std::string model = body.value("model", "");
-        const int maxSteps = body.value("max_steps", 0);
+        int maxSteps = 0;
+        if (body.contains("max_steps") && !body["max_steps"].is_null()) {
+            const json& m = body["max_steps"];
+            if (!m.is_number_integer() || m < 1 || m > (std::numeric_limits<int>::max)()) {
+                throw BadRequest(422, "max_steps must be a whole number, 1 or more");
+            }
+            maxSteps = m.get<int>();
+        }
 
         // The gaia -p flags: one run only, so a chat can never inherit them.
         int timeLimit = 0;
@@ -1270,10 +1333,21 @@ private:
                           << std::endl;
             }
         }
-        // Folder scope only grows within a chat; an attached file is granted as that file.
-        for (const auto& p : allowed) s->roots.insert(p);
-        for (const auto& d : documents) s->roots.insert(d);
-        if (!workdir.empty()) s->workingDirectory = workdir;
+        // Folder scope only grows within a chat; attached files follow the current list so detaching revokes access.
+        const std::set<std::string> currentAllowed(allowed.begin(), allowed.end());
+        const std::set<std::string> currentDocs(documents.begin(), documents.end());
+        if (hasDocuments) {
+            for (const auto& prev : s->docRoots) {
+                if (!currentDocs.count(prev) && !currentAllowed.count(prev)) {
+                    s->folderRoots.erase(prev);
+                }
+            }
+            s->docRoots = currentDocs;
+        }
+        for (const auto& p : allowed) {
+            if (!currentDocs.count(p)) s->folderRoots.insert(p);
+        }
+        if (!s->folderRoots.empty() || !s->docRoots.empty()) s->scoped = true;
         if (!memory.empty()) {
             s->memoryOff->store(memory == "off");
             s->memoryPrivate->store(memory == "private");
@@ -1283,15 +1357,16 @@ private:
         }
         {
             json folders = json::array();
-            for (const auto& r : s->roots) folders.push_back(r);
+            for (const auto& r : s->effectiveRoots()) folders.push_back(r);
             std::cerr << "turn " << runId << " session " << s->id << " folders=" << dumps(folders)
-                      << " cwd=" << dumps(s->workingDirectory) << " memory_off=" << s->memoryOff->load()
+                      << " cwd=" << dumps(workdir.empty() ? s->workingDirectory : workdir)
+                      << " memory_off=" << s->memoryOff->load()
                       << " internet_off=" << s->internetOff->load() << std::endl;
         }
 
         try {
-        std::thread([this, s, run, history = std::move(history), text, model, maxSteps, documents, reasoning,
-                     undoRequested, hasTurns]() mutable {
+        std::thread([this, s, run, history = std::move(history), text, model, maxSteps, documents, hasDocuments,
+                     reasoning, undoRequested, hasTurns, workdir]() mutable {
             // One chat works at a time: the working folder is process-wide. A
             // chat waiting on its user lets go of it (see confirm()).
             std::unique_lock<std::timed_mutex> turnLock(turnsMu_, std::defer_lock);
@@ -1316,7 +1391,7 @@ private:
                 {
                     // A new agent reads project skills from where the process stands: the last chat's folder.
                     std::error_code moveEc;
-                    const std::string folder = chatFolder(*s);
+                    const std::string folder = chatFolder(*s, workdir);
                     if (!folder.empty()) fs::current_path(folder, moveEc);
                 }
                 const ModelServer server = modelServer();
@@ -1345,13 +1420,13 @@ private:
                 }
                 s->console->attach(run, reasoning);
                 if (run->cancelled) throw std::runtime_error("cancelled");
-                const std::string folderProblem = enterWorkingDirectory(*s);
+                const std::string folderProblem = enterWorkingDirectory(*s, workdir);
                 if (!folderProblem.empty()) throw std::runtime_error(folderProblem);
                 if (undoRequested) {
                     s->console->emit({{"type", "status"},
                                       {"message", "Undo may not work for this turn: gaiacpp doesn't record file changes yet."}});
                 }
-                const std::string unreadable = indexDocuments(*s, documents);
+                const std::string unreadable = indexDocuments(*s, documents, hasDocuments);
                 if (!unreadable.empty()) throw UnreadableAttachment(unreadable);
                 AgentConfig cfg = s->agent->config();
                 if (!model.empty()) cfg.modelId = model;
@@ -1359,7 +1434,7 @@ private:
                 cfg.nativeToolCalls =
                     cfg.modelId.rfind("fireworks.", 0) == 0 ? NativeToolCalls::Always : NativeToolCalls::Auto;
                 s->agent->setConfig(cfg);
-                s->agent->rebuildSystemPrompt();  // memory may have been switched
+                s->agent->rebuildSystemPrompt();  // memory or indexed documents may have changed
                 s->agent->setHistory(history);
                 const size_t before = s->agent->history().size();
                 if (run->cancelled) throw std::runtime_error("cancelled");
@@ -1522,10 +1597,10 @@ private:
     // Move the process and the shell to this chat's working folder: the one it
     // named, else its first folder, else home, so no chat starts in another's.
     // Returns what went wrong, or "".
-    static std::string chatFolder(const Session& s) {
-        std::string dir = s.workingDirectory;
+    static std::string chatFolder(const Session& s, const std::string& requestedWorkdir = "") {
+        std::string dir = !requestedWorkdir.empty() ? requestedWorkdir : s.workingDirectory;
         if (dir.empty()) {
-            for (const auto& r : s.roots) {
+            for (const auto& r : s.folderRoots) {
                 std::error_code ec;
                 if (fs::is_directory(r, ec)) {
                     dir = r;
@@ -1543,8 +1618,8 @@ private:
         return dir;
     }
 
-    static std::string enterWorkingDirectory(Session& s) {
-        const std::string dir = chatFolder(s);
+    static std::string enterWorkingDirectory(Session& s, const std::string& requestedWorkdir) {
+        const std::string dir = chatFolder(s, requestedWorkdir);
         if (dir.empty()) return "";
         std::error_code ec;
         fs::current_path(dir, ec);
@@ -1554,12 +1629,25 @@ private:
             if (!s.shell->setCwd(dir)) return "Can't use " + dir + " as the working folder: not a folder";
             s.shellDir = dir;
         }
+        if (!requestedWorkdir.empty()) s.workingDirectory = requestedWorkdir;
         return "";
     }
 
-    // Attached documents are indexed before the turn, each once per agent. Returns what to tell the
-    // user when one can't be read on this PC at all; the model would only guess its way around that.
-    std::string indexDocuments(Session& s, const std::vector<std::string>& documents) {
+    // Attached documents are synced before the turn: detached files leave the index and new ones
+    // are indexed once per agent. Returns what to tell the user when one can't be read on this PC
+    // at all; the model would only guess its way around that.
+    std::string indexDocuments(Session& s, const std::vector<std::string>& documents, bool hasDocuments) {
+        if (hasDocuments) {
+            const std::set<std::string> current(documents.begin(), documents.end());
+            for (auto it = s.indexed.begin(); it != s.indexed.end();) {
+                if (!current.count(*it)) {
+                    if (DocumentIndex* docs = s.agent->documents()) docs->removeFile(*it);
+                    it = s.indexed.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
         std::vector<std::string> pending;
         for (const auto& d : documents) {
             if (!s.indexed.count(d)) pending.push_back(d);
@@ -1569,21 +1657,71 @@ private:
         json names = json::array();
         for (const auto& d : pending) names.push_back(fs::path(d).filename().string());
         s.console->emit({{"type", "tool_call"}, {"tool", "index_documents"}, {"args", {{"documents", names}}}});
-        json results = json::array();
+        json indexed = json::array();
+        json failed = json::array();
+        size_t totalChunks = 0;
         for (const auto& d : pending) {
+            const std::string name = fs::path(d).filename().string();
             json r = s.agent->toolRegistry().executeTool("index_document", {{"path", d}});
-            results.push_back({{"document", fs::path(d).filename().string()}, {"result", r}});
-            if (r.value("status", "") != "error" && !r.contains("error")) s.indexed.insert(d);
-            if (!unreadable.empty() || !r.contains("failed") || !r["failed"].is_array()) continue;
-            for (const auto& f : r["failed"]) {
-                if (f.is_object() && f.contains("missing_program")) {
-                    unreadable = MissingDocumentReader::remedy(fs::path(d).filename().string(),
-                                                               f.value("missing_program", ""));
-                    break;
+            const bool ok = r.value("status", "") != "error" && !r.contains("error");
+            if (ok) {
+                s.indexed.insert(d);
+                const size_t chunks = r.value("chunks", size_t{0});
+                totalChunks += chunks;
+                indexed.push_back({{"document", name}, {"file", d}, {"chunks", chunks}});
+                continue;
+            }
+            std::string err = r.value("error", "");
+            if (err.empty() && r.contains("failed") && r["failed"].is_array() && !r["failed"].empty() &&
+                r["failed"][0].is_object()) {
+                err = r["failed"][0].value("error", "");
+            }
+            if (err.empty()) err = "Could not index " + name + ".";
+            failed.push_back({{"document", name}, {"file", d}, {"error", err}});
+            if (unreadable.empty() && r.contains("failed") && r["failed"].is_array()) {
+                for (const auto& f : r["failed"]) {
+                    if (f.is_object() && f.contains("missing_program")) {
+                        unreadable = MissingDocumentReader::remedy(name, f.value("missing_program", ""));
+                        break;
+                    }
                 }
             }
         }
-        s.console->emit({{"type", "tool_result"}, {"tool", "index_documents"}, {"data", results}});
+        const std::string status = failed.empty() ? "ok" : (indexed.empty() ? "error" : "partial");
+        auto passageLabel = [](size_t n) { return std::to_string(n) + (n == 1 ? " passage" : " passages"); };
+        auto bulletDetail = [](const json& f) {
+            const std::string doc = f.value("document", "");
+            std::string err = f.value("error", "");
+            const std::string prefix = "Can't index " + doc + ": ";
+            if (err.rfind(prefix, 0) == 0) err = err.substr(prefix.size());
+            return "\n- " + doc + ": " + err;
+        };
+        std::string summary;
+        if (status == "ok") {
+            if (indexed.size() == 1) {
+                summary = "Indexed " + indexed[0].value("document", "") + " (" + passageLabel(totalChunks) + ")";
+            } else {
+                summary = "Indexed " + std::to_string(indexed.size()) + " documents (" + passageLabel(totalChunks) + ")";
+            }
+        } else if (status == "error") {
+            if (failed.size() == 1) {
+                summary = failed[0].value("error", "Couldn't index document.");
+            } else {
+                summary = "Couldn't index " + std::to_string(failed.size()) + " documents:";
+                for (const auto& f : failed) summary += bulletDetail(f);
+            }
+        } else {
+            summary = indexed.size() == 1
+                          ? "Indexed " + indexed[0].value("document", "") + " (" + passageLabel(totalChunks) + ")"
+                          : "Indexed " + std::to_string(indexed.size()) + " documents (" + passageLabel(totalChunks) + ")";
+            summary += "; couldn't index " + std::to_string(failed.size()) +
+                       (failed.size() == 1 ? " document:" : " documents:");
+            for (const auto& f : failed) summary += bulletDetail(f);
+        }
+        json data = {{"status", status}, {"indexed", indexed}, {"failed", failed},
+                     {"summary", summary}, {"display_message", summary}};
+        if (!failed.empty()) data["has_errors"] = true;
+        s.console->emit({{"type", "tool_result"}, {"tool", "index_documents"}, {"data", data}});
         return unreadable;
     }
 

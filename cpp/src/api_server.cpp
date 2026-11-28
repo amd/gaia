@@ -537,8 +537,9 @@ struct ApiServer::Impl {
         if (req.has_header("Origin")) {
             std::string origin = req.get_header_value("Origin");
             if (!originAllowed(origin)) {
-                sendError(res, 403, "Origin '" + origin + "' is not allowed. Add it to "
-                                    "ServerOptions::allowedOrigins to permit browser access.",
+                sendError(res, 403, "Origin '" + origin + "' is not allowed. To permit browser access, start "
+                                    "gaiacpp serve with --allow-origin " + origin + " (in your own program, add it to "
+                                    "ServerOptions::allowedOrigins).",
                           "permission_error", "origin_not_allowed");
                 return HR::Handled;
             }
