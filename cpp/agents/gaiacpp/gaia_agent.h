@@ -136,7 +136,13 @@ public:
     /// command counts as a test run when it names a runner (not to install it or ask its
     /// version) or its output holds a runner's summary that the command didn't just print.
     static std::optional<std::pair<std::string, std::string>> unsupportedTestClaim(
-        const std::string& answer, const std::vector<CallSeen>& calls);
+        const std::string& answer, const std::vector<CallSeen>& calls,
+        const std::string& request = "");
+
+    /// The answer claims a shell command, script, or test ran, but no bash_execute call succeeded.
+    static std::optional<std::string> unrunCommandNote(const std::string& request,
+                                                       const std::string& answer,
+                                                       const std::vector<CallSeen>& calls);
 
     /// A file or page the turn read holds text addressed to an AI assistant, and
     /// the answer doesn't tell the user about it.
