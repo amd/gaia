@@ -500,13 +500,13 @@ TEST(MemoryStoreTest, ConcurrentStoresWithDifferentEmbeddersNeverMixDimensions) 
 
 TEST(MemoryStoreTest, KeywordOnlyRetrievalSurfacesEmbeddingNote) {
     MemoryStore m(":memory:", {}, "",
-                  "user.embeddinggemma-300m-GGUF is not downloaded; install it with `gaia download user.embeddinggemma-300m-GGUF`");
+                  "user.embeddinggemma-300m-GGUF is not downloaded; install it via Settings > Memory or `gaia download --agent rag`");
     m.remember("Prefers dark theme", "preference");
     ToolRegistry reg;
     m.registerTools(reg);
     const json out = reg.executeTool("recall", json{{"query", "dark"}});
     ASSERT_EQ(out["status"], "success");
-    EXPECT_NE(out["retrieval"].get<std::string>().find("gaia download user.embeddinggemma-300m-GGUF"),
+    EXPECT_NE(out["retrieval"].get<std::string>().find("gaia download --agent rag"),
               std::string::npos)
         << out.dump();
 }

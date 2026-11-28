@@ -436,11 +436,15 @@ std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::strin
         }
         foundNotDownloaded = true;
     }
+    const bool isDefaultEmbedder =
+        target == stripUser(kGaiaGpuEmbeddingModel) || target == stripUser(kGaiaNpuEmbeddingModel);
+    const std::string installHint =
+        isDefaultEmbedder ? "install it via Settings > Memory or `gaia download --agent rag`"
+                          : "install it via Settings > Memory";
     if (foundNotDownloaded) {
-        setReason(wanted + " is not downloaded; install it with `gaia download " + wanted + "`");
+        setReason(wanted + " is not downloaded; " + installHint);
     } else {
-        setReason(wanted + " is not available on " + client.baseUrl() +
-                  "; install it with `gaia download " + wanted + "`");
+        setReason(wanted + " is not available on " + client.baseUrl() + "; " + installHint);
     }
     return "";
 }
