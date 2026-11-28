@@ -6,6 +6,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AutomationsSettings, daysPhrase, everyPhrase } from '../AutomationsSettings';
+import { useActiveAgentStore } from '../../../stores/activeAgentStore';
 import { useChatStore } from '../../../stores/chatStore';
 import { translator } from '../../../i18n/useT';
 import type { Automation } from '../../../services/automationsApi';
@@ -46,6 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.unstubAllGlobals();
+    useActiveAgentStore.setState({ current: null });
     useChatStore.setState({ locale: 'en' });
 });
 
@@ -120,6 +122,23 @@ describe('AutomationsSettings', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }));
         expect(await screen.findByText(/No automations yet/)).toBeTruthy();
+    });
+
+    it('does not tell Fast and light users to recreate a removed automation in chat', async () => {
+        useActiveAgentStore.setState({ current: 'gaiacpp' });
+        routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
+        render(<AutomationsSettings />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+        const sheet = screen.getByRole('alertdialog');
+        expect(sheet.textContent).toMatch(/switch to Full-featured/);
+        expect(sheet.textContent).not.toMatch(/ask GAIA in chat/);
+    });
+
+    it('keeps the chat hint in the remove dialog on Full-featured', async () => {
+        routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
+        render(<AutomationsSettings />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+        expect(screen.getByRole('alertdialog').textContent).toMatch(/ask GAIA in chat/);
     });
 
     it('shows the backend reason when a change fails', async () => {

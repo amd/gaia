@@ -13,6 +13,7 @@ import {
     type Automation,
     type AutomationList,
 } from '../../services/automationsApi';
+import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import { useChatStore } from '../../stores/chatStore';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 
@@ -113,6 +114,7 @@ function AutomationCard({ item, busy, onToggle, onRemove }: {
 /** Settings > Automations: see, pause, resume and remove what GAIA runs on its own. */
 export function AutomationsSettings() {
     const t = useT();
+    const isNative = useActiveAgentStore((s) => s.current === 'gaiacpp');
     const openSettings = useChatStore((s) => s.openSettings);
     const [list, setList] = useState<AutomationList | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -199,7 +201,7 @@ export function AutomationsSettings() {
                     onConfirm={() => remove(confirm)}
                     onCancel={() => setConfirm(null)}
                 >
-                    <p>{t('settings.automations.removeBody')}</p>
+                    <p>{t(isNative ? 'settings.automations.removeBodyNative' : 'settings.automations.removeBody')}</p>
                 </ConfirmSheet>
             )}
         </div>
