@@ -257,10 +257,16 @@ TEST_F(GaiaSetup, ServerEmbeddingModelMatchesWithOrWithoutUserPrefix) {
     EXPECT_TRUE(reason.empty());
     EXPECT_EQ(resolveServerEmbeddingModel(client, "embed-gemma-300m-FLM", &reason), "")
         << "not-downloaded model must not be reported ready";
-    EXPECT_NE(reason.find("gaia download --agent rag"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("gaia config set embedding_device auto"), std::string::npos) << reason;
+    EXPECT_EQ(reason.find("gaia download --agent rag"), std::string::npos) << reason;
     EXPECT_EQ(resolveServerEmbeddingModel(client, "missing-embedder", &reason), "");
     EXPECT_NE(reason.find("Settings > Memory"), std::string::npos) << reason;
-    EXPECT_EQ(reason.find("gaia download missing-embedder"), std::string::npos) << reason;
+    EXPECT_EQ(reason.find("gaia download"), std::string::npos) << reason;
+
+    // Default GPU embedder not yet downloaded points at Settings > Memory or `gaia download --agent rag`.
+    mock.setModelsList(R"({"data":[{"id":"embeddinggemma-300m-GGUF","downloaded":false}]})");
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF", &reason), "");
+    EXPECT_NE(reason.find("gaia download --agent rag"), std::string::npos) << reason;
 }
 
 TEST_F(GaiaSetup, ServerEmbeddingModelFailsLoudlyOnHttp500AndMalformedJson) {

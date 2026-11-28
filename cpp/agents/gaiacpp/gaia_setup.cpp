@@ -436,11 +436,14 @@ std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::strin
         }
         foundNotDownloaded = true;
     }
-    const bool isDefaultEmbedder =
-        target == stripUser(kGaiaGpuEmbeddingModel) || target == stripUser(kGaiaNpuEmbeddingModel);
+    const bool isGpuEmbedder = target == stripUser(kGaiaGpuEmbeddingModel);
+    const bool isNpuEmbedder = target == stripUser(kGaiaNpuEmbeddingModel);
     const std::string installHint =
-        isDefaultEmbedder ? "install it via Settings > Memory or `gaia download --agent rag`"
-                          : "install it via Settings > Memory";
+        isGpuEmbedder
+            ? "install it via Settings > Memory or `gaia download --agent rag`"
+            : isNpuEmbedder
+                  ? "install it via Settings > Memory or run `gaia config set embedding_device auto`"
+                  : "install it via Settings > Memory";
     if (foundNotDownloaded) {
         setReason(wanted + " is not downloaded; " + installHint);
     } else {
