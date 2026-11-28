@@ -10,7 +10,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <cstdio>
+#include <iostream>
 #include <string>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include <gaia/memory_store.h>
 #include <gaia/session.h>
@@ -187,6 +192,30 @@ TEST(MakeStdinConfirmCallbackTest, ReturnsCallable) {
     EXPECT_TRUE(static_cast<bool>(cb));
 }
 
+#ifndef _WIN32
+// Input piped in, as `printf 'cancel my 3pm\n1\n' | gaiacpp --dangerously-skip-permissions` sends it.
+TEST(MakeStdinConfirmCallbackTest, PipedInputNeverApprovesACallOnlyAPersonMayApprove) {
+    const fs::path answer = fs::temp_directory_path() / testsupport::perProcess("gaia_piped_answer");
+    std::ofstream(answer) << "1\n";
+    const int keep = dup(0);
+    ASSERT_GE(keep, 0);
+    std::FILE* piped = std::freopen(answer.string().c_str(), "r", stdin);
+    ASSERT_NE(piped, nullptr);
+    std::cin.clear();
+    const auto decision = gaia::makeStdinConfirmCallback()("calendar/cancel_calendar_event",
+                                                            json{{"expected_title", "3pm"}, {"_needs_person", true}});
+    std::string unread;
+    std::getline(std::cin, unread);
+    dup2(keep, 0);
+    close(keep);
+    std::cin.clear();
+    std::error_code ec;
+    fs::remove(answer, ec);
+    EXPECT_EQ(decision, gaia::ToolConfirmResult::UNATTENDED);
+    EXPECT_EQ(unread, "1") << "the piped answer is left unread";
+}
+#endif
+
 // ---- shell grant scope ----
 
 TEST(ShellCommandScopeTest, ProgramOrSubcommandOrExact) {
@@ -341,6 +370,12 @@ TEST(InternetRefusalTest, RefusesWhatGoesOnline) {
     mcp.name = "search";
     mcp.mcpServer = "github";
     EXPECT_NE(internetRefusal(mcp, json::object()), "");
+
+    ToolInfo mailbox;
+    mailbox.name = "list_inbox";
+    mailbox.onlineService = true;
+    EXPECT_NE(internetRefusal(mailbox, json::object()).find("list_inbox, which calls an online service"),
+              std::string::npos);
 
     ToolInfo sh;
     sh.name = "bash_execute";

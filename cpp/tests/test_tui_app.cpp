@@ -16,6 +16,7 @@
 #include <ftxui/component/event.hpp>
 
 #include <gaia/agent.h>
+#include <gaia/person_approval.h>
 #include <gaia/security.h>
 #include <gaia/tui_app.h>
 
@@ -305,6 +306,40 @@ TEST(TuiApp, ConfirmModalShowsTheEndOfLongArguments) {
 
     app.handleEvent(ftxui::Event::Character('n'));
     ASSERT_TRUE(app.waitForIdle(10s));
+}
+
+TEST(TuiApp, ACalendarCardKeepsEveryRowAndCutsOnlyTheInviteList) {
+    bench::MockLlmServer mock;
+    TuiTestAgent agent(makeConfig(mock.baseUrl()));
+    TuiApp app(agent);
+
+    json args = {{"title", "Planning review"},
+                 {"start", "2030-01-12T10:00:00"},
+                 {"end", "2030-01-12T11:00:00"},
+                 {"location", "Room 4"},
+                 {"description", "DESC-START" + std::string(280, 'd') + "DESC-END"},
+                 {"notify_attendees", json::array()},
+                 {approval::kNeedsPersonArg, true}};
+    for (int i = 1; i <= 8; ++i) {
+        args["notify_attendees"].push_back("person" + std::to_string(i) + "@example.com");
+    }
+    auto answer = std::async(std::launch::async, [&] {
+        return app.confirmBroker().request("calendar/create_calendar_event", args);
+    });
+    ASSERT_TRUE(waitFor([&] { return app.modalVisible(); }));
+
+    const std::string frame = app.renderToString(80, 40);
+    for (const char* row : {"Title: Planning review", "When: ", "Location: Room 4", "DESC-START", "DESC-END",
+                            "Notifies: person1@example.com"}) {
+        EXPECT_TRUE(contains(frame, row)) << row << "\n" << frame;
+    }
+    EXPECT_TRUE(contains(frame, "Notifies: person1@example.com and 7 more")) << frame;
+    EXPECT_FALSE(contains(frame, "person8@example.com")) << frame;
+    EXPECT_FALSE(contains(frame, "characters hidden")) << frame;
+    EXPECT_TRUE(contains(frame, "[y] allow once")) << frame;
+
+    app.handleEvent(ftxui::Event::Character('n'));
+    EXPECT_EQ(answer.get(), ToolConfirmResult::DENY);
 }
 
 // A key typed while the agent was working is delivered *after* the modal

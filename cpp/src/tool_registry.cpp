@@ -9,6 +9,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "gaia/person_approval.h"
+
 namespace gaia {
 
 void ToolRegistry::registerTool(ToolInfo info) {
@@ -197,6 +199,22 @@ json ToolRegistry::buildOpenAiToolSchemas() const {
     return schemas;
 }
 
+namespace {
+
+// agent.py's wording when a tool's own permission check raises.
+json permissionCheckFailed(const std::string& tool, const std::exception& e) {
+    const char* type = dynamic_cast<const std::invalid_argument*>(&e) ? "ValueError" : "RuntimeError";
+    if (const auto* named = dynamic_cast<const PythonNamedError*>(&e)) type = named->pythonName();
+    return json{{"status", "error"},
+                {"error", tool + " was not run: its permission check failed (" + type + ": " + e.what() +
+                              "). Tell the user it did not run."},
+                {"tool_name", tool},
+                {"permission_check_failed", true},
+                {"executed", false}};
+}
+
+}  // namespace
+
 json ToolRegistry::executeTool(const std::string& name, const json& args) {
     const ToolInfo* tool = findTool(name);
     if (!tool) {
@@ -227,9 +245,15 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
 
     // 2. Argument validation (runs before confirmation so user sees clean args)
     json effectiveArgs = args;
+    // What an approval card shows is set by GAIA, never by the model's own arguments.
+    if (effectiveArgs.is_object()) {
+        for (const char* key : {approval::kExactTextArg, approval::kNeedsPersonArg, approval::kRiskNoteArg}) {
+            effectiveArgs.erase(key);
+        }
+    }
     if (tool->validateArgs.has_value()) {
         try {
-            effectiveArgs = (*tool->validateArgs)(resolvedName, args);
+            effectiveArgs = (*tool->validateArgs)(resolvedName, effectiveArgs);
         } catch (const std::invalid_argument& e) {
             return json{{"status", "error"}, {"error", std::string("Argument validation failed: ") + e.what()}};
         }
@@ -246,23 +270,76 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
     if (preCheck_) {
         if (auto refused = preCheck_(*tool, effectiveArgs)) return *refused;
     }
+    if (tool->preflight) {
+        std::optional<json> refused;
+        try {
+            refused = tool->preflight(effectiveArgs);
+        } catch (const std::exception& e) {
+            return permissionCheckFailed(resolvedName, e);
+        }
+        if (refused) {
+            json result = *refused;
+            if (result.is_object()) result["executed"] = false;
+            return result;
+        }
+    }
 
     // 3. CONFIRM check
     if (tool->policy == ToolPolicy::CONFIRM && !(tool->needsConfirm && !tool->needsConfirm(effectiveArgs))) {
+        auto notRun = [&](json result) {
+            if (tool->forget) tool->forget(effectiveArgs);
+            return result;
+        };
         // Fast path: already permanently allowed
         const std::string grantKey =
             tool->grantScope ? resolvedName + ":" + tool->grantScope(effectiveArgs) : resolvedName;
-        if (allowedStore_ && allowedStore_->isAlwaysAllowed(grantKey)) {
+        if (!tool->personMustApprove && allowedStore_ && allowedStore_->isAlwaysAllowed(grantKey)) {
             // proceed
         } else {
             // Fail-closed: no callback = deny
             if (!confirmCallback_) {
-                return json{{"status", "error"}, {"error", "Tool '" + resolvedName + "' requires confirmation but no callback is set"}};
+                return notRun(json{{"status", "error"}, {"error", "Tool '" + resolvedName + "' requires confirmation but no callback is set"}});
             }
 
-            if (auto refused = declinedRefusal(resolvedName, effectiveArgs)) return *refused;
+            if (auto refused = declinedRefusal(resolvedName, effectiveArgs)) return notRun(*refused);
 
-            ToolConfirmResult decision = confirmCallback_(resolvedName, effectiveArgs);
+            json shown = effectiveArgs;
+            if (tool->promptArgs) {
+                try {
+                    shown = tool->promptArgs(effectiveArgs);
+                } catch (const std::exception& e) {
+                    return notRun(permissionCheckFailed(resolvedName, e));
+                }
+            }
+            if (tool->personMustApprove) {
+                // Fail closed: a card that can't carry the mark could reach a prompt that auto-approves.
+                if (!shown.is_object()) {
+                    return notRun(json{{"status", "error"},
+                                       {"executed", false},
+                                       {"error", "Tool '" + resolvedName +
+                                                     "' was not run: its approval card could not be built."}});
+                }
+                shown[approval::kNeedsPersonArg] = true;
+            }
+            ToolConfirmResult decision;
+            try {
+                decision = confirmCallback_(resolvedName, shown);
+            } catch (...) {
+                if (tool->forget) tool->forget(effectiveArgs);
+                throw;
+            }
+            // A person approves each call on its own card, so nothing is remembered.
+            if (tool->personMustApprove && decision == ToolConfirmResult::ALWAYS_ALLOW) {
+                decision = ToolConfirmResult::ALLOW_ONCE;
+            }
+            if (tool->personMustApprove && decision == ToolConfirmResult::UNATTENDED) {
+                return notRun(json{{"status", "error"},
+                                   {"executed", false},
+                                   {"not_executed", true},
+                                   {"error", "'" + resolvedName +
+                                                 "' needs your approval and nobody can answer on this run. Start the "
+                                                 "request from the GAIA terminal UI or Agent UI to approve it there."}});
+            }
             if (decision == ToolConfirmResult::ALWAYS_ALLOW || decision == ToolConfirmResult::ALLOW_ONCE) {
                 noteApproved(resolvedName, effectiveArgs);
             }
@@ -272,16 +349,16 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
                 }
             } else if (decision == ToolConfirmResult::DENY) {
                 noteDeclined(resolvedName, effectiveArgs);
-                return json{{"status", "denied"},
-                            {"error", "Tool '" + resolvedName + "' execution denied by user"},
-                            {"hint", declinedHint()}};
+                return notRun(json{{"status", "denied"},
+                                   {"error", "Tool '" + resolvedName + "' execution denied by user"},
+                                   {"hint", declinedHint()}});
             } else if (decision == ToolConfirmResult::UNATTENDED) {
                 // Nobody said no, so other routes stay open and nothing is remembered.
-                return json{{"status", "error"},
-                            {"not_executed", true},
-                            {"error", "Tool '" + resolvedName +
-                                          "' was not run: it needs approval and nobody could give it." +
-                                          (unattendedRemedy_.empty() ? "" : " " + unattendedRemedy_)}};
+                return notRun(json{{"status", "error"},
+                                   {"not_executed", true},
+                                   {"error", "Tool '" + resolvedName +
+                                                 "' was not run: it needs approval and nobody could give it." +
+                                                 (unattendedRemedy_.empty() ? "" : " " + unattendedRemedy_)}});
             }
             // ALLOW_ONCE falls through
         }
@@ -733,7 +810,7 @@ std::string ToolRegistry::validateArgsAgainstSchema(
         }
 
         // Type-check if the parameter is present
-        if (effectiveArgs.contains(param.name)) {
+        if (effectiveArgs.contains(param.name) && !param.toolChecksType) {
             const auto& val = effectiveArgs[param.name];
             bool typeOk = false;
             switch (param.type) {

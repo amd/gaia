@@ -11,12 +11,15 @@
 //   2. user           ~/.gaia/skills/<name>/   ($GAIA_HOME/skills when set)
 //   3. claude-project ./.claude/skills/<name>/ (loadable, not listed)
 //   4. claude-import  ~/.claude/skills/<name>/ (loadable, not listed)
+//   5. built-in       a SKILL.md compiled into the program (setNativeTools)
 //
 // Skills that ship their own tools (tools.py) need the Python runtime; here
-// they load as instructions only, and load_skill says so.
+// they load as instructions only, and load_skill says so, unless this runtime
+// has its own port of those tools (setNativeTools).
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -29,6 +32,19 @@
 #include "gaia/tool_registry.h"
 
 namespace gaia {
+
+/// A skill's tools as this runtime ports them: registered disabled, turned on
+/// when the skill loads.
+struct GAIA_API NativeSkillTools {
+    std::vector<std::string> tools;  // namespaced, as registered
+    /// Why the skill can't load right now (a model not offered its tools); "" = it can.
+    std::function<std::string()> refusal;
+    /// Turns the tools on.
+    std::function<void()> activate;
+    /// The skill's SKILL.md, built into this program: listed and loadable when
+    /// no skill of that name is on disk. "" = the skill must be installed.
+    std::string builtIn;
+};
 
 struct GAIA_API SkillRoot {
     std::string label;  // agent-bundled | user | claude-project | claude-import
@@ -67,6 +83,11 @@ public:
 
     /// list_skills and load_skill.
     void registerTools(ToolRegistry& registry);
+
+    /// Tools for skill `name` that this runtime ports, so load_skill turns them
+    /// on instead of saying the skill's tools need Python. A built-in SKILL.md
+    /// is parsed here and throws SkillValidationError if it doesn't parse.
+    void setNativeTools(const std::string& name, NativeSkillTools tools);
 
     /// The user root (~/.gaia/skills, or $GAIA_HOME/skills).
     static std::string userRoot();
@@ -111,6 +132,10 @@ private:
     std::map<std::string, Skill> skills_;
     std::vector<std::string> failures_;
     std::vector<std::string> shadowed_;
+
+    std::map<std::string, NativeSkillTools> native_;
+    std::map<std::string, Skill> builtIn_;  // parsed from NativeSkillTools::builtIn
+    void addBuiltIns();
 
     mutable std::mutex loadedMutex_;
     std::map<std::string, Skill> loaded_;  // full skills loaded via the seam

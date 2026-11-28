@@ -31,7 +31,7 @@ import idna
 # Anywhere else it shows nothing, so it is a code. A one-line name (a path,
 # URL, id, a command's program or an "always allow" label) keeps none of
 # these: there they can only make one name read as another (strict_hidden).
-# CalendarApproval.tsx and gaiacpp's stdio_server.cpp mirror these lists;
+# CalendarApproval.tsx and gaiacpp's cpp/src/person_approval.cpp mirror these lists;
 # tests keep them equal.
 HIDDEN_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
 KEPT_AS_WRITTEN = frozenset(

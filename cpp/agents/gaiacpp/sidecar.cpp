@@ -22,11 +22,13 @@
 
 #include <httplib.h>
 
+#include <gaia/connectors.h>
 #include <gaia/console.h>
 #include <gaia/document_index.h>
 #include <gaia/ignore.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/person_approval.h>
 #include <gaia/security.h>
 #include <gaia/shell_guard.h>
 #include <gaia/skill_library.h>
@@ -353,7 +355,8 @@ public:
                                      "or ::1, not " + opts_.host + ".");
         }
         token_ = loadToken();
-        dropKeychainSecret();
+        // Connected accounts are read through the daemon's keychain, as the Python agent does.
+        connectors::installDaemonKeychainFromEnv();
         lemonadeKey_ = getEnvVar("LEMONADE_API_KEY");
         // Shells the agent starts inherit this environment; keep the secrets out of it.
         for (const char* secret : {"GAIA_GAIA_SIDECAR_TOKEN", "GAIA_GAIA_SIDECAR_TOKEN_FILE", "LEMONADE_API_KEY",
@@ -416,16 +419,6 @@ private:
                 "set GAIA_GAIA_SIDECAR_TOKEN.");
         }
         return env;
-    }
-
-    // The daemon hands over a keychain secret file the agent must remove; gaiacpp doesn't use it.
-    static void dropKeychainSecret() {
-        const std::string f = getEnvVar("GAIA_HOST_KEYCHAIN_SECRET_FILE");
-        if (!f.empty()) {
-            std::error_code ec;
-            fs::remove(f, ec);
-            if (ec) std::cerr << "gaiacpp: could not remove the keychain secret file " << f << ": " << ec.message() << std::endl;
-        }
     }
 
     // ---- request checks ----
@@ -553,6 +546,8 @@ private:
         cfg.maxHistoryMessages = 0;  // the UI fits history to the window
         cfg.responseMode = ResponseMode::Conversational;
         cfg.apiKey = server.apiKey;
+        // As on the Python agent and gaiacpp -p, this forces the model's feature tier.
+        if (const std::string tier = getEnvVar("GAIA_FEATURE_TIER"); !tier.empty()) cfg.featureTier = tier;
         GaiaAgent::Options o;
         o.maxHelpers = opts_.maxHelpers;
         if (roots.empty() && s.scoped) {
@@ -583,6 +578,10 @@ private:
         if (!s.shell) s.shell = BashTools::newSession();
         o.shell = s.shell;
         Session* raw = &s;
+        o.surface = [raw] {
+            std::lock_guard<std::mutex> lock(raw->currentMu);
+            return raw->current ? raw->current->surface : std::string();
+        };
         auto agent = std::make_unique<GaiaAgent>(cfg, o);
         agent->setPathAccessPrompt([this, raw](const std::string& path) { return askForPath(*raw, path); });
         auto console = std::make_unique<SidecarConsole>();
@@ -591,6 +590,10 @@ private:
         agent->setAllowedToolsStore(s.grants);
         agent->setToolConfirmCallback(
             [this, raw](const std::string& tool, const json& args) { return confirm(*raw, tool, args); });
+        agent->setNobodyToAsk([raw] {
+            std::lock_guard<std::mutex> lock(raw->currentMu);
+            return raw->current && raw->current->skipPermissions;
+        });
         // Stop holds even when it lands before the run resets its own flag.
         agent->setCancelCheck([raw] {
             std::lock_guard<std::mutex> lock(raw->currentMu);
@@ -633,14 +636,26 @@ private:
     }
 
     // Park the agent thread until the UI decides.
-    ToolConfirmResult confirm(Session& s, const std::string& tool, const json& args) {
-        if (s.bypass.load()) return ToolConfirmResult::ALLOW_ONCE;
+    ToolConfirmResult confirm(Session& s, const std::string& tool, const json& shownArgs) {
+        // A call only a person may approve: full access and pre-approval never answer it.
+        const bool needsPerson = shownArgs.is_object() && shownArgs.value(approval::kNeedsPersonArg, false);
+        json args = shownArgs;
+        std::string riskNote;
+        if (args.is_object()) {
+            args.erase(approval::kNeedsPersonArg);
+            if (args.contains(approval::kRiskNoteArg) && args[approval::kRiskNoteArg].is_string()) {
+                riskNote = args[approval::kRiskNoteArg].get<std::string>();
+            }
+            args.erase(approval::kRiskNoteArg);
+        }
+        if (s.bypass.load() && !needsPerson) return ToolConfirmResult::ALLOW_ONCE;
         std::shared_ptr<Run> run;
         {
             std::lock_guard<std::mutex> lock(s.currentMu);
             run = s.current;
         }
         if (!run) return ToolConfirmResult::UNATTENDED;
+        if (needsPerson && (run->unattended || run->skipPermissions)) return ToolConfirmResult::UNATTENDED;
         if (run->skipPermissions && tool != kPathAccessPrompt) return ToolConfirmResult::ALLOW_ONCE;
         if (run->unattended) {
             // Parking here would wait on a card nobody will ever see: end the turn instead.
@@ -662,16 +677,22 @@ private:
         const std::string scope = info && info->grantScope ? info->grantScope(args) : "";
         const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
                              judgeShellCommand(args.value("command", ""), "", {}, nullptr).compound;
-        const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
+        const std::string key = info && info->grantScope && !chained && !needsPerson ? tool + ":" + scope : "";
+        const bool calendarWrite = CalendarTools::isWriteTool(tool);
+        std::string summary = shell ? "Run: " + args.value("command", "")
+                              : pathAccess ? pathAccessQuestion(args)
+                              : calendarWrite ? CalendarTools::approvalSummary(args)
+                                              : "Use " + tool;
+        if (calendarWrite && !riskNote.empty()) summary += "\n" + riskNote;
         json ev = {{"type", "needs_confirmation"},
                    {"run_id", run->id},
                    {"action", tool},
-                   {"summary", shell ? "Run: " + args.value("command", "")
-                                     : pathAccess ? pathAccessQuestion(args) : "Use " + tool},
+                   {"summary", summary},
                    {"confirm_id", confirmId},
                    {"args", args}};
         if (!pathAccess) {
-            ev["risk"] = toolRisk(tool);
+            // As in Python, a calendar change leaves its label to the app's own table.
+            if (!calendarWrite) ev["risk"] = toolRisk(tool);
             ev["tool_label"] = tool;
         }
         if (!key.empty()) {
@@ -682,6 +703,9 @@ private:
         // The card's own risk line: this command was not checked, and can reach outside the chat's folders.
         const std::string unchecked = shell && s.agent ? s.agent->shellApprovalNote(args.value("command", "")) : "";
         if (!unchecked.empty()) ev["prompt_context"]["risk_note"] = unchecked;
+        if (!riskNote.empty()) ev["prompt_context"]["risk_note"] = riskNote;
+        // A calendar card shows the checked values: addresses as notified, the event's real title.
+        if (calendarWrite) ev["prompt_context"]["shown_args"] = args;
         run->push(ev);
         // Other chats may run while this one waits for its user.
         if (s.agent) s.agent->releaseNpu();

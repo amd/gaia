@@ -144,6 +144,16 @@ void GaiaAgent::registerTools() {
     workspace_ = ws;
     if (options_.maxHelpers != 0) toolRegistry().registerTool(delegateTaskTool());
     if (options_.webTools) WebTools::registerAll(toolRegistry(), webPages_);
+    if (options_.email) {
+        email_ = std::make_unique<EmailTools>(
+            EmailTools::Options{options_.surface, [this] { return config().toolResultCharLimit(); }, {}});
+        email_->registerAll(toolRegistry());
+    }
+    if (options_.calendar) {
+        calendar_ = std::make_unique<CalendarTools>(CalendarTools::Options{options_.surface, {}});
+        calendar_->registerAll(toolRegistry());
+        if (skills_) skills_->setNativeTools(CalendarTools::kSkillName, calendarSkillTools());
+    }
     if (docs_) {
         docs_->registerTools(toolRegistry(), ws ? std::function<std::string(const std::string&)>(
                                                       [ws](const std::string& p) { return ws->checkPath(p); })
@@ -662,9 +672,32 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
     return "about " + digits + " tokens of text in " + std::to_string(files) + " files";
 }
 
+NativeSkillTools GaiaAgent::calendarSkillTools() {
+    NativeSkillTools set;
+    set.tools = CalendarTools::toolNames();
+    set.builtIn = CalendarTools::skillMarkdown();
+    set.refusal = [this] {
+        if (!config().compactFeatures()) return std::string();
+        std::vector<std::string> names = CalendarTools::toolNames();
+        std::sort(names.begin(), names.end());
+        std::string joined;
+        for (const auto& n : names) joined += (joined.empty() ? "" : ", ") + n;
+        return "Skill '" + std::string(CalendarTools::kSkillName) + "' needs " + joined + ", which " +
+               config().modelId + " is not offered. Tell the user this needs a larger model; they can pick one in "
+               "the model list.";
+    };
+    set.activate = [this] {
+        calendarLoaded_ = true;
+        for (const auto& name : CalendarTools::toolNames()) toolRegistry().setEnabled(name, true);
+        rebuildSystemPrompt();
+    };
+    return set;
+}
+
 void GaiaAgent::onTurnStart() {
     // A page read last turn may have changed, and fetching it again is the user's call.
     webPages_->clear();
+    if (email_) email_->startTurn();
     // Rescan installed skills so skills added or removed mid-chat take effect immediately.
     if (skills_) {
         skills_->refresh();
@@ -682,6 +715,8 @@ void GaiaAgent::onTurnStart() {
     }
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
+    // A model the calendar tools are withheld from unloads the skill, as Python does.
+    if (compact) calendarLoaded_ = false;
     // Memory tools also follow the chat's switch, so the model isn't offered a tool it would be refused.
     const bool memOff = memoryOff();
     const bool memPrivate = memoryPrivate();
@@ -690,6 +725,7 @@ void GaiaAgent::onTurnStart() {
     gated.insert({"recall", "remember", "update_memory", "forget"});
     for (const auto& name : gated) {
         bool on = !(compact && std::find(withheld.begin(), withheld.end(), name) != withheld.end());
+        if (CalendarTools::isCalendarTool(name)) on = on && calendarLoaded_;
         if (name == "recall") on = on && !memOff;
         if (name == "remember" || name == "update_memory" || name == "forget") on = on && !memOff && !memPrivate;
         // Written only on a change, so a turn doesn't race readers on other threads for nothing.

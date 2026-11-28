@@ -130,6 +130,8 @@ public:
 
     /// Added to the refusal of a call nobody could approve, e.g. the flag that allows it.
     void setUnattendedRemedy(std::string remedy) { tools_.setUnattendedRemedy(std::move(remedy)); }
+    /// See ToolRegistry::setNobodyToAsk().
+    void setNobodyToAsk(std::function<bool()> check) { tools_.setNobodyToAsk(std::move(check)); }
 
     /// Set the confirmation callback for CONFIRM-policy tools.
     /// Delegates to ToolRegistry::setConfirmCallback().

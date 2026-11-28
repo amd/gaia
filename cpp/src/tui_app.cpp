@@ -17,6 +17,8 @@
 #include <ftxui/screen/screen.hpp>
 
 #include "gaia/agent.h"
+#include "gaia/calendar_tools.h"
+#include "gaia/person_approval.h"
 
 namespace gaia {
 
@@ -384,6 +386,9 @@ bool TuiApp::onModalEvent(const Event& event) {
         return true;
     }
     if (event == Event::Character('a') || event == Event::Character('A')) {
+        // A call only a person may approve offers no "always".
+        const json args = broker_->pending().args;
+        if (args.is_object() && args.value(approval::kNeedsPersonArg, false)) return true;
         if (broker_->resolve(id, ToolConfirmResult::ALWAYS_ALLOW)) {
             transcript_->addSystemLine("[ok] always allowed - stored in the allowed-tools file");
         }
@@ -547,26 +552,59 @@ std::string TuiApp::keyHint() const {
 
 Element TuiApp::buildModal() const {
     auto request = broker_->pending();
-    const std::string preview =
-        request.args.is_null()
-            ? std::string("{}")
-            : request.args.dump(-1, ' ', false, json::error_handler_t::replace);
-
-    // The end of a command matters as much as its start, so a long one keeps both.
-    std::vector<std::string> lines = hardWrap(preview, kArgsLineWidth);
-    if (lines.size() > kArgsMaxLines) {
-        const std::size_t keep = (kArgsMaxLines - 1) / 2;
-        std::size_t hidden = 0;
-        for (std::size_t i = keep; i < lines.size() - keep; ++i) {
-            for (unsigned char c : lines[i]) {
-                if ((c & 0xC0) != 0x80) ++hidden;
-            }
+    const bool needsPerson = request.args.is_object() && request.args.value(approval::kNeedsPersonArg, false);
+    json shown = request.args;
+    if (needsPerson) shown.erase(approval::kNeedsPersonArg);
+    auto wrapText = [](const std::string& text, std::vector<std::string>& out) {
+        std::size_t from = 0;
+        while (from <= text.size()) {
+            const std::size_t to = std::min(text.find('\n', from), text.size());
+            const auto wrapped = hardWrap(text.substr(from, to - from), kArgsLineWidth);
+            out.insert(out.end(), wrapped.begin(), wrapped.end());
+            from = to + 1;
         }
-        std::vector<std::string> shown(lines.begin(),
-                                       lines.begin() + static_cast<std::ptrdiff_t>(keep));
-        shown.push_back("... " + std::to_string(hidden) + " characters hidden ...");
-        shown.insert(shown.end(), lines.end() - static_cast<std::ptrdiff_t>(keep), lines.end());
-        lines = std::move(shown);
+    };
+
+    std::vector<std::string> lines;
+    if (CalendarTools::isWriteTool(request.toolName) && needsPerson) {
+        // Every row of the change stays readable; only a long invite list is cut short.
+        const auto card = CalendarTools::approvalCard(shown);
+        for (const auto& row : card.rows) wrapText(row, lines);
+        std::vector<std::string> noteLines;
+        const json& note = shown.value(approval::kRiskNoteArg, json());
+        if (note.is_string()) wrapText(note.get<std::string>(), noteLines);
+        const std::size_t used = lines.size() + noteLines.size();
+        const std::size_t budget = used + 1 < kArgsMaxLines ? kArgsMaxLines - used : 1;
+        std::string notifies = card.notifies.empty() ? std::string("nobody") : std::string();
+        for (std::size_t i = 0; i < card.notifies.size(); ++i) {
+            const std::string withNext = notifies + (i ? ", " : "") + card.notifies[i];
+            const std::size_t left = card.notifies.size() - i - 1;
+            const std::string more = left ? " and " + std::to_string(left) + " more" : "";
+            if (i > 0 && hardWrap("Notifies: " + withNext + more, kArgsLineWidth).size() > budget) {
+                notifies += " and " + std::to_string(card.notifies.size() - i) + " more";
+                break;
+            }
+            notifies = withNext;
+        }
+        wrapText("Notifies: " + notifies, lines);
+        lines.insert(lines.end(), noteLines.begin(), noteLines.end());
+    } else {
+        wrapText(shown.is_null() ? std::string("{}") : shown.dump(-1, ' ', false, json::error_handler_t::replace),
+                 lines);
+        // The end of a command matters as much as its start, so a long one keeps both.
+        if (lines.size() > kArgsMaxLines) {
+            const std::size_t keep = (kArgsMaxLines - 1) / 2;
+            std::size_t hidden = 0;
+            for (std::size_t i = keep; i < lines.size() - keep; ++i) {
+                for (unsigned char c : lines[i]) {
+                    if ((c & 0xC0) != 0x80) ++hidden;
+                }
+            }
+            std::vector<std::string> kept(lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(keep));
+            kept.push_back("... " + std::to_string(hidden) + " characters hidden ...");
+            kept.insert(kept.end(), lines.end() - static_cast<std::ptrdiff_t>(keep), lines.end());
+            lines = std::move(kept);
+        }
     }
 
     // ASCII rules instead of border(): FTXUI's border is box-drawing, and the
@@ -581,9 +619,11 @@ Element TuiApp::buildModal() const {
         rows.push_back(text((i == 0 ? "args: " : "      ") + lines[i]));
     }
     rows.push_back(separatorCharacter("-"));
-    rows.push_back(text("[y] allow once   [a] always allow   [n] deny   [esc] deny"));
+    rows.push_back(text(needsPerson ? "[y] allow once   [n] deny   [esc] deny"
+                                    : "[y] allow once   [a] always allow   [n] deny   [esc] deny"));
     rows.push_back(separatorCharacter("="));
-    return vbox(std::move(rows)) | size(WIDTH, LESS_THAN, 68) | size(HEIGHT, LESS_THAN, 17);
+    const int height = static_cast<int>(rows.size()) + 1;
+    return vbox(std::move(rows)) | size(WIDTH, LESS_THAN, 68) | size(HEIGHT, LESS_THAN, height);
 }
 
 Element TuiApp::buildFrame() {

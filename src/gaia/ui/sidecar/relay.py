@@ -47,6 +47,12 @@ from gaia.agents.base.tool_grants import (
     PROJECT_TRUST_PROMPT_TOOL,
     SITE_ARG,
 )
+from gaia.agents.base.tool_outcome import tool_result_dict
+from gaia.agents.tools.connect_card import (
+    CONNECT_CARD_KIND,
+    CONNECT_CARD_SUMMARY,
+    connect_card_in,
+)
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.logger import get_logger
 from gaia.ui.event_narration import (
@@ -57,6 +63,7 @@ from gaia.ui.event_narration import (
     sanitize_memory_result,
 )
 from gaia.ui.sidecar.native_tools import (
+    NATIVE_CHANGE_TOOLS,
     NATIVE_TOOL_LABELS,
     as_flagship_call,
     native_prompt_summary,
@@ -478,7 +485,7 @@ def _dispatch_one(
                 "narration": narration,
             }
         )
-        if tool in profile.mutating_tools:
+        if tool in profile.mutating_tools or tool in NATIVE_CHANGE_TOOLS:
             handler._emit(
                 {
                     "type": "status",
@@ -515,6 +522,19 @@ def _dispatch_one(
         # itself (``media_card``) from the path the payload carries.
         if render and render != "media":
             out["render"] = render
+        # The Connect button, drawn from the card a native tool's result carries.
+        connect = connect_card_in(data)
+        if connect is not None:
+            fault = str((tool_result_dict(data) or {}).get("error") or "")
+            said = fault.splitlines()[0][:200] if fault else CONNECT_CARD_SUMMARY
+            out["summary"] = said
+            out["data"] = {
+                **connect,
+                "success": success,
+                "status": "ok" if success else "error",
+                "display_message": said,
+            }
+            out["render"] = CONNECT_CARD_KIND
         handler._emit(out)
 
     elif etype == "needs_confirmation":

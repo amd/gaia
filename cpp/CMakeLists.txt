@@ -282,6 +282,9 @@ add_library(gaia_core
     src/database.cpp
     src/api_server.cpp
     src/web_tools.cpp
+    src/mail_text.cpp
+    src/mail_phishing.cpp
+    src/mail_waiting.cpp
     src/workspace.cpp
     src/shell_guard.cpp
     src/document_index.cpp
@@ -290,7 +293,32 @@ add_library(gaia_core
     src/keyring.cpp
     src/mcp_stdio_server.cpp
     src/secrets.cpp
+    src/mail_http.cpp
+    src/mail_gmail.cpp
+    src/connectors.cpp
+    src/mail_graph.cpp
+    src/connect_card.cpp
+    src/email_tools.cpp
+    src/person_approval.cpp
+    src/person_address.cpp
+    src/idna.cpp
+    src/calendar_model.cpp
+    src/calendar_backends.cpp
+    src/calendar_tools.cpp
 )
+
+# The mail sources compile as one unit, and the calendar's as another: each would otherwise carry its own copy of
+# the json templates, which roughly doubles their share of the static library.
+# Unity groups need CMake 3.18; older versions build the sources one by one.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+    set(GAIA_MAIL_SOURCES src/mail_text.cpp src/mail_phishing.cpp src/mail_waiting.cpp src/mail_http.cpp
+        src/mail_gmail.cpp src/connectors.cpp src/mail_graph.cpp src/connect_card.cpp src/email_tools.cpp)
+    set_source_files_properties(${GAIA_MAIL_SOURCES} PROPERTIES UNITY_GROUP mail)
+    set(GAIA_CALENDAR_SOURCES src/person_address.cpp src/idna.cpp src/calendar_model.cpp
+        src/calendar_backends.cpp src/calendar_tools.cpp)
+    set_source_files_properties(${GAIA_CALENDAR_SOURCES} PROPERTIES UNITY_GROUP calendar)
+    set_target_properties(gaia_core PROPERTIES UNITY_BUILD ON UNITY_BUILD_MODE GROUP)
+endif()
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
 # $<TARGET_OBJECTS:> rather than target_link_libraries keeps gaia_sqlite3 out of
@@ -309,6 +337,23 @@ if(GAIA_BUILD_TUI)
     )
     target_compile_definitions(gaia_core PUBLIC GAIA_HAS_TUI=1)
 endif()
+
+# A skill whose tools gaiacpp ports ships its SKILL.md inside the program, so it
+# loads on a clean install. The bytes become generated/skill_<name>.inc.
+function(gaia_embed_skill name)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/../hub/skills/${name}/SKILL.md")
+    if(NOT EXISTS "${source}")
+        message(FATAL_ERROR "gaia_embed_skill: ${source} is missing; gaia_core builds from the full GAIA checkout")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}")
+    file(READ "${source}" hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${hex}")
+    string(REGEX REPLACE "(0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,)" "\\1\n" bytes "${bytes}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/skill_${name}.inc"
+         "// Generated from hub/skills/${name}/SKILL.md by CMake. Do not edit.\n${bytes}\n")
+endfunction()
+gaia_embed_skill(calendar)
+target_include_directories(gaia_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_library(gaia::gaia_core ALIAS gaia_core)
 target_compile_definitions(gaia_core PRIVATE GAIA_CORE_VERSION="${PROJECT_VERSION}")
@@ -489,6 +534,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_mcp_registry.cpp
         tests/test_mcp_stdio_server.cpp
         tests/test_secrets.cpp
+        tests/test_mail_backends.cpp
         tests/test_mcp_http.cpp
         tests/test_agent_resilience.cpp
         tests/test_declined_calls.cpp
@@ -500,6 +546,11 @@ if(GAIA_BUILD_TESTS)
         tests/test_memory_store.cpp
         tests/test_skill_signing.cpp
         tests/test_media_tools.cpp
+        tests/test_mail_screens.cpp
+        tests/test_connectors.cpp
+        tests/test_email_tools.cpp
+        tests/test_calendar_tools.cpp
+        tests/test_person_approval.cpp
         agents/gaiacpp/gaia_agent.cpp
         agents/gaiacpp/delegation.cpp
         agents/gaiacpp/bash_tools.cpp

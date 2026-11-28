@@ -66,6 +66,7 @@ describe('AgentChoice', () => {
             "File changes it makes can't be undone from the chat.",
             'Document search matches words, not meaning.',
             "It can't create images, transcribe audio or turn a document into speech.",
+            "It can read your email and use your calendar, but can't send email.",
             "The context meter doesn't show how full the conversation is.",
         ]);
         expect(screen.queryByText(/fewer tools and features/)).not.toBeInTheDocument();

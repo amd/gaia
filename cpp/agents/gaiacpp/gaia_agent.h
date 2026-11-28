@@ -14,9 +14,11 @@
 #include <vector>
 
 #include <gaia/agent.h>
+#include <gaia/calendar_tools.h>
 #include <gaia/document_index.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/email_tools.h>
 #include <gaia/process.h>
 #include <gaia/shell_guard.h>
 #include <gaia/skill_library.h>
@@ -63,6 +65,11 @@ public:
         int maxHelpers = -1;
         int helperMaxSteps = 30;         // one helper's step budget
         int helperTimeoutSeconds = 600;  // one helper's wall-clock limit
+        // The front-end of the run in progress ("agent_ui", "tui", "cli"); unset = a terminal.
+        // It decides how the mail tools word a missing account.
+        std::function<std::string()> surface;
+        bool email = true;     // the connected mailbox's read tools
+        bool calendar = true;  // the calendar skill's tools, on once the skill loads
     };
 
     /// Have a host ask the user before a tool is refused a path outside the
@@ -275,12 +282,16 @@ private:
     std::unique_ptr<DocumentIndex> code_;
 
     void registerCodeTools(std::shared_ptr<const Workspace> ws);
+    NativeSkillTools calendarSkillTools();
     std::unique_ptr<MemoryStore> memory_;
     std::unique_ptr<LemonadeClient> visionClient_;
 
     json delegateTasks(const json& args);
     std::shared_ptr<Workspace> workspace_;  // null with full access
     std::shared_ptr<WebPageCache> webPages_ = std::make_shared<WebPageCache>();  // cleared each turn
+    std::unique_ptr<EmailTools> email_;
+    std::unique_ptr<CalendarTools> calendar_;
+    std::atomic<bool> calendarLoaded_{false};  // load_skill("calendar") ran in this chat
     std::function<bool(const std::string& path)> askPathAccess_;
     std::vector<std::string> openedFolders_;  // opened by the user since the start; guarded by turnListingMu_
     /// The folders the agent started with, then those the user opened since.
