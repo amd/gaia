@@ -26,12 +26,16 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.home import chat_data_dirs
+from gaia.utils.sizes import format_size
 from gaia.utils.terminal import stdin_is_interactive
 
 logger = logging.getLogger(__name__)
 
 # Audit logger — separate from main logger for file operation tracking
 audit_logger = logging.getLogger("gaia.security.audit")
+
+# Old private name, still imported by tests.
+_format_size = format_size
 
 
 def ensure_audit_log_handler(cache_dir: Optional[Path] = None) -> None:
@@ -129,6 +133,10 @@ SENSITIVE_FILE_NAMES: Set[str] = {
     # gaia.ui.api_token.TOKEN_FILE_NAME: the Agent UI's API token.
     "agent-ui-token",
 }
+
+# Never written, but free to read at exactly this path: the world-readable
+# account list holds no secrets (password hashes live in ``shadow``).
+PUBLIC_SYSTEM_FILES: Tuple[str, ...] = ("/etc/passwd",)
 
 # Sensitive file extensions
 SENSITIVE_EXTENSIONS: Set[str] = {
@@ -552,6 +560,22 @@ def _is_os_file(path: Path) -> bool:
     return not _path_is_within(Path(normalized), Path.home())
 
 
+def is_public_system_file(path: str) -> bool:
+    """Whether *path* resolves to exactly a :data:`PUBLIC_SYSTEM_FILES` entry.
+
+    Only an absolute path counts, and never on Windows, which has no such file.
+    """
+    if os.name == "nt" or not os.path.isabs(path):
+        return False
+    try:
+        real = os.path.realpath(path)
+        public = {os.path.realpath(p) for p in PUBLIC_SYSTEM_FILES}
+    except (OSError, ValueError) as exc:
+        logger.debug("Not judged public (%s)", type(exc).__name__)
+        return False
+    return real in public
+
+
 def is_credential_file_name(name: str) -> bool:
     """Whether a file called *name* is one the read tools refuse by name.
 
@@ -605,7 +629,7 @@ def credential_file_read(word: str, cwd: str) -> Optional[str]:
         except (OSError, ValueError) as exc:
             logger.debug("Not a file on disk (%s)", type(exc).__name__)
             present, is_dir, real = False, False, ""
-        if is_dir:
+        if is_dir or (present and is_public_system_file(real)):
             continue
         if names_credential_file(spelling):
             return spelling
@@ -1030,7 +1054,9 @@ def read_block(path: str) -> Tuple[bool, str]:
         file_name = real_path.name.lower()
         file_ext = real_path.suffix.lower()
 
-        if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
+        if file_name in {
+            s.lower() for s in SENSITIVE_FILE_NAMES
+        } and not is_public_system_file(str(real_path)):
             return (
                 True,
                 f"Read blocked: '{real_path.name}' holds credentials, keys or "
@@ -2241,7 +2267,7 @@ class PathValidator:
             )
             return True
 
-        size_str = _format_size(existing_size)
+        size_str = format_size(existing_size)
         with self._prompt_guard():
             print(f"\n⚠️  File already exists: {path} ({size_str})")
 
@@ -2275,7 +2301,7 @@ class PathValidator:
             status: Result status (success, denied, error).
             detail: Additional detail about the operation.
         """
-        size_str = _format_size(size) if size > 0 else "N/A"
+        size_str = format_size(size) if size > 0 else "N/A"
         msg = f"{operation.upper()} | {status} | {path} | {size_str}"
         if detail:
             msg += f" | {detail}"
@@ -2379,15 +2405,3 @@ def _is_interactive() -> bool:
     inside the Agent UI server, API server, or any non-TTY context (CI, pipe).
     """
     return stdin_is_interactive()
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format byte count to human-readable string."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"

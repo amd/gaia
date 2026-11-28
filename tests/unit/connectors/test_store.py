@@ -138,35 +138,44 @@ class TestRoundTrip:
 
 
 class TestLargeBlobChunking:
-    """#1275: Windows Credential Manager caps a blob at ~2560 bytes. Microsoft
-    refresh tokens (~1600 chars) exceed it, so the store transparently chunks
-    oversized values across extra slots. These tests exercise that path (the
-    in-memory keyring has no size cap, so we assert the chunk *mechanics*
-    directly rather than relying on a backend to reject the write)."""
+    """Large blobs round-trip directly in the encrypted vault, and legacy
+    chunked Keychain entries (#1275) still fail-safe on torn state and get
+    swept on overwrite or delete."""
 
     def test_torn_rewrite_fails_safe_to_none(self):
-        # A crashed mid-rewrite (chunk overwritten but manifest still points at
-        # a stale count/CRC) must NOT reassemble into a truncated-but-valid
+        # A legacy crashed mid-rewrite (chunk overwritten while manifest still
+        # points at a stale CRC) must NOT reassemble into a truncated-but-valid
         # token — the CRC guard turns it into None ("reconnect").
-        import keyring as _kr
+        import json as _json
 
-        from gaia.connectors.store import _chunk_username
-
-        save_connection(
-            provider="microsoft",
-            account_email="a@example.com",
-            refresh_token="R" * (_CHUNK_CHARS * 2),  # 2 chunks
-            scopes=["s1"],
-            client_id_hash="h",
-        )
         username = _connection_username("microsoft", "default")
-        # Simulate a torn rewrite: chunk #0 gets new (longer) data, but the
-        # manifest still describes the old payload.
-        _kr.set_password(SERVICE_NAME, _chunk_username(username, 0), "X" * _CHUNK_CHARS)
+        payload = _json.dumps(
+            {
+                "account_email": "a@example.com",
+                "client_id_hash": "h",
+                "connected_at": 1.0,
+                "refresh_token": "R" * (_CHUNK_CHARS * 2),
+                "scopes": ["s1"],
+            }
+        )
+        chunks = [
+            payload[i : i + _CHUNK_CHARS] for i in range(0, len(payload), _CHUNK_CHARS)
+        ]
+        for idx, part in enumerate(chunks):
+            keyring.set_password(SERVICE_NAME, _chunk_username(username, idx), part)
+        keyring.set_password(
+            SERVICE_NAME,
+            username,
+            f"{_CHUNK_SENTINEL}{len(chunks)}:{_payload_crc(payload)}",
+        )
+        # Simulate a torn rewrite: chunk #0 gets overwritten without updating manifest.
+        keyring.set_password(
+            SERVICE_NAME, _chunk_username(username, 0), "X" * _CHUNK_CHARS
+        )
         assert load_connection("microsoft", current_client_id_hash="h") is None
 
     def test_large_refresh_token_round_trips(self):
-        big_token = "R" * (_CHUNK_CHARS * 3 + 17)  # forces 4 chunks
+        big_token = "R" * (_CHUNK_CHARS * 3 + 17)  # exceeds 1280-char Win limit
         save_connection(
             provider="microsoft",
             account_email="a@example.com",
@@ -178,7 +187,29 @@ class TestLargeBlobChunking:
         assert blob is not None
         assert blob["refresh_token"] == big_token
 
-    def test_large_blob_writes_sentinel_and_chunk_slots(self):
+    def test_large_blob_is_in_vault_and_mirrored_as_legacy_chunks(self):
+        import json as _json
+
+        from gaia.connectors import vault
+        from gaia.connectors.store import _kr_legacy_get
+
+        username = _connection_username("microsoft", "default")
+        keyring.set_password(
+            SERVICE_NAME,
+            username,
+            _json.dumps(
+                {
+                    "account_email": "a@example.com",
+                    "client_id_hash": "h",
+                    "connected_at": 1.0,
+                    "refresh_token": "old",
+                    "scopes": ["s1"],
+                }
+            ),
+        )
+        # Reading migrates it, which is what makes later saves mirror it.
+        assert load_connection("microsoft", current_client_id_hash="h")
+
         big_token = "R" * (_CHUNK_CHARS * 2)
         save_connection(
             provider="microsoft",
@@ -187,14 +218,11 @@ class TestLargeBlobChunking:
             scopes=["s1"],
             client_id_hash="h",
         )
-        username = _connection_username("microsoft", "default")
-        # Base slot holds the manifest sentinel, not raw JSON.
-        base = keyring.get_password(SERVICE_NAME, username)
-        assert base.startswith(_CHUNK_SENTINEL)
-        # At least the first chunk slot exists.
-        assert (
-            keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
-        )
+        assert keyring.get_password(SERVICE_NAME, vault.MASTER_KEY_USERNAME) is not None
+        assert vault.vault_path().exists()
+        # Transition release: an older build still reads the chunked legacy copy.
+        assert keyring.get_password(SERVICE_NAME, username).startswith(_CHUNK_SENTINEL)
+        assert big_token in _kr_legacy_get(username)
 
     def test_delete_removes_all_chunk_slots(self):
         big_token = "R" * (_CHUNK_CHARS * 2)
@@ -211,21 +239,29 @@ class TestLargeBlobChunking:
         assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
         assert load_connection("microsoft", current_client_id_hash="h") is None
 
-    def test_shrink_from_chunked_to_small_sweeps_stale_chunks(self):
-        # A large value (chunked) overwritten by a small one must not leave
-        # orphaned chunk slots that a later reader could trip over.
+    def test_overwrite_sweeps_legacy_chunk_slots(self):
+        # Overwriting a migrated connection that had legacy chunked Keychain
+        # slots replaces the legacy copy with the current value and sweeps the
+        # stale chunk slots.
+        import json as _json
+
+        from gaia.connectors.store import _kr_legacy_set
+
         username = _connection_username("microsoft", "default")
-        save_connection(
-            provider="microsoft",
-            account_email="a@example.com",
-            refresh_token="R" * (_CHUNK_CHARS * 2),
-            scopes=["s1"],
-            client_id_hash="h",
+        _kr_legacy_set(
+            username,
+            _json.dumps(
+                {
+                    "account_email": "a@example.com",
+                    "client_id_hash": "h",
+                    "connected_at": 1.0,
+                    "refresh_token": "R" * (_CHUNK_CHARS * 2),
+                    "scopes": ["s1"],
+                }
+            ),
         )
-        assert (
-            keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
-        )
-        # Overwrite with a short token — stored raw, chunk slots swept.
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 1))
+        assert load_connection("microsoft", current_client_id_hash="h")
         save_connection(
             provider="microsoft",
             account_email="a@example.com",
@@ -233,7 +269,9 @@ class TestLargeBlobChunking:
             scopes=["s1"],
             client_id_hash="h",
         )
+        assert '"short"' in keyring.get_password(SERVICE_NAME, username)
         assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 1)) is None
         blob = load_connection("microsoft", current_client_id_hash="h")
         assert blob["refresh_token"] == "short"
 
@@ -585,25 +623,23 @@ class TestPeekConnection:
         assert blob is not None
         assert blob["client_id_hash"] == "OLD-HASH"
         # And the entry is still there — peek did not clear it.
+        from gaia.connectors import vault
+
         assert (
-            keyring.get_password(
-                SERVICE_NAME, _connection_username("google", "default")
-            )
+            vault.get(_connection_username("google", "default"), migrate=False)
             is not None
         )
 
     def test_corrupt_blob_returns_none_without_clearing(self):
         # A corrupt blob (not valid JSON) is treated as "not configured"
         # but the entry stays put — clearing is load_connection's job.
-        keyring.set_password(
-            SERVICE_NAME, _connection_username("google", "default"), "{not json"
-        )
+        from gaia.connectors import vault
+
+        vault.put(_connection_username("google", "default"), "{not json")
         assert peek_connection("google") is None
         assert (
-            keyring.get_password(
-                SERVICE_NAME, _connection_username("google", "default")
-            )
-            is not None
+            vault.get(_connection_username("google", "default"), migrate=False)
+            == "{not json"
         )
 
 
@@ -827,7 +863,15 @@ class TestMacOSKeychainNulTruncation:
             scopes=["s1"],
             client_id_hash="h",
         )
-        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+        assert (
+            load_connection("microsoft", current_client_id_hash="h")["refresh_token"]
+            == "fresh"
+        )
+        # An unreadable legacy item was never migrated, so the save leaves it
+        # alone rather than writing old-style items.
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) == (
+            "stale"
+        )
 
 
 def test_manifest_from_an_earlier_release_still_reads_where_nul_survives():

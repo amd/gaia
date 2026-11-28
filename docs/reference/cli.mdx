@@ -2047,7 +2047,8 @@ What it does not cover:
 - An MCP server you add yourself rather than from the connector catalog, even one
   that searches the web (a Brave or SearXNG server, for example): GAIA can't tell
   what it reaches, so its tools keep running. Remove its entry from
-  `~/.gaia/mcp_servers.json` if it must not run while Local only is on.
+  `mcp_servers.json` if it must not run while Local only is on: the one in
+  `~/.gaia/`, or the one in the folder you start GAIA from.
 - A Lemonade Server you run on another machine: GAIA treats the models it lists as
   local, so prompts go to that machine.
 - An agent sidecar built before this setting existed: it runs its
@@ -2407,7 +2408,7 @@ case a free one is picked and remembered, and the key changes with it. `start` w
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 2026.44.1 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.48.3 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:

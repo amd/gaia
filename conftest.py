@@ -548,7 +548,8 @@ def _guard_real_gaia_home():
     real home, and a daemon spawned without ``GAIA_HOME`` -- that daemon owns,
     and on shutdown stops, the real home's server.
     """
-    from gaia.daemon import client, paths as daemon_paths
+    from gaia.daemon import client
+    from gaia.daemon import paths as daemon_paths
     from gaia.llm import lemonade_service
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
@@ -785,6 +786,31 @@ def _redirect_default_databases():
         ):
             mp.setattr(module, "gaia_home", redirected_home)
             mp.setattr(cls, "__init__", redirect_init(cls.__init__))
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_credential_vault(tmp_path):
+    """Give each test its own ``vault.enc`` unless the test moves HOME or GAIA_VAULT_FILE.
+
+    Isolates both the developer's real ``~/.gaia`` and the session-scoped
+    ``_session_gaia_home`` directory so tests that reset an in-memory keyring
+    per test never collide on a shared ``vault.enc``. Uses its own MonkeyPatch
+    context so a test calling ``monkeypatch.undo()`` cannot undo isolation.
+    """
+    from gaia.connectors import vault as vault_mod
+
+    real_vault_path = vault_mod.vault_path
+    baseline = real_vault_path()
+
+    def isolated_vault_path() -> Path:
+        candidate = real_vault_path()
+        if candidate == baseline or _is_real_gaia_home(candidate):
+            return tmp_path / ".gaia" / "connectors" / "vault.enc"
+        return candidate
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(vault_mod, "vault_path", isolated_vault_path)
         yield
 
 

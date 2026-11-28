@@ -78,7 +78,7 @@ def is_small_window(window: Optional[int]) -> bool:
 
 
 def body_tokens(skill: Any) -> int:
-    """Prompt tokens *skill*'s body costs, on the 4-chars-per-token estimate."""
+    """Prompt tokens *skill*'s body costs, per ``estimate_prompt_tokens``."""
     from gaia.agents.tools.skill_library_tools import estimate_prompt_tokens
 
     return estimate_prompt_tokens(getattr(skill, "body", "") or "")
