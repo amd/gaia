@@ -121,6 +121,7 @@ var toolPhrases = map[string]toolPhrase{
 	"analyze_image":      {With: "Looking at %s", Without: "Looking at an image", Arg: "path"},
 	"transcribe_audio":   {With: "Transcribing %s", Without: "Transcribing a recording", Arg: "path"},
 	"read_tool_output":   {Without: "Re-reading an earlier result"},
+	"set_loop_state":     {Without: "Tracking progress"},
 	"list_mcp_prompts":   {Without: "Listing a connector's prompts"},
 	"get_mcp_prompt":     {With: "Reading the connector prompt %s", Without: "Reading a connector's prompt", Arg: "name"},
 	"list_mcp_resources": {Without: "Listing a connector's resources"},

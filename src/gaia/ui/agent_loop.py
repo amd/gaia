@@ -322,13 +322,6 @@ class AgentLoop:
         if agent_mode == "manual":
             return LoopDirective("paused", reason="agent_mode=manual")
 
-        # Goals run on Full-featured's memory; gaiacpp lacks Goals and set_loop_state.
-        from gaia.daemon.sidecars import fetch
-
-        if fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
-            logger.debug("AgentLoop: paused while flagship_agent=gaiacpp")
-            return LoopDirective("paused", reason="flagship_agent=gaiacpp")
-
         # ── Hourly rate limit ────────────────────────────────────────────
         # Check before the session/goal lookups so a spent budget short-circuits;
         # the counter is only incremented once a tick reaches _execute_tick.
@@ -566,9 +559,11 @@ class AgentLoop:
                 agent_type = session.get("agent_type") or "chat"
                 registry = _helpers._agent_registry
                 flagship = registry.get("gaia") if registry is not None else None
-                if flagship is not None and flagship.is_sidecar:
-                    # The agent runs as its own binary, as the apps ship it: the
-                    # tick goes to it through the daemon, as scheduled prompts do.
+                if (
+                    flagship is not None and flagship.is_sidecar
+                ) or _helpers._native_flagship_chosen():
+                    # The agent runs as its own binary (packaged Python flagship or gaiacpp):
+                    # the tick goes to it through the daemon, as scheduled prompts do.
                     # Its set_loop_state call reaches sse_handler through the relay.
                     model_id = db.get_setting("custom_model") or session.get("model")
                     if not _may_spend(model_id):

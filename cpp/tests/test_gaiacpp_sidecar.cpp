@@ -2762,4 +2762,40 @@ TEST_F(GaiacppSidecar, AnswerCheckRetractsStreamedDraftWithoutLeakingReviewPromp
     EXPECT_EQ(events.back()["answer"], "I could not save report.md; here is the summary inline.");
 }
 
+TEST_F(GaiacppSidecar, UnattendedGoalTickCallsSetLoopStateOverSseWithoutConfirmation) {
+    mock().pushResponse(toolReply(
+        "set_loop_state",
+        {{"state", "idle"}, {"goal_outcome", "done"}, {"reason", "14 * 12 = 168"}}));
+    mock().pushResponse(answerReply("14 * 12 = 168. Goal completed."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-goal-tick",
+                            "[Autonomous tick — 1 pending goal(s)]\nCompute 14 * 12 and call set_loop_state.",
+                            {{"surface", "agent_ui"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_EQ(t.status(), 200) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+
+    bool sawCall = false;
+    bool sawResult = false;
+    for (const auto& ev : events) {
+        EXPECT_NE(ev["type"], "needs_confirmation") << "set_loop_state must never ask for approval: " << ev.dump();
+        if (ev["type"] == "tool_call" && ev.value("tool", "") == "set_loop_state") {
+            sawCall = true;
+            EXPECT_EQ(ev["args"]["state"], "idle");
+            EXPECT_EQ(ev["args"]["goal_outcome"], "done");
+            EXPECT_EQ(ev["args"]["reason"], "14 * 12 = 168");
+        } else if (ev["type"] == "tool_result" && ev.value("tool", "") == "set_loop_state") {
+            sawResult = true;
+            EXPECT_EQ(ev["data"]["status"], "ok") << ev.dump();
+            EXPECT_EQ(ev["data"]["goal_outcome"], "done");
+            EXPECT_EQ(ev["data"]["state"], "idle");
+        }
+    }
+    EXPECT_TRUE(sawCall) << t.describe();
+    EXPECT_TRUE(sawResult) << t.describe();
+    EXPECT_FALSE(events.back().value("failed", false)) << events.back().dump();
+}
+
 }  // namespace

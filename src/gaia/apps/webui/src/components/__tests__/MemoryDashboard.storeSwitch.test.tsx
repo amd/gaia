@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe('MemoryDashboard agent switch', () => {
-    it('clears Full-featured database stats and goal badge after switching to Fast and light', async () => {
+    it('clears Full-featured database stats while keeping Goals after switching to Fast and light', async () => {
         const { container } = render(<MemoryDashboard />);
         fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
 
@@ -61,8 +61,8 @@ describe('MemoryDashboard agent switch', () => {
         await screen.findByText(/Showing what Fast and light remembers/);
         await waitFor(() => {
             expect(container.querySelector('.mem-db-footer')).toBeNull();
-            expect(container.querySelector('.mem-tab-badge')).toBeNull();
         });
+        expect(container.querySelector('.mem-tab-badge')?.textContent).toBe('2');
         expect(mockedApi.getMemoryStats).toHaveBeenCalledTimes(statsCallsBefore);
     });
 });

@@ -2064,7 +2064,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
         "sources": false,
         "sensitive_toggle": false,
         "recategorize": false,
-        "goals": false,
+        "goals": true,
         "profile": false,
         "advanced": false
       }
@@ -2075,7 +2075,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     |-------|-------------|
     | `agent` | `gaiapy` or `gaiacpp`. |
     | `other_available` | Whether the other agent can be chosen on this PC. For `gaiapy` it says whether `gaiacpp` is installed; for `gaiacpp` it is always `true`. |
-    | `supports` | All `true` for `gaiapy`, all `false` for `gaiacpp`: its store has no due dates, no record of where a memory came from, can't change an existing memory's sensitive flag or category, and the goals, profile-discovery and Advanced tools belong to the Python agent's store. |
+    | `supports` | All `true` for `gaiapy`. For `gaiacpp`, only `goals` is `true` (goals live in the shared `goals.db` and run through its `set_loop_state` tool); the rest are `false`: its store has no due dates, no record of where a memory came from, can't change an existing memory's sensitive flag or category, and the profile-discovery and Advanced tools belong to the Python agent's store. |
   </Accordion>
 
   <Accordion title="GET /api/memory/stats">

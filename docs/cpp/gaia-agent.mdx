@@ -346,7 +346,7 @@ A few things answer the way an older flagship would, and the UI copes with each:
 
 Some things differ from the Python agent, and the Agent UI lists them under **Compare the two**:
 
-- Memory is separate. `gaiacpp` keeps its own `memory-cpp.db`, so what the Python agent remembered isn't seen here, and the other way round. The app's Memory page shows the memory of the agent this PC is set to use: with `gaiacpp` chosen it lists, searches, adds, edits and deletes `gaiacpp`'s memories, and the tools that belong to the Python agent's memory (due dates, where a memory came from, changing a memory's category or sensitive flag, goals, profile discovery and the Advanced tab) are refused with the reason.
+- Memory is separate. `gaiacpp` keeps its own `memory-cpp.db`, so what the Python agent remembered isn't seen here, and the other way round. The app's Memory page shows the memory of the agent this PC is set to use: with `gaiacpp` chosen it lists, searches, adds, edits and deletes `gaiacpp`'s memories, and the tools that belong to the Python agent's memory (due dates, where a memory came from, changing a memory's category or sensitive flag, profile discovery and the Advanced tab) are refused with the reason. Background goals (`Memory > Goals`) use the shared `goals.db` and run through `gaiacpp`'s `set_loop_state` tool.
 - Document search is keyword-only. The daemon starts the sidecar without an embedding model, so passages are ranked by words and not by meaning.
 - `generate_image` and `transcribe_audio` are absent, because the sidecar is started without `--image-model` or `--transcribe-model`. There is no document-to-speech tool.
 

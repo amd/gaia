@@ -275,7 +275,7 @@ def test_store_says_gaiacpp_and_what_its_memory_cannot_do(
             "sources": False,
             "sensitive_toggle": False,
             "recategorize": False,
-            "goals": False,
+            "goals": True,
             "profile": False,
             "advanced": False,
         },

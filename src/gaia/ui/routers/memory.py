@@ -301,6 +301,8 @@ _GAIACPP_SUPPORT_KEYS = (
     "profile",
     "advanced",
 )
+# Goals live in goals.db independently of memory-cpp.db and run via gaiacpp's set_loop_state.
+_GAIACPP_SUPPORTED_FEATURES = frozenset({"goals"})
 _GAIACPP_TOO_OLD = (
     "This gaiacpp is too old to change its memory from the app. Update gaiacpp "
     "under Settings › Agent & model, then try again."
@@ -650,7 +652,9 @@ def memory_store_info() -> Dict:
         return {
             "agent": _GAIACPP,
             "other_available": True,
-            "supports": {key: False for key in _GAIACPP_SUPPORT_KEYS},
+            "supports": {
+                key: key in _GAIACPP_SUPPORTED_FEATURES for key in _GAIACPP_SUPPORT_KEYS
+            },
         }
     return {
         "agent": _GAIAPY,
