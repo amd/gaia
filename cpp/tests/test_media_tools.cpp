@@ -397,6 +397,7 @@ TEST(MediaToolsTest, ListSdModelsFiltersImageModelsAndReportsSavedDefault) {
     for (const auto& m : r["models"]) names.push_back(m["name"].get<std::string>());
     EXPECT_NE(std::find(names.begin(), names.end(), "SDXL-Turbo"), names.end());
     EXPECT_NE(std::find(names.begin(), names.end(), "Z-Image-Turbo"), names.end());
+    EXPECT_EQ(std::find(names.begin(), names.end(), "Flux-2-Klein-4B"), names.end());
     EXPECT_EQ(std::find(names.begin(), names.end(), "Qwen3.6-35B-A3B-GGUF"), names.end());
     EXPECT_EQ(std::find(names.begin(), names.end(), "RealESRGAN-x4plus"), names.end());
 }

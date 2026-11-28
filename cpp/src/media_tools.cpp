@@ -449,6 +449,7 @@ void MediaTools::registerAll(ToolRegistry& registry, MediaToolsOptions options) 
                 json models = json::array();
                 for (const auto& entry : catalog["data"]) {
                     if (!isImageCatalogEntry(entry)) continue;
+                    if (entry.contains("downloaded") && !entry.value("downloaded", false)) continue;
                     const std::string id = entry.value("id", "");
                     json item = {{"name", id}};
                     if (entry.contains("recipe") && entry["recipe"].is_string()) {
