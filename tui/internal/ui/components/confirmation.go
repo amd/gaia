@@ -137,11 +137,11 @@ var confirmationRiskTiers = map[string]RiskTier{
 	// Erases every memory and past conversation; nothing brings them back.
 	"forget_everything": RiskDestructive,
 	// gaiacpp's names for its gated tools.
-	"bash_execute":    RiskDestructive,
-	"file_write":      RiskWrite,
-	"file_edit":       RiskWrite,
-	"generate_image":  RiskWrite,
-	"take_screenshot": RiskWrite,
+	"bash_execute":      RiskDestructive,
+	"file_write":        RiskWrite,
+	"file_edit":         RiskWrite,
+	"generate_image":    RiskWrite,
+	"take_screenshot":   RiskWrite,
 	"web_fetch":         RiskWrite,
 	"forget":            RiskDestructive,
 	"create_automation": RiskWrite,
@@ -186,11 +186,11 @@ var actionTitles = map[string]string{
 	"update_draft":         "Change this draft?",
 
 	// gaiacpp's names for its gated tools.
-	"bash_execute":    "Run this command?",
-	"file_write":      "Write this file?",
-	"file_edit":       "Edit this file?",
-	"take_screenshot": "Take a screenshot?",
-	"generate_image":  "Create this image?",
+	"bash_execute":      "Run this command?",
+	"file_write":        "Write this file?",
+	"file_edit":         "Edit this file?",
+	"take_screenshot":   "Take a screenshot?",
+	"generate_image":    "Create this image?",
 	"forget":            "Forget this memory?",
 	"web_fetch":         "Open this web page?",
 	"create_automation": "Create this automation?",

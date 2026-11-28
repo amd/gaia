@@ -135,26 +135,34 @@ bool isSafeShellArg(const std::string& arg) {
 // makeStdinConfirmCallback
 // ---------------------------------------------------------------------------
 
+ToolConfirmResult promptStdinConfirm(const std::string& toolName, bool allowAlways) {
+    std::cerr << "\n"
+              << "  \"" << toolName << "\" requires confirmation. Allow this tool to run?\n"
+              << color::CYAN
+              << "  ============================================\n"
+              << color::RESET
+              << color::YELLOW << "  [1] " << color::RESET << color::WHITE << "Allow once\n" << color::RESET;
+    if (allowAlways) {
+        std::cerr << color::YELLOW << "  [2] " << color::RESET << color::WHITE << "Always allow\n" << color::RESET
+                  << color::YELLOW << "  [3] " << color::RESET << color::WHITE << "Deny\n" << color::RESET;
+    } else {
+        std::cerr << color::YELLOW << "  [2] " << color::RESET << color::WHITE << "Deny\n" << color::RESET;
+    }
+    std::cerr << color::CYAN
+              << "  ============================================\n"
+              << color::RESET
+              << "  Choice: " << std::flush;
+
+    std::string input;
+    if (!std::getline(std::cin, input)) return ToolConfirmResult::UNATTENDED;
+    if (input == "1" || input == "o" || input == "O") return ToolConfirmResult::ALLOW_ONCE;
+    if (allowAlways && (input == "2" || input == "a" || input == "A")) return ToolConfirmResult::ALWAYS_ALLOW;
+    return ToolConfirmResult::DENY;
+}
+
 ToolConfirmCallback makeStdinConfirmCallback() {
     return [](const std::string& toolName, const json& /*args*/) -> ToolConfirmResult {
-        std::cerr << "\n"
-                  << "  \"" << toolName << "\" requires confirmation. Allow this tool to run?\n"
-                  << color::CYAN
-                  << "  ============================================\n"
-                  << color::RESET
-                  << color::YELLOW << "  [1] " << color::RESET << color::WHITE << "Allow once\n"    << color::RESET
-                  << color::YELLOW << "  [2] " << color::RESET << color::WHITE << "Always allow\n"  << color::RESET
-                  << color::YELLOW << "  [3] " << color::RESET << color::WHITE << "Deny\n"          << color::RESET
-                  << color::CYAN
-                  << "  ============================================\n"
-                  << color::RESET
-                  << "  Choice: " << std::flush;
-
-        std::string input;
-        if (!std::getline(std::cin, input)) return ToolConfirmResult::UNATTENDED;
-        if (input == "1" || input == "o" || input == "O") return ToolConfirmResult::ALLOW_ONCE;
-        if (input == "2" || input == "a" || input == "A") return ToolConfirmResult::ALWAYS_ALLOW;
-        return ToolConfirmResult::DENY;  // 3, d, D, or anything else
+        return promptStdinConfirm(toolName, true);
     };
 }
 

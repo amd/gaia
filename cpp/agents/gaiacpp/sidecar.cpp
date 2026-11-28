@@ -666,7 +666,8 @@ private:
         const std::string scope = info && info->grantScope ? info->grantScope(args) : "";
         const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
                              judgeShellCommand(args.value("command", ""), "", {}, nullptr).compound;
-        const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
+        const std::string key =
+            info && info->allowAlways && info->grantScope && !chained ? tool + ":" + scope : "";
         const std::string autoSummary = AutomationStore::confirmSummary(tool, args);
         const std::string summary = shell ? "Run: " + args.value("command", "")
                                           : pathAccess ? pathAccessQuestion(args)

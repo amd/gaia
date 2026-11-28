@@ -249,10 +249,10 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
 
     // 3. CONFIRM check
     if (tool->policy == ToolPolicy::CONFIRM && !(tool->needsConfirm && !tool->needsConfirm(effectiveArgs))) {
-        // Fast path: already permanently allowed
+        // Fast path: already permanently allowed (only when the tool permits standing grants)
         const std::string grantKey =
             tool->grantScope ? resolvedName + ":" + tool->grantScope(effectiveArgs) : resolvedName;
-        if (allowedStore_ && allowedStore_->isAlwaysAllowed(grantKey)) {
+        if (tool->allowAlways && allowedStore_ && allowedStore_->isAlwaysAllowed(grantKey)) {
             // proceed
         } else {
             // Fail-closed: no callback = deny
@@ -267,7 +267,7 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
                 noteApproved(resolvedName, effectiveArgs);
             }
             if (decision == ToolConfirmResult::ALWAYS_ALLOW) {
-                if (allowedStore_) {
+                if (tool->allowAlways && allowedStore_) {
                     allowedStore_->addAlwaysAllowed(grantKey);
                 }
             } else if (decision == ToolConfirmResult::DENY) {

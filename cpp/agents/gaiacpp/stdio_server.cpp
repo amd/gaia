@@ -962,7 +962,7 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     const std::string scope = info && info->grantScope ? info->grantScope(args) : "";
     const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
                          judgeShellCommand(argOf(args, "command"), "", {}, nullptr).compound;
-    const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
+    const std::string key = info && info->allowAlways && info->grantScope && !chained ? tool + ":" + scope : "";
     // Read off the lock: it looks at the files the command names.
     const std::string unchecked = shell ? agent_.shellApprovalNote(argOf(args, "command")) : "";
     const bool edit = tool == "file_write" || tool == "file_edit";

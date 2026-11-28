@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -46,6 +47,15 @@ public:
     static constexpr int kMaxAutomations = 25;
     static constexpr std::int64_t kMinIntervalSeconds = 5 * 60;
     static constexpr std::int64_t kMaxDelaySeconds = 366LL * 86400LL;
+    static constexpr int kCheckTimeoutSeconds = 60;
+    static constexpr size_t kMaxCheckOutputChars = 4000;
+
+    struct CheckResult {
+        bool ok = false;
+        std::string output;
+    };
+
+    using CheckRunner = std::function<CheckResult(const std::string& command, const std::vector<std::string>& argv)>;
 
     struct CreateRequest {
         std::string name;
@@ -95,6 +105,12 @@ public:
     /// Validates a trigger's read-only check command; throws std::invalid_argument on refusal.
     static void validateCheckCommand(const std::string& command);
 
+    /// Validates and runs a trigger's check command once (argv only, no shell, 60s timeout).
+    static CheckResult runCheck(const std::string& command);
+
+    /// Override how trigger trial checks run (used in unit tests).
+    void setCheckRunner(CheckRunner runner);
+
     static std::string formatInterval(std::int64_t seconds);
     static std::string formatLocalTime(double epoch);
     static std::string formatShortWhen(double epoch, double nowEpoch);
@@ -120,9 +136,13 @@ public:
 private:
     std::string resolvePath() const;
     bool discordPaired(const std::string& storePath) const;
+    CheckResult executeTrialCheck(const std::string& command) const;
     static void dropWaitingFor(const std::string& storePath, const std::string& automationId);
+    static std::optional<Automation> dropWaitingById(const std::string& storePath, const std::string& deliveryId);
+    static std::optional<Automation> dropWaitingByName(const std::string& storePath, const std::string& name);
 
     std::string path_;
+    CheckRunner checkRunner_;
 };
 
 }  // namespace gaia

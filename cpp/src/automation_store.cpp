@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/automation_store.h"
+#include "gaia/process.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -14,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <random>
 #include <regex>
 #include <set>
@@ -28,8 +32,10 @@
 #include <sys/stat.h>
 #include <windows.h>
 #else
+#include <csignal>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -450,6 +456,9 @@ std::string creationMessage(const Automation& item, double nowEpoch, bool paired
         msg = "Trigger '" + item.name + "' (id " + item.id + "): every " +
               AutomationStore::formatInterval(item.everySeconds) + quiet + " GAIA runs `" + item.check +
               "` and messages you only when its output changes.";
+        if (item.checked) {
+            msg += " Right now it prints:\n" + item.lastOutput;
+        }
     } else if (item.kind == kKindAlert) {
         msg = "Alert '" + item.name + "' (id " + item.id + "): every " +
               AutomationStore::formatInterval(item.everySeconds) + quiet +
@@ -695,7 +704,28 @@ std::string AutomationStore::parseDays(const std::string& raw) {
     return out;
 }
 
-void AutomationStore::validateCheckCommand(const std::string& raw) {
+namespace {
+
+std::string clipCheckOutput(const std::string& text) {
+    if (text.size() <= AutomationStore::kMaxCheckOutputChars) return text;
+    return text.substr(0, AutomationStore::kMaxCheckOutputChars) + "\n... (" +
+           std::to_string(text.size() - AutomationStore::kMaxCheckOutputChars) + " more chars)";
+}
+
+bool flagMatchesDenied(const std::string& token, const std::set<std::string>& denied) {
+    if (denied.count(token) > 0) return true;
+    const size_t eq = token.find('=');
+    if (eq != std::string::npos && denied.count(token.substr(0, eq)) > 0) return true;
+    // Short flag clusters like -fw match single-letter denied flags like -w or -F.
+    if (token.size() > 2 && token[0] == '-' && token[1] != '-') {
+        for (const auto& f : denied) {
+            if (f.size() == 2 && f[0] == '-' && token.find(f[1], 1) != std::string::npos) return true;
+        }
+    }
+    return false;
+}
+
+std::vector<std::string> parseAndValidateCheckArgv(const std::string& raw) {
     static const std::string kRule =
         "A check runs on its own every few minutes, so it must be one GitHub read: "
         "`gaia automation ci-status --repo OWNER/REPO --branch main`, or a gh read naming the repo, "
@@ -714,11 +744,23 @@ void AutomationStore::validateCheckCommand(const std::string& raw) {
     }
 
     const std::string& bin = argv[0];
+    if (bin.find('/') != std::string::npos || bin.find('\\') != std::string::npos) {
+        throw std::invalid_argument("`" + command + "` is not a GitHub read. " + kRule);
+    }
+
     if (bin == "gaia") {
-        if (argv.size() < 3 || argv[1] != "automation" || argv[2] != "ci-status") {
+        if (argv.size() < 3) {
             throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
         }
-        return;
+        static const std::map<std::string, std::set<std::string>> kGaiaReads = {
+            {"automation", {"ci-status", "list"}},
+            {"discord", {"always-allowed", "watches"}},
+        };
+        const auto it = kGaiaReads.find(argv[1]);
+        if (it == kGaiaReads.end() || it->second.count(argv[2]) == 0) {
+            throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
+        }
+        return argv;
     }
 
     if (bin != "gh") {
@@ -733,38 +775,67 @@ void AutomationStore::validateCheckCommand(const std::string& raw) {
         }
     }
 
-    const std::string& sub = argv[1];
-    bool readOk = false;
-    bool namesRepo = false;
-    if (sub == "api") {
-        if (argv.size() >= 3 && argv[2].rfind("repos/", 0) == 0) {
-            namesRepo = true;
-            readOk = true;
-            for (size_t i = 2; i < argv.size(); ++i) {
-                const std::string& a = argv[i];
-                if (a == "-X" || a == "--method") {
-                    if (i + 1 >= argv.size() || toLower(argv[i + 1]) != "get") readOk = false;
-                } else if (a.rfind("--method=", 0) == 0 && toLower(a.substr(9)) != "get") {
-                    readOk = false;
-                } else if (a == "-f" || a == "-F" || a == "--field" || a == "--raw-field" || a == "--input" ||
-                           a.rfind("--field=", 0) == 0 || a.rfind("--raw-field=", 0) == 0 ||
-                           a.rfind("--input=", 0) == 0) {
-                    readOk = false;
-                }
-            }
-        }
-    } else if (sub == "search") {
-        readOk = true;
-    } else if (argv.size() >= 3) {
-        const std::string& verb = argv[2];
-        static const std::set<std::string> kReadGroups = {"pr", "issue", "run", "release", "workflow", "repo"};
-        static const std::set<std::string> kReadVerbs = {"view", "list", "checks", "diff", "status"};
-        readOk = kReadGroups.count(sub) > 0 && kReadVerbs.count(verb) > 0;
-    }
+    struct GhSubRule {
+        std::set<std::string> actions;
+        std::set<std::string> deniedFlags;
+        bool freeForm = false;
+    };
+    static const std::set<std::string> kWebWatchFlags = {"--watch", "--web", "-w"};
+    static const std::set<std::string> kIssuePrFlags = {"--body-file", "--editor", "--watch", "--web",
+                                                        "-F",          "-e",       "-w"};
+    static const std::map<std::string, GhSubRule> kGhReads = {
+        {"issue", {{"list", "status", "view"}, kIssuePrFlags, false}},
+        {"pr", {{"checks", "diff", "list", "status", "view"}, kIssuePrFlags, false}},
+        {"repo", {{"list", "view"}, kWebWatchFlags, false}},
+        {"release", {{"list", "view"}, kWebWatchFlags, false}},
+        {"run", {{"list", "view"}, kWebWatchFlags, false}},
+        {"label", {{"list"}, kIssuePrFlags, false}},
+        {"search", {{"code", "commits", "issues", "prs", "repos"}, kWebWatchFlags, false}},
+        {"auth", {{"status"}, {"--show-token", "--watch", "--web", "-t", "-w"}, false}},
+        {"api", {{}, {"--field", "--hostname", "--input", "--raw-field", "-F", "-f"}, true}},
+    };
 
-    if (!readOk) {
+    const std::string& sub = argv[1];
+    const auto ruleIt = kGhReads.find(sub);
+    if (ruleIt == kGhReads.end()) {
         throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
     }
+    const GhSubRule& rule = ruleIt->second;
+
+    bool namesRepo = false;
+    if (rule.freeForm) {
+        if (argv.size() < 3 || toLower(argv[2]) == "graphql") {
+            throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
+        }
+        if (argv[2].rfind("repos/", 0) == 0) namesRepo = true;
+        for (size_t i = 2; i < argv.size(); ++i) {
+            const std::string& a = argv[i];
+            if (flagMatchesDenied(a, rule.deniedFlags)) {
+                throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
+            }
+            if (a == "-X" || a == "--method") {
+                if (i + 1 >= argv.size() || toLower(argv[i + 1]) != "get") {
+                    throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
+                }
+                ++i;
+            } else if (a.rfind("--method=", 0) == 0 && toLower(a.substr(9)) != "get") {
+                throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
+            } else if (a.size() > 2 && a.rfind("-X", 0) == 0 && toLower(a.substr(2)) != "get") {
+                throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
+            }
+        }
+    } else {
+        // Action-first rule matching BINARY_POLICIES: no leading flags between subcommand and action.
+        if (argv.size() < 3 || rule.actions.count(argv[2]) == 0) {
+            throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
+        }
+        for (size_t i = 3; i < argv.size(); ++i) {
+            if (flagMatchesDenied(argv[i], rule.deniedFlags)) {
+                throw std::invalid_argument("`" + command + "` is not a read. " + kRule);
+            }
+        }
+    }
+
     for (const auto& a : argv) {
         if (a == "-R" || a == "--repo" || a.rfind("--repo=", 0) == 0) namesRepo = true;
     }
@@ -774,6 +845,339 @@ void AutomationStore::validateCheckCommand(const std::string& raw) {
                                     "the bridge runs in. " +
                                     kRule);
     }
+    return argv;
+}
+
+#ifdef _WIN32
+
+std::wstring utf8ToWide(const std::string& s) {
+    if (s.empty()) return L"";
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    if (n <= 0) return L"";
+    std::wstring out(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
+    return out;
+}
+
+std::wstring quoteWindowsArg(const std::wstring& arg) {
+    if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring::npos) return arg;
+    std::wstring out(1, L'"');
+    for (auto it = arg.begin();; ++it) {
+        size_t backslashes = 0;
+        while (it != arg.end() && *it == L'\\') {
+            ++it;
+            ++backslashes;
+        }
+        if (it == arg.end()) {
+            out.append(backslashes * 2, L'\\');
+            break;
+        }
+        if (*it == L'"') {
+            out.append(backslashes * 2 + 1, L'\\');
+            out.push_back(L'"');
+        } else {
+            out.append(backslashes, L'\\');
+            out.push_back(*it);
+        }
+    }
+    out.push_back(L'"');
+    return out;
+}
+
+std::string readWinPipe(HANDLE h, size_t maxBytes) {
+    std::string out;
+    char buf[4096];
+    DWORD got = 0;
+    while (ReadFile(h, buf, sizeof(buf), &got, nullptr) && got > 0) {
+        if (out.size() < maxBytes) {
+            out.append(buf, std::min(static_cast<size_t>(got), maxBytes - out.size()));
+        }
+    }
+    return out;
+}
+
+AutomationStore::CheckResult runCheckArgv(const std::string& command, const std::vector<std::string>& argv) {
+    const std::string program = findProgramOnPath(argv[0]);
+    const std::string lowered = toLower(program);
+    if (program.empty() || lowered.size() < 4 || lowered.substr(lowered.size() - 4) != ".exe") {
+        return {false, "`" + argv[0] + "` is not installed on this PC as a program."};
+    }
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE outR = nullptr, outW = nullptr, errR = nullptr, errW = nullptr;
+    if (!CreatePipe(&outR, &outW, &sa, 0) || !CreatePipe(&errR, &errW, &sa, 0)) {
+        if (outR) CloseHandle(outR);
+        if (outW) CloseHandle(outW);
+        if (errR) CloseHandle(errR);
+        if (errW) CloseHandle(errW);
+        return {false, "`" + command + "` could not start: failed to create pipes"};
+    }
+    SetHandleInformation(outR, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(errR, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE nulIn = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (nulIn == INVALID_HANDLE_VALUE) {
+        CloseHandle(outR);
+        CloseHandle(outW);
+        CloseHandle(errR);
+        CloseHandle(errW);
+        return {false, "`" + command + "` could not start: failed to open NUL"};
+    }
+
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        if (job) CloseHandle(job);
+        CloseHandle(nulIn);
+        CloseHandle(outR);
+        CloseHandle(outW);
+        CloseHandle(errR);
+        CloseHandle(errW);
+        return {false, "`" + command + "` could not start: failed to create job object"};
+    }
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nulIn;
+    si.hStdOutput = outW;
+    si.hStdError = errW;
+
+    const std::wstring appW = utf8ToWide(program);
+    std::wstring cmdLine = quoteWindowsArg(appW);
+    for (size_t i = 1; i < argv.size(); ++i) {
+        cmdLine.push_back(L' ');
+        cmdLine += quoteWindowsArg(utf8ToWide(argv[i]));
+    }
+
+    PROCESS_INFORMATION pi{};
+    const BOOL ok = CreateProcessW(appW.c_str(), cmdLine.data(), nullptr, nullptr, TRUE,
+                                   CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    const DWORD createErr = GetLastError();
+    CloseHandle(outW);
+    CloseHandle(errW);
+    CloseHandle(nulIn);
+    if (!ok) {
+        CloseHandle(job);
+        CloseHandle(outR);
+        CloseHandle(errR);
+        return {false, "`" + command + "` could not start (Windows error " + std::to_string(createErr) + ")"};
+    }
+
+    if (!AssignProcessToJobObject(job, pi.hProcess)) {
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(job);
+        CloseHandle(outR);
+        CloseHandle(errR);
+        return {false, "`" + command + "` could not start: failed to assign job object"};
+    }
+    ResumeThread(pi.hThread);
+
+    std::string outBuf, errBuf;
+    constexpr size_t kCap = 65536;
+    std::thread tOut([&]() { outBuf = readWinPipe(outR, kCap); });
+    std::thread tErr([&]() { errBuf = readWinPipe(errR, kCap); });
+
+    const DWORD waitRes = WaitForSingleObject(pi.hProcess, AutomationStore::kCheckTimeoutSeconds * 1000);
+    bool timedOut = false;
+    int exitCode = -1;
+    if (waitRes == WAIT_TIMEOUT) {
+        timedOut = true;
+        TerminateJobObject(job, 1);
+        WaitForSingleObject(pi.hProcess, 5000);
+    } else {
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        exitCode = static_cast<int>(code);
+    }
+    CloseHandle(job);
+    tOut.join();
+    tErr.join();
+    CloseHandle(outR);
+    CloseHandle(errR);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (timedOut) {
+        return {false, "`" + command + "` did not finish within " +
+                           std::to_string(AutomationStore::kCheckTimeoutSeconds) + "s."};
+    }
+    const std::string output = trim(outBuf);
+    if (exitCode != 0 && output.empty()) {
+        const std::string detail = trim(errBuf).substr(0, 500);
+        return {false, "`" + command + "` exited with " + std::to_string(exitCode) + ": " + detail};
+    }
+    return {true, clipCheckOutput(output)};
+}
+
+#else
+
+std::string findExecutableOnPath(const std::string& bin) {
+    const std::string pathEnv = getEnvVar("PATH");
+    size_t start = 0;
+    while (start <= pathEnv.size()) {
+        const size_t colon = pathEnv.find(':', start);
+        const std::string dir =
+            colon == std::string::npos ? pathEnv.substr(start) : pathEnv.substr(start, colon - start);
+        if (!dir.empty()) {
+            const fs::path candidate = fs::u8path(dir) / fs::u8path(bin);
+            std::error_code ec;
+            if (fs::is_regular_file(candidate, ec) && ::access(candidate.c_str(), X_OK) == 0) {
+                return candidate.u8string();
+            }
+        }
+        if (colon == std::string::npos) break;
+        start = colon + 1;
+    }
+    return "";
+}
+
+AutomationStore::CheckResult runCheckArgv(const std::string& command, const std::vector<std::string>& argv) {
+    const std::string program = findExecutableOnPath(argv[0]);
+    if (program.empty()) {
+        return {false, "`" + argv[0] + "` is not installed on this PC as a program."};
+    }
+
+    int outPipe[2], errPipe[2];
+    if (::pipe(outPipe) != 0) {
+        return {false, "`" + command + "` could not start: " + std::strerror(errno)};
+    }
+    if (::pipe(errPipe) != 0) {
+        const std::string why = std::strerror(errno);
+        ::close(outPipe[0]);
+        ::close(outPipe[1]);
+        return {false, "`" + command + "` could not start: " + why};
+    }
+    for (int fd : {outPipe[0], outPipe[1], errPipe[0], errPipe[1]}) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+
+    long maxFd = ::sysconf(_SC_OPEN_MAX);
+    if (maxFd < 0 || maxFd > 65536) maxFd = 65536;
+
+    std::vector<std::string> execArgs = argv;
+    execArgs[0] = program;
+    std::vector<char*> cargv;
+    cargv.reserve(execArgs.size() + 1);
+    for (auto& s : execArgs) cargv.push_back(s.data());
+    cargv.push_back(nullptr);
+
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        const std::string why = std::strerror(errno);
+        ::close(outPipe[0]);
+        ::close(outPipe[1]);
+        ::close(errPipe[0]);
+        ::close(errPipe[1]);
+        return {false, "`" + command + "` could not start: " + why};
+    }
+    if (pid == 0) {
+        ::setpgid(0, 0);
+        ::close(outPipe[0]);
+        ::close(errPipe[0]);
+        ::dup2(outPipe[1], STDOUT_FILENO);
+        ::dup2(errPipe[1], STDERR_FILENO);
+        ::close(outPipe[1]);
+        ::close(errPipe[1]);
+        const int devNull = ::open("/dev/null", O_RDONLY);
+        if (devNull < 0) ::_exit(126);
+        ::dup2(devNull, STDIN_FILENO);
+        if (devNull != STDIN_FILENO) ::close(devNull);
+        for (int fd = 3; fd < maxFd; ++fd) ::close(fd);
+        ::execv(program.c_str(), cargv.data());
+        ::_exit(127);
+    }
+
+    ::setpgid(pid, pid);
+    ::close(outPipe[1]);
+    ::close(errPipe[1]);
+    ::fcntl(outPipe[0], F_SETFL, O_NONBLOCK);
+    ::fcntl(errPipe[0], F_SETFL, O_NONBLOCK);
+
+    constexpr size_t kCap = 65536;
+    std::string outBuf, errBuf;
+    std::array<char, 4096> buf{};
+    auto drain = [&](int fd, std::string& dst) {
+        bool any = false;
+        while (true) {
+            const ssize_t n = ::read(fd, buf.data(), buf.size());
+            if (n > 0) {
+                any = true;
+                if (dst.size() < kCap) {
+                    dst.append(buf.data(), std::min(static_cast<size_t>(n), kCap - dst.size()));
+                }
+            } else {
+                break;
+            }
+        }
+        return any;
+    };
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(AutomationStore::kCheckTimeoutSeconds);
+    bool finished = false;
+    bool timedOut = false;
+    int status = 0;
+    while (!finished) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            timedOut = true;
+            ::kill(-pid, SIGKILL);
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, &status, 0);
+            break;
+        }
+        const bool gotOut = drain(outPipe[0], outBuf);
+        const bool gotErr = drain(errPipe[0], errBuf);
+        const pid_t w = ::waitpid(pid, &status, WNOHANG);
+        if (w == pid || w < 0) {
+            finished = true;
+            drain(outPipe[0], outBuf);
+            drain(errPipe[0], errBuf);
+            break;
+        }
+        if (!gotOut && !gotErr) std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+
+    ::close(outPipe[0]);
+    ::close(errPipe[0]);
+
+    if (timedOut) {
+        return {false, "`" + command + "` did not finish within " +
+                           std::to_string(AutomationStore::kCheckTimeoutSeconds) + "s."};
+    }
+    const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    const std::string output = trim(outBuf);
+    if (exitCode != 0 && output.empty()) {
+        const std::string detail = trim(errBuf).substr(0, 500);
+        return {false, "`" + command + "` exited with " + std::to_string(exitCode) + ": " + detail};
+    }
+    return {true, clipCheckOutput(output)};
+}
+
+#endif
+
+}  // namespace
+
+void AutomationStore::validateCheckCommand(const std::string& raw) { (void)parseAndValidateCheckArgv(raw); }
+
+AutomationStore::CheckResult AutomationStore::runCheck(const std::string& raw) {
+    try {
+        const std::vector<std::string> argv = parseAndValidateCheckArgv(raw);
+        return runCheckArgv(trim(raw), argv);
+    } catch (const std::invalid_argument& e) {
+        return {false, e.what()};
+    }
+}
+
+void AutomationStore::setCheckRunner(CheckRunner runner) { checkRunner_ = std::move(runner); }
+
+AutomationStore::CheckResult AutomationStore::executeTrialCheck(const std::string& raw) const {
+    const std::vector<std::string> argv = parseAndValidateCheckArgv(raw);
+    if (checkRunner_) return checkRunner_(trim(raw), argv);
+    return runCheckArgv(trim(raw), argv);
 }
 
 std::string AutomationStore::formatInterval(std::int64_t seconds) {
@@ -901,6 +1305,99 @@ void AutomationStore::dropWaitingFor(const std::string& storePath, const std::st
     }
 }
 
+std::optional<Automation> AutomationStore::dropWaitingById(const std::string& storePath,
+                                                           const std::string& deliveryId) {
+    if (deliveryId.empty()) return std::nullopt;
+    const fs::path outboxPath = fs::u8path(storePath).parent_path() / "outbox.json";
+    std::error_code ec;
+    if (!fs::exists(outboxPath, ec)) return std::nullopt;
+
+    AdvisoryFileLock lock(outboxPath);
+    if (!fs::exists(outboxPath, ec)) return std::nullopt;
+    std::ifstream in(outboxPath, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Cannot read " + outboxPath.u8string() + ". Check its permissions.");
+    }
+    json root;
+    try {
+        in >> root;
+    } catch (const std::exception& e) {
+        throw std::runtime_error(outboxPath.u8string() + " is not valid JSON: " + e.what() +
+                                 ". Delete it to drop waiting automation deliveries.");
+    }
+    if (!root.is_object() || !root.contains("deliveries") || !root["deliveries"].is_array()) {
+        throw std::runtime_error(outboxPath.u8string() +
+                                 " is not usable: expected a JSON object with a 'deliveries' list.");
+    }
+
+    json kept = json::array();
+    std::optional<Automation> dropped;
+    for (const auto& entry : root["deliveries"]) {
+        if (!dropped && entry.is_object() && entry.value("id", std::string()) == deliveryId) {
+            Automation a;
+            a.id = "waiting:" + deliveryId;
+            a.name = entry.value("name", deliveryId);
+            a.kind = "waiting";
+            dropped = a;
+            continue;
+        }
+        kept.push_back(entry);
+    }
+    if (dropped) {
+        writeJsonAtomic(outboxPath, json{{"deliveries", kept}});
+    }
+    return dropped;
+}
+
+std::optional<Automation> AutomationStore::dropWaitingByName(const std::string& storePath, const std::string& name) {
+    const std::string lowered = toLower(trim(name));
+    if (lowered.empty()) return std::nullopt;
+    const fs::path outboxPath = fs::u8path(storePath).parent_path() / "outbox.json";
+    std::error_code ec;
+    if (!fs::exists(outboxPath, ec)) return std::nullopt;
+
+    AdvisoryFileLock lock(outboxPath);
+    if (!fs::exists(outboxPath, ec)) return std::nullopt;
+    std::ifstream in(outboxPath, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Cannot read " + outboxPath.u8string() + ". Check its permissions.");
+    }
+    json root;
+    try {
+        in >> root;
+    } catch (const std::exception& e) {
+        throw std::runtime_error(outboxPath.u8string() + " is not valid JSON: " + e.what() +
+                                 ". Delete it to drop waiting automation deliveries.");
+    }
+    if (!root.is_object() || !root.contains("deliveries") || !root["deliveries"].is_array()) {
+        throw std::runtime_error(outboxPath.u8string() +
+                                 " is not usable: expected a JSON object with a 'deliveries' list.");
+    }
+
+    json kept = json::array();
+    std::optional<Automation> firstDropped;
+    bool anyDropped = false;
+    for (const auto& entry : root["deliveries"]) {
+        if (entry.is_object() && !entry.value("automation_id", std::string()).empty() &&
+            toLower(entry.value("name", std::string())) == lowered) {
+            if (!firstDropped) {
+                Automation a;
+                a.id = "waiting:" + entry.value("id", std::string());
+                a.name = entry.value("name", trim(name));
+                a.kind = "waiting";
+                firstDropped = a;
+            }
+            anyDropped = true;
+            continue;
+        }
+        kept.push_back(entry);
+    }
+    if (anyDropped) {
+        writeJsonAtomic(outboxPath, json{{"deliveries", kept}});
+    }
+    return firstDropped;
+}
+
 std::vector<Automation> AutomationStore::list() const {
     const fs::path target = fs::u8path(resolvePath());
     AdvisoryFileLock lock(target);
@@ -975,6 +1472,16 @@ Automation AutomationStore::create(const CreateRequest& req, double nowEpoch) co
         }
     }
 
+    // Try the trigger check outside the file lock so broken checks fail on the spot and record a baseline.
+    if (!item.check.empty()) {
+        const CheckResult trial = executeTrialCheck(item.check);
+        if (!trial.ok) {
+            throw std::invalid_argument("The check failed when tried: " + trial.output);
+        }
+        item.lastOutput = trial.output;
+        item.checked = true;
+    }
+
     const fs::path target = fs::u8path(resolvePath());
     AdvisoryFileLock lock(target);
     auto items = loadUnlocked(target);
@@ -998,6 +1505,29 @@ Automation AutomationStore::create(const CreateRequest& req, double nowEpoch) co
 Automation AutomationStore::edit(const EditRequest& req, double nowEpoch) const {
     const double now = nowEpoch > 0.0 ? nowEpoch : nowSeconds();
     const fs::path target = fs::u8path(resolvePath());
+
+    // Run any replacement trigger check outside the store lock after verifying the target is a trigger.
+    std::optional<std::string> newCheck;
+    std::string newBaseline;
+    if (req.check.has_value()) {
+        {
+            AdvisoryFileLock lock(target);
+            const auto items = loadUnlocked(target);
+            const int idx = findIndex(items, req.ref);
+            if (idx < 0) throw missingError(req.ref, items);
+            if (items[static_cast<size_t>(idx)].kind != kKindTrigger) {
+                throw std::invalid_argument("Only a trigger has a 'check'.");
+            }
+        }
+        const std::string c = trim(*req.check);
+        const CheckResult trial = executeTrialCheck(c);
+        if (!trial.ok) {
+            throw std::invalid_argument("The check failed when tried: " + trial.output);
+        }
+        newCheck = c;
+        newBaseline = trial.output;
+    }
+
     AdvisoryFileLock lock(target);
     auto items = loadUnlocked(target);
     const int idx = findIndex(items, req.ref);
@@ -1046,15 +1576,13 @@ Automation AutomationStore::edit(const EditRequest& req, double nowEpoch) const 
         updated.nextAt = parseWhen(*req.at, now);
         changed = true;
     }
-    if (req.check.has_value()) {
+    if (newCheck.has_value()) {
         if (updated.kind != kKindTrigger) {
             throw std::invalid_argument("Only a trigger has a 'check'.");
         }
-        const std::string c = trim(*req.check);
-        validateCheckCommand(c);
-        updated.check = c;
-        updated.lastOutput.clear();
-        updated.checked = false;
+        updated.check = *newCheck;
+        updated.lastOutput = newBaseline;
+        updated.checked = true;
         updated.failures = 0;
         changed = true;
     }
@@ -1100,16 +1628,36 @@ Automation AutomationStore::setPaused(const std::string& ref, bool paused) const
 
 Automation AutomationStore::remove(const std::string& ref) const {
     const std::string storePath = resolvePath();
+    const std::string trimmedRef = trim(ref);
+    if (trimmedRef.rfind("waiting:", 0) == 0) {
+        const auto dropped = dropWaitingById(storePath, trimmedRef.substr(8));
+        if (!dropped) {
+            throw std::invalid_argument("Nothing is waiting as '" + trimmedRef +
+                                        "'; it was delivered or removed. List again to see what is left.");
+        }
+        return *dropped;
+    }
     const fs::path target = fs::u8path(storePath);
     Automation removed;
+    std::optional<std::invalid_argument> notFound;
     {
         AdvisoryFileLock lock(target);
         auto items = loadUnlocked(target);
-        const int idx = findIndex(items, ref);
-        if (idx < 0) throw missingError(ref, items);
-        removed = items[static_cast<size_t>(idx)];
-        items.erase(items.begin() + idx);
-        saveUnlocked(target, items);
+        const int idx = findIndex(items, trimmedRef);
+        if (idx < 0) {
+            notFound = missingError(trimmedRef, items);
+        } else {
+            removed = items[static_cast<size_t>(idx)];
+            items.erase(items.begin() + idx);
+            saveUnlocked(target, items);
+        }
+    }
+    if (notFound) {
+        // A reminder that already ran is gone from the store; only its undelivered message waits.
+        if (const auto dropped = dropWaitingByName(storePath, trimmedRef)) {
+            return *dropped;
+        }
+        throw *notFound;
     }
     dropWaitingFor(storePath, removed.id);
     return removed;
@@ -1179,6 +1727,7 @@ void AutomationStore::registerTools(ToolRegistry& registry) {
          "Days a repeating automation runs on, e.g. 'mon-fri', 'weekdays', 'weekends', 'mon,wed,fri'."},
     };
     createTool.policy = ToolPolicy::CONFIRM;
+    createTool.allowAlways = false;
     createTool.callback = [this](const json& a) -> json {
         try {
             CreateRequest req;
@@ -1222,6 +1771,7 @@ void AutomationStore::registerTools(ToolRegistry& registry) {
         {"days", ToolParamType::STRING, false, "New days like 'mon-fri', or '' to clear (repeating only)."},
     };
     editTool.policy = ToolPolicy::CONFIRM;
+    editTool.allowAlways = false;
     editTool.callback = [this](const json& a) -> json {
         try {
             EditRequest req;
@@ -1255,6 +1805,7 @@ void AutomationStore::registerTools(ToolRegistry& registry) {
     pauseTool.description = "Pause an active automation or reminder by its id or exact name.";
     pauseTool.parameters = {{"ref", ToolParamType::STRING, true, "The automation's id or exact name."}};
     pauseTool.policy = ToolPolicy::CONFIRM;
+    pauseTool.allowAlways = false;
     pauseTool.callback = [this](const json& a) -> json {
         try {
             const Automation updated = this->setPaused(a.value("ref", std::string()), true);
@@ -1274,6 +1825,7 @@ void AutomationStore::registerTools(ToolRegistry& registry) {
     resumeTool.description = "Resume a paused automation or reminder by its id or exact name.";
     resumeTool.parameters = {{"ref", ToolParamType::STRING, true, "The automation's id or exact name."}};
     resumeTool.policy = ToolPolicy::CONFIRM;
+    resumeTool.allowAlways = false;
     resumeTool.callback = [this](const json& a) -> json {
         try {
             const Automation updated = this->setPaused(a.value("ref", std::string()), false);
@@ -1293,13 +1845,17 @@ void AutomationStore::registerTools(ToolRegistry& registry) {
     removeTool.description = "Delete an automation or reminder permanently by its id or exact name.";
     removeTool.parameters = {{"ref", ToolParamType::STRING, true, "The automation's id or exact name."}};
     removeTool.policy = ToolPolicy::CONFIRM;
+    removeTool.allowAlways = false;
     removeTool.callback = [this](const json& a) -> json {
         try {
             const Automation removed = this->remove(a.value("ref", std::string()));
+            const std::string msg = removed.kind == "waiting"
+                                        ? "Dropped the waiting message from '" + removed.name + "'."
+                                        : "Removed '" + removed.name + "'.";
             return {
                 {"status", "success"},
                 {"automation", describe(removed)},
-                {"message", "Removed '" + removed.name + "'."},
+                {"message", msg},
             };
         } catch (const std::exception& e) {
             return {{"status", "error"}, {"error", e.what()}};

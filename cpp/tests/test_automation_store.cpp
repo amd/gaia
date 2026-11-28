@@ -101,14 +101,109 @@ TEST(AutomationStoreTest, ValidateCheckCommands) {
     EXPECT_NO_THROW(AutomationStore::validateCheckCommand("gaia automation ci-status --repo amd/gaia --branch main"));
     EXPECT_NO_THROW(AutomationStore::validateCheckCommand("gh pr view 12 --repo amd/gaia --json reviewDecision"));
     EXPECT_NO_THROW(AutomationStore::validateCheckCommand("gh api repos/amd/gaia/pulls"));
+    EXPECT_NO_THROW(AutomationStore::validateCheckCommand("gh search prs --repo amd/gaia is:open"));
 
     EXPECT_THROW(AutomationStore::validateCheckCommand(""), std::invalid_argument);
     EXPECT_THROW(AutomationStore::validateCheckCommand("rm -rf /"), std::invalid_argument);
+    EXPECT_THROW(AutomationStore::validateCheckCommand("/usr/bin/gh pr view 12 --repo amd/gaia"), std::invalid_argument);
     EXPECT_THROW(AutomationStore::validateCheckCommand("gh pr view 12"), std::invalid_argument);
     EXPECT_THROW(AutomationStore::validateCheckCommand("gh pr list --repo amd/gaia --paginate"), std::invalid_argument);
     EXPECT_THROW(AutomationStore::validateCheckCommand("gh pr merge 12 --repo amd/gaia"), std::invalid_argument);
-    EXPECT_THROW(AutomationStore::validateCheckCommand("gh pr view 12 --repo amd/gaia; echo pwn"), std::invalid_argument);
+    EXPECT_THROW(AutomationStore::validateCheckCommand("gh repo diff --repo amd/gaia"), std::invalid_argument);
+    EXPECT_THROW(AutomationStore::validateCheckCommand("gh workflow view 1 --repo amd/gaia"), std::invalid_argument);
+    EXPECT_THROW(AutomationStore::validateCheckCommand("gh pr view 12 --repo amd/gaia --web"), std::invalid_argument);
+    EXPECT_THROW(AutomationStore::validateCheckCommand("gh api graphql -R amd/gaia"), std::invalid_argument);
+    EXPECT_THROW(AutomationStore::validateCheckCommand("gh auth status --show-token -R amd/gaia"),
+                 std::invalid_argument);
+    EXPECT_THROW(AutomationStore::validateCheckCommand("gh pr view 12 --repo amd/gaia; echo pwn"),
+                 std::invalid_argument);
     EXPECT_THROW(AutomationStore::validateCheckCommand("gh pr view 12 --repo amd/gaia | cat"), std::invalid_argument);
+}
+
+TEST(AutomationStoreTest, TriggerTrialCheckRecordsBaselineAndFailsLoudly) {
+    TempDir dir;
+    const fs::path storePath = dir.path / "automations" / "automations.json";
+    AutomationStore store(storePath.u8string());
+    const double now = localEpoch(2026, 11, 6, 14, 0);
+
+    // Failed trial check must fail loudly and must NOT write the trigger to disk.
+    store.setCheckRunner([](const std::string&, const std::vector<std::string>&) -> AutomationStore::CheckResult {
+        return {false, "gh: not logged in"};
+    });
+    AutomationStore::CreateRequest req;
+    req.name = "Main CI";
+    req.every = "15m";
+    req.prompt = "Summarize failures";
+    req.check = "gaia automation ci-status --repo amd/gaia --branch main";
+    EXPECT_THROW(store.create(req, now), std::invalid_argument);
+    EXPECT_TRUE(store.list().empty());
+
+    // Passing trial check records checked=true and saves baseline output.
+    std::vector<std::string> seenArgv;
+    store.setCheckRunner([&](const std::string&, const std::vector<std::string>& argv) -> AutomationStore::CheckResult {
+        seenArgv = argv;
+        return {true, "amd/gaia@main: all workflows passing"};
+    });
+    const Automation created = store.create(req, now);
+    EXPECT_EQ(created.kind, "trigger");
+    EXPECT_TRUE(created.checked);
+    EXPECT_EQ(created.lastOutput, "amd/gaia@main: all workflows passing");
+    ASSERT_FALSE(seenArgv.empty());
+    EXPECT_EQ(seenArgv[0], "gaia");
+
+    // Editing check with a failing check leaves the existing trigger untouched.
+    store.setCheckRunner([](const std::string&, const std::vector<std::string>&) -> AutomationStore::CheckResult {
+        return {false, "bad repo"};
+    });
+    AutomationStore::EditRequest badEdit;
+    badEdit.ref = created.id;
+    badEdit.check = "gh pr view 1 --repo amd/gaia";
+    EXPECT_THROW(store.edit(badEdit, now), std::invalid_argument);
+    const auto unchanged = store.list();
+    ASSERT_EQ(unchanged.size(), 1u);
+    EXPECT_EQ(unchanged[0].check, req.check);
+    EXPECT_TRUE(unchanged[0].checked);
+    EXPECT_EQ(unchanged[0].lastOutput, "amd/gaia@main: all workflows passing");
+
+    // Editing check with a passing check updates check + baseline + checked=true.
+    store.setCheckRunner([](const std::string&, const std::vector<std::string>&) -> AutomationStore::CheckResult {
+        return {true, "APPROVED"};
+    });
+    const Automation edited = store.edit(badEdit, now);
+    EXPECT_EQ(edited.check, "gh pr view 1 --repo amd/gaia");
+    EXPECT_TRUE(edited.checked);
+    EXPECT_EQ(edited.lastOutput, "APPROVED");
+    EXPECT_EQ(edited.failures, 0);
+}
+
+TEST(AutomationStoreTest, RemoveDropsAlreadyFiredOutboxEntries) {
+    TempDir dir;
+    const fs::path storePath = dir.path / "automations" / "automations.json";
+    const fs::path outboxPath = dir.path / "automations" / "outbox.json";
+    fs::create_directories(storePath.parent_path());
+    {
+        std::ofstream out(outboxPath);
+        out << json{{"deliveries",
+                     json::array({
+                         {{"id", "d1"}, {"automation_id", "a1"}, {"name", "Call Sam"}},
+                         {{"id", "d2"}, {"automation_id", "a2"}, {"name", "Water plants"}},
+                     })}}
+                   .dump(2);
+    }
+
+    AutomationStore store(storePath.u8string());
+    const Automation byName = store.remove("call sam");
+    EXPECT_EQ(byName.kind, "waiting");
+    EXPECT_EQ(byName.name, "Call Sam");
+
+    const Automation byWaitingId = store.remove("waiting:d2");
+    EXPECT_EQ(byWaitingId.kind, "waiting");
+    EXPECT_EQ(byWaitingId.name, "Water plants");
+
+    std::ifstream in(outboxPath);
+    const json obJson = json::parse(in);
+    EXPECT_TRUE(obJson["deliveries"].empty());
+    EXPECT_THROW(store.remove("waiting:d2"), std::invalid_argument);
 }
 
 TEST(AutomationStoreTest, CrudLifecycleSchemaAndOutboxDrop) {
@@ -242,6 +337,7 @@ TEST(AutomationStoreTest, GaiaAgentRegistersAndRunsAutomationTools) {
         ASSERT_NE(info, nullptr);
         EXPECT_EQ(info->policy, ToolPolicy::CONFIRM) << mut;
         EXPECT_FALSE(info->grantScope) << mut << " must not offer always-allow";
+        EXPECT_FALSE(info->allowAlways) << mut << " must disallow standing grants";
     }
 
     // Without approval callback, create_automation is denied fail-closed.
@@ -249,13 +345,28 @@ TEST(AutomationStoreTest, GaiaAgentRegistersAndRunsAutomationTools) {
         "create_automation", json{{"name", "Call Sam"}, {"at", "10m"}, {"say", "Call Sam"}});
     EXPECT_NE(denied.value("status", ""), "success");
 
-    // With approval, it creates the reminder and list_automations returns it.
-    agent.toolRegistry().setConfirmCallback(
-        [](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    // Even if AllowedToolsStore contains create_automation or a callback returns ALWAYS_ALLOW,
+    // the registry must never skip confirmation or persist a standing grant.
+    auto store = std::make_shared<AllowedToolsStore>("");
+    store->addAlwaysAllowed("create_automation");
+    agent.toolRegistry().setAllowedToolsStore(store);
+    int confirmCalls = 0;
+    agent.toolRegistry().setConfirmCallback([&](const std::string&, const json&) {
+        ++confirmCalls;
+        return ToolConfirmResult::ALWAYS_ALLOW;
+    });
     json created = agent.toolRegistry().executeTool(
         "create_automation", json{{"name", "Call Sam"}, {"at", "10m"}, {"say", "Call Sam"}});
     ASSERT_EQ(created.value("status", ""), "success") << created.dump();
+    EXPECT_EQ(confirmCalls, 1);
+
+    // Second call must ask again even after ALWAYS_ALLOW was returned above.
+    json second = agent.toolRegistry().executeTool(
+        "create_automation", json{{"name", "Call Pat"}, {"at", "20m"}, {"say", "Call Pat"}});
+    ASSERT_EQ(second.value("status", ""), "success") << second.dump();
+    EXPECT_EQ(confirmCalls, 2);
+
     json listed = agent.toolRegistry().executeTool("list_automations", json::object());
     ASSERT_EQ(listed.value("status", ""), "success");
-    EXPECT_EQ(listed.value("count", 0), 1);
+    EXPECT_EQ(listed.value("count", 0), 2);
 }
