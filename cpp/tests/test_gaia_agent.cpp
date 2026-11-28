@@ -2650,3 +2650,34 @@ TEST(GaiaAgentTest, ReenablingMemoryOnCompactModelKeepsCompactWithheldMemoryTool
     EXPECT_EQ(onTools.count("update_memory"), 0u);
     EXPECT_EQ(onTools.count("forget"), 0u);
 }
+
+TEST(GaiaAgentTest, MemorySwitchesDoNotUndoTheCompactTierOrOtherTools) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Private."));
+    mock.pushResponse(answer("Normal."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryPrivate = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Gemma-4-E2B-it-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("First turn.");
+    o.memoryPrivate->store(false);
+    agent.processQuery("Second turn.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const auto privateTools = advertisedToolNames(bodies[0]);
+    EXPECT_EQ(privateTools.count("recall"), 1u);
+    EXPECT_EQ(privateTools.count("remember"), 0u);
+    const auto normalTools = advertisedToolNames(bodies[1]);
+    EXPECT_EQ(normalTools.count("remember"), 1u);
+    for (const auto& tools : {privateTools, normalTools}) {
+        for (const char* name : {"update_memory", "forget", "git_status", "env_inspect"}) {
+            EXPECT_EQ(tools.count(name), 0u) << name << " stays withheld from a compact model";
+        }
+    }
+}

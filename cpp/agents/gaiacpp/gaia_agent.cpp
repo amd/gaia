@@ -631,29 +631,24 @@ void GaiaAgent::onTurnStart() {
     webPages_->clear();
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
-    for (const auto& name : compactWithheldTools()) {
+    // Memory tools also follow the chat's switch, so the model isn't offered a tool it would be refused.
+    const bool memOff = memoryOff();
+    const bool memPrivate = memoryPrivate();
+    const auto& withheld = compactWithheldTools();
+    std::set<std::string> gated(withheld.begin(), withheld.end());
+    gated.insert({"recall", "remember", "update_memory", "forget"});
+    for (const auto& name : gated) {
+        bool on = !(compact && std::find(withheld.begin(), withheld.end(), name) != withheld.end());
+        if (name == "recall") on = on && !memOff;
+        if (name == "remember" || name == "update_memory" || name == "forget") on = on && !memOff && !memPrivate;
         // Written only on a change, so a turn doesn't race readers on other threads for nothing.
-        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) == compact) {
-            toolRegistry().setEnabled(name, !compact);
-        }
+        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != on) toolRegistry().setEnabled(name, on);
     }
     // A compact model gets helpers only when asked for by number: its evals have not earned them.
     if (toolRegistry().hasTool("delegate_task")) {
         const bool offer = !compact || options_.maxHelpers > 0;
         if (toolRegistry().isEnabled("delegate_task") != offer) toolRegistry().setEnabled("delegate_task", offer);
     }
-    // Hide memory tools when the chat switch forbids them so the model does not call and fail them.
-    const bool memOff = memoryOff();
-    const bool memPrivate = memoryPrivate();
-    auto setToolEnabled = [this](const char* name, bool on) {
-        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != on) {
-            toolRegistry().setEnabled(name, on);
-        }
-    };
-    setToolEnabled("recall", !memOff);
-    setToolEnabled("remember", !memOff && !memPrivate);
-    setToolEnabled("update_memory", !compact && !memOff && !memPrivate);
-    setToolEnabled("forget", !compact && !memOff && !memPrivate);
     {
         std::lock_guard<std::mutex> lock(helperMu_);
         helperTotals_ = HelperTotals{};
