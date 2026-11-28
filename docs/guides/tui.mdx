@@ -341,8 +341,10 @@ block:
   `continue anyway`.
 - **Vision:** with a chat model that can't read images and no vision model, GAIA
   can't read images or screenshots. It asks before downloading one.
-- **Fit unknown:** `[?] fit unknown` when GAIA couldn't read this PC's memory. It
-  never shows a guessed number.
+- **Fit unknown:** `[?] fit unknown` when GAIA can't judge the fit. If the PC's
+  memory is known but the model's need isn't, it says GAIA doesn't know how much
+  memory this model needs. If GAIA couldn't read the PC's memory, it says
+  GAIA couldn't read this PC's memory. It never shows a guessed number.
 
 The one thing that stops `Enter` is no chat model at all with chat on this PC:
 the screen says "Pick at least one chat model, or choose a cloud provider in
