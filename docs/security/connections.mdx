@@ -6,7 +6,7 @@ icon: "shield"
 
 ## Credential storage
 
-GAIA never writes tokens or API keys to plaintext files. All secrets live exclusively in your OS credential store:
+GAIA never writes tokens or API keys to plaintext files. Your OS credential store protects a single 32-byte AES-256-GCM master key (`gaia.connections` / `vault-master-key`), which unlocks an encrypted `0600` vault file at `~/.gaia/connectors/vault.enc` holding OAuth refresh tokens, OAuth client credentials, cloud/gateway API keys, Slack and Discord bot tokens, and the browser session key:
 
 | Platform | Store |
 |---|---|
@@ -14,13 +14,23 @@ GAIA never writes tokens or API keys to plaintext files. All secrets live exclus
 | Linux | gnome-keyring or kwallet |
 | Windows | Credential Locker |
 
+Keeping one master key in the OS credential store avoids prompting once per saved secret when an unsigned macOS build updates. Existing per-slot OS keyring entries are copied into `vault.enc` on first read; after that GAIA reads them from the vault only. Deleting the last entry in `vault.enc` removes both `vault.enc` and `vault-master-key`.
+
+**Transition release.** This release keeps the old per-slot keyring entries, and every save also updates them, so downgrading GAIA or running an older agent build that reads them directly still finds you connected. The next release stops updating them and removes them; downgrading past that point means signing in again.
+
+**macOS trade-off.** Before the vault, macOS asked separately for each saved secret, so you could approve one connection and decline another. Now one approval of the master key unlocks every secret GAIA's Python processes keep in the vault (connector sign-ins, cloud and gateway keys, Slack and Discord tokens, the browser session key). MCP server keys are not in the vault and are still approved one by one.
+
+keyring's `null` backend stores nothing, so on it saving any of these secrets fails with an error instead of appearing to succeed. Where no credential store exists, supply the secret through its environment variable.
+
+The `vault.enc` envelope format (version 1) is fixed for cross-runtime compatibility: 6-byte magic `GAIAV1`, 1-byte version (`0x01`), 12-byte random nonce, and AES-256-GCM ciphertext plus 16-byte tag over UTF-8 JSON `{"entries":{"<slot>":"<value>"},"v":1}` with associated data `gaia.connections:vault:v1`.
+
 GAIA refuses a plaintext or weakly encrypted keyring backend (`keyrings.alt`'s `PlaintextKeyring`, `EncryptedKeyring`, `Win32CryptoKeyring`, or anything derived from them) before every read and write — for connector tokens, API keys, Slack and Discord bot tokens, the browser session key, MCP server secrets and Agent Hub publisher tokens alike. If keyring chains several backends, every one of them is checked, and a chain GAIA cannot fully inspect is refused. Deleting a secret still works on such a backend, since it only reduces what is exposed: GAIA removes it and logs a warning to switch backends. That includes disconnecting a Google or Microsoft account, with one difference: revoking GAIA's access at the provider needs the stored token, which GAIA will not read there, so the disconnect removes the account from this PC only and tells you to remove GAIA from your account's app permissions page ([Google](https://myaccount.google.com/permissions), [Microsoft personal](https://account.live.com/consent/Manage), [Microsoft work or school](https://myapps.microsoft.com)). To fix the error, install a system credential store (gnome-keyring or kwallet on Linux), or point `PYTHON_KEYRING_BACKEND` at one, and restart GAIA.
 
 On macOS, the GAIA daemon reads the keychain for the flagship agent, using a credential only that agent receives. The keychain ties approval to the exact build asking, so this keeps agent updates from prompting again. The trade-off: when macOS asks, **Always Allow** now approves the daemon's Python interpreter, not the agent, and any script that same interpreter runs can then read these items without a prompt. An agent started without the daemon reads the keychain itself.
 
-Each connector occupies a dedicated keyring slot keyed by `gaia.connections:<connector-id>:<secret-name>`. MCP server tokens use `$keyring:<slot>` references in `~/.gaia/mcp_servers.json` — the JSON file itself contains no actual secrets.
+MCP server tokens stay directly in the OS keyring under `gaia.connections:<connector-id>:<secret-name>` so both Python and the native C++ runtime (`gaiacpp`) resolve `$keyring:<slot>` references in `~/.gaia/mcp_servers.json` — the JSON file itself contains no actual secrets.
 
-OAuth refresh tokens and MCP server API keys are AES-256 encrypted by the OS keyring at rest and decrypted in memory only when a tool call needs them.
+OAuth refresh tokens, API keys, and messaging tokens are AES-256-GCM encrypted at rest in `vault.enc` under the OS-keyring-protected master key and decrypted in memory only when needed; MCP server API keys are encrypted at rest by the OS keyring.
 
 ## Per-agent grant + activation model
 
