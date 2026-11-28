@@ -1011,6 +1011,9 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
         await expect(page.locator('.render-calc')).toBeVisible();
         expect(await audit(page)).toEqual([]);
+        const boxDrop = await page.locator('.render-calc__field').evaluateAll((fields) =>
+            fields.map((f) => Math.round(f.querySelector('.render-calc__box')!.getBoundingClientRect().top - f.getBoundingClientRect().top)));
+        expect(new Set(boxDrop).size, `every field puts its box in the same place, got ${boxDrop}`).toBe(1);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
     });
@@ -6869,6 +6872,19 @@ test('composer chips stay whole at phone width', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    test(`a narrow new chat keeps the model name readable beside the memory chip (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 600 });
+        await open(page, '', locale);
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(full);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 820, height: 640 });
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
@@ -7655,7 +7671,7 @@ const CRASHES: Record<'main' | 'sidebar' | 'window', { hash: string; before: (pa
     window: {
         hash: '',
         before: (page) => page.route((url) => url.pathname === '/api/providers/active', (route) =>
-            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN } } })),
+            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN, model: BROKEN, reason: 'it has no working key' } } })),
     },
 };
 

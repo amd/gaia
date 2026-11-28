@@ -75,3 +75,24 @@ describe('ModelRow memory badge', () => {
         expect(document.querySelector('.model-badge.is-tight')!.textContent).toContain('ذاكرة محدودة');
     });
 });
+
+describe('ModelRow support tag', () => {
+    const LOCAL: ProviderModel = { id: 'gpt-oss-20b-GGUF', context_length: null, downloaded: false, labels: [], rank: null, note: null, evidence: null, support: 'untested' };
+    const renderLocal = (model: ProviderModel, remote = false) =>
+        render(<ModelRow model={model} label="gpt-oss 20B" current={false} remote={remote} busy={null} onUse={() => {}} onDownload={() => {}} onAskRemove={() => {}} />);
+
+    it('marks a local model untested, as the chat box model menu does', () => {
+        renderLocal(LOCAL);
+        expect(screen.getByText('Untested')).toBeInTheDocument();
+    });
+
+    it('marks a verified local model verified', () => {
+        renderLocal({ ...LOCAL, support: 'verified' });
+        expect(screen.getByText('Verified')).toBeInTheDocument();
+    });
+
+    it('adds no tag to a cloud model', () => {
+        renderLocal({ ...LOCAL, support: 'untested' }, true);
+        expect(screen.queryByText('Untested')).not.toBeInTheDocument();
+    });
+});

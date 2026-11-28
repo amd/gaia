@@ -26,15 +26,14 @@
     min-width: 0;
 }
 
+/* Label over box in every field, so a long label never knocks one field out of line. */
 .render-calc__label {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 6px 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
     font-size: var(--fs-body);
     font-weight: 500;
-    white-space: nowrap;
 }
 
 .render-calc__box {
@@ -51,6 +50,7 @@
 }
 
 .render-calc__box input {
+    flex: 1;
     width: 11ch;
     min-width: 0;
     border: 0;

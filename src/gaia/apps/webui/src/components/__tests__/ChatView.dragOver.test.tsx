@@ -84,3 +84,15 @@ it('clears the overlay when the file is dropped on the message box', async () =>
     });
     expect(screen.queryByText(OVERLAY)).not.toBeInTheDocument();
 });
+
+it('attaches a photo dropped on the chat instead of indexing it as a document', async () => {
+    const { container } = render(<ChatView sessionId={SESSION.id} />);
+    const chat = container.querySelector('main.task-view') as HTMLElement;
+    mockedApi.uploadFile.mockResolvedValue({ url: '/api/files/sunset.png' } as Awaited<ReturnType<typeof api.uploadFile>>);
+    const file = new File(['x'], 'sunset.png', { type: 'image/png' });
+    await act(async () => {
+        fireEvent.drop(chat, { dataTransfer: { types: ['Files'], files: [file] } });
+    });
+    expect(mockedApi.uploadFile).toHaveBeenCalledWith(file);
+    expect(mockedApi.uploadDocumentBlob).not.toHaveBeenCalled();
+});
