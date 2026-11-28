@@ -201,7 +201,8 @@ void GaiaAgent::registerTools() {
                 if (!beside.empty()) why = openOutside([&] { return ws->judgePath(beside); });
                 if (why.empty()) {
                     why = openOutside([&] {
-                        return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty());
+                        return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty(),
+                                                shellFolder ? shellFolder() : "");
                     });
                 }
                 // What the command reaches once the shell has expanded and resolved its words.

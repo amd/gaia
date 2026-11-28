@@ -412,6 +412,23 @@ TEST(WorkspaceTest, AShortNameForAnOutsideFolderIsRefused) {
 }
 #endif
 
+TEST(WorkspaceTest, ARelativeCdOutOfTheFolderIsRefused) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    fs::create_directories(d.work / "sub");
+    InFolder in(d.work);
+    for (const bool posix : {true, false}) {
+        EXPECT_NE(ws.checkCommand("cd .. && cat other/secret.txt", posix), "") << posix;
+        EXPECT_NE(ws.checkCommand("cd sub && cd ../..", posix), "") << posix;
+        EXPECT_EQ(ws.checkCommand("cd sub && cd ..", posix), "") << posix;
+        EXPECT_EQ(ws.checkCommand("cd sub", posix), "") << posix;
+    }
+    EXPECT_NE(ws.checkCommand("cd /d .. && type other\secret.txt", false), "");
+    // From a subfolder the shell stands in, one step up is still inside.
+    EXPECT_EQ(ws.judgeCommand("cd ..", true, (d.work / "sub").string()).refusal, "");
+    EXPECT_NE(ws.judgeCommand("cd ../..", true, (d.work / "sub").string()).refusal, "");
+}
+
 TEST(WorkspaceTest, ACommandNamingALinkOutOfTheFolderIsRefused) {
     Dirs d;
     Workspace ws({d.work.string()});

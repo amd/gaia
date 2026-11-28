@@ -57,7 +57,8 @@ public:
     Outside judgePath(const std::string& path) const;
 
     /// checkCommand(), with the location to ask the user about.
-    Outside judgeCommand(const std::string& command, bool posixShell = true) const;
+    /// `cwd` is where the shell stands, for a relative `cd`; empty means the process's folder.
+    Outside judgeCommand(const std::string& command, bool posixShell = true, const std::string& cwd = "") const;
 
     /// True when `path` (relative to the working directory) lies inside a root.
     bool contains(const std::string& path) const;
