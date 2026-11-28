@@ -45,7 +45,7 @@ import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
-import { localizeLiveStatus } from '../utils/liveStatus';
+import { localizeLiveStatus, localizeNarration } from '../utils/liveStatus';
 import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
 import { visibleName, markStrayDirection } from './CalendarApproval';
@@ -205,7 +205,7 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     if (GAIA_WRITTEN_TOOLS.has(step.tool ?? '')) return toolFallbackLabel(step, t);
     // A present-tense narration would read as if a call that never ran had run.
     if ((step.declined || step.timedOut || step.refused || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
-    return step.narration ? compactNarration(markStrayDirection(step.narration)) : toolFallbackLabel(step, t);
+    return step.narration ? localizeNarration(t, compactNarration(markStrayDirection(step.narration))) : toolFallbackLabel(step, t);
 }
 
 const COMPACT_DETAIL_CHARS = 48;
@@ -982,7 +982,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    {/* The model's narration is English in every UI language; it truncates at its own end. */}
+                    {/* A narration GAIA has no label for stays English; it truncates at its own end. */}
                     <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (
                         <span className="flow-tool-count" aria-label={t('activity.identicalCalls', { n: count })}>{'×'}{count}</span>

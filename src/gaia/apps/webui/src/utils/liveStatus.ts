@@ -30,6 +30,15 @@ function narrationParam(narration: string): Param {
     return m && key ? ref('live.toolAction', { action: ref(key), detail: m[2] }) : narration;
 }
 
+/** A tool row's narration in the chosen language, its detail kept once and as sent. */
+export function localizeNarration(t: Translate, narration: string): string {
+    const whole = toolAction(narration);
+    if (whole) return t(whole);
+    const m = /^(.+?): (.+)$/s.exec(narration);
+    const key = m ? toolAction(m[1]) : undefined;
+    return m && key ? t.bare('live.toolAction', { action: t(key), detail: m[2] }) : narration;
+}
+
 /** Live status lines the backend and ChatView write in English, matched whole. */
 const EXACT: Record<string, Parameters<Translate>[0]> = {
     'Thinking...': 'msg.thinking',
