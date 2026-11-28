@@ -108,6 +108,16 @@ describe('Sidebar chat search', () => {
         expect(screen.getByRole('status')).toHaveTextContent('2 chats match');
     });
 
+    it('lets a snippet pick its own direction so an English match is not clipped in Arabic', async () => {
+        mockedApi.searchSessions.mockResolvedValue({ query: 'trip', results: [TRIP_IN_TAX] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        await type('trip');
+        await settle();
+        const snippet = list().querySelector('.sb-row-snippet');
+        expect(snippet).toHaveTextContent('can I deduct the trip to the conference?');
+        expect(snippet).toHaveAttribute('dir', 'auto');
+    });
+
     it('drops results that belong to an older query', async () => {
         mockedApi.searchSessions.mockResolvedValue({ query: 'trip', results: [TRIP_IN_TAX] });
         render(<Sidebar onNewChat={vi.fn()} />);

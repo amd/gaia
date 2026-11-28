@@ -5,7 +5,8 @@ import React, { createContext, useCallback, useContext, useId, useLayoutEffect, 
 import type { Components, Options as MarkdownOptions } from 'react-markdown';
 import { Copy, Check, AlertCircle, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
+import { SAFE_DISALLOWED_ELEMENTS, isUploadUrl, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
+import { AttachmentLink } from './AttachmentLink';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import temml from 'temml';
@@ -1355,6 +1356,7 @@ const MARKDOWN_COMPONENTS: Components = {
     },
     // Links open in new tab
     a({ href, children }) {
+        if (isUploadUrl(href)) return <AttachmentLink href={href}>{children}</AttachmentLink>;
         return (
             <a
                 href={href}

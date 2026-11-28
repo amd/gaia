@@ -151,6 +151,13 @@ describe('schedule dates follow the interface language, not the PC', () => {
         expect(text).toContain('بعد 2 ي');
     });
 
+    it('keeps the day and time ahead of the countdown by closing them in one right-to-left island', () => {
+        const now = new Date('2026-10-14T09:00:00Z');
+        const text = formatNextRun('2026-10-16T09:00:00Z', now, translator('ar').bare, dateLocale(translator('ar')));
+        expect(text.startsWith('\u2067')).toBe(true);
+        expect(text.endsWith('\u2069')).toBe(true);
+    });
+
     it('shows an Arabic next run on the card in an Arabic UI', () => {
         useScheduleStore.setState({ schedules: [{ ...schedule, status: 'active', next_run_at: new Date(Date.now() + 3 * 86_400_000).toISOString() }] });
         render(<ScheduleManager />);

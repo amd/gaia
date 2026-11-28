@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -70,6 +71,83 @@ def test_edit_changes_schedule_and_prompt_and_keeps_identity(setup):
     assert row["prompt"] == "Write the brief"
     assert row["interval_seconds"] == 86400
     assert row["next_run_at"] == after["next_run_at"]
+
+
+def _pretend_next_run_is_in_an_hour(scheduler, name="report"):
+    """Leave the task halfway through its wait, as it is some time after it was made."""
+    task = scheduler._tasks[name]
+    task.next_run_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    scheduler._db_update_task(task)
+    return task.next_run_at
+
+
+def test_editing_only_the_prompt_keeps_the_next_run_time(setup):
+    client, scheduler, db = setup
+    before = _create(client)
+    waiting = _pretend_next_run_is_in_an_hour(scheduler)
+
+    after = client.patch(
+        "/api/schedules/report",
+        json={"interval": "every 6h", "prompt": "Write the brief", "timezone": "UTC"},
+    ).json()
+
+    assert after["prompt"] == "Write the brief"
+    assert after["next_run_at"] == waiting
+    row = next(r for r in db.list_scheduled_tasks() if r["id"] == before["id"])
+    assert row["next_run_at"] == waiting
+
+
+def test_rewording_the_same_schedule_keeps_the_next_run_time(setup):
+    client, scheduler, _ = setup
+    _create(client)
+    waiting = _pretend_next_run_is_in_an_hour(scheduler)
+
+    after = client.patch(
+        "/api/schedules/report",
+        json={"interval": "every 6 hours", "prompt": "P", "timezone": "UTC"},
+    ).json()
+
+    assert after["next_run_at"] == waiting
+
+
+def test_changing_the_interval_restarts_the_wait(setup):
+    client, scheduler, _ = setup
+    _create(client)
+    waiting = _pretend_next_run_is_in_an_hour(scheduler)
+
+    after = client.patch(
+        "/api/schedules/report",
+        json={"interval": "every 2h", "prompt": "P", "timezone": "UTC"},
+    ).json()
+
+    next_run = datetime.fromisoformat(after["next_run_at"])
+    assert after["next_run_at"] != waiting
+    assert next_run - datetime.now(timezone.utc) > timedelta(hours=1, minutes=59)
+
+
+def test_changing_only_the_time_zone_of_a_daily_schedule_moves_the_next_run(setup):
+    client, scheduler, _ = setup
+    client.post(
+        "/api/schedules",
+        json={
+            "name": "report",
+            "interval": "daily at 9am",
+            "prompt": "P",
+            "timezone": "UTC",
+        },
+    )
+    utc_run = scheduler._tasks["report"].next_run_at
+
+    after = client.patch(
+        "/api/schedules/report",
+        json={
+            "interval": "daily at 9am",
+            "prompt": "P",
+            "timezone": "Pacific/Auckland",
+        },
+    ).json()
+
+    assert after["next_run_at"] != utc_run
 
 
 def test_edit_keeps_a_paused_schedule_paused(setup):
