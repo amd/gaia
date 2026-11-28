@@ -470,6 +470,20 @@ TEST(ShellConfinement, JudgementSeparatesCheckedOpaqueAndOutside) {
         EXPECT_FALSE(j.outsideWord.empty()) << listing;
         EXPECT_EQ(fs::path(j.outsidePath).lexically_normal(), fs::path(outsideReal).lexically_normal()) << listing;
     }
+    // A virtual environment outside the folders: the card asks about the environment, not the
+    // interpreter its python links to somewhere else.
+    fs::create_directories(base / "outside" / "venv" / "bin");
+    std::ofstream(base / "outside" / "venv" / "pyvenv.cfg") << "home = /usr/bin\n";
+    std::error_code linkEc;
+    fs::create_directories(base / "store");
+    std::ofstream(base / "store" / "python3.12") << "#!/bin/sh\n";
+    fs::permissions(base / "store" / "python3.12", fs::perms::owner_all);
+    fs::create_symlink(base / "store" / "python3.12", base / "outside" / "venv" / "bin" / "python", linkEc);
+    ASSERT_FALSE(linkEc) << linkEc.message();
+    const gaia::ShellJudgement venvRun = judge("../outside/venv/bin/python -m pytest -q");
+    EXPECT_FALSE(venvRun.outsideWord.empty());
+    EXPECT_EQ(fs::path(venvRun.outsidePath).lexically_normal(),
+              fs::path(fs::canonical(base / "outside" / "venv").string()).lexically_normal());
     EXPECT_TRUE(judge("mkdir a && rm -rf b").compound);
     EXPECT_TRUE(judge("echo $(date)").compound);
     EXPECT_FALSE(judge("mkdir -p a/b").compound);

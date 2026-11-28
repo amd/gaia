@@ -642,6 +642,8 @@ func (m Model) noteLines(w int) []string {
 		add(warnStyle, noFitLine(*r.needGB, *r.haveGB))
 	case r.fits != nil && *r.fits && r.tight:
 		add(warnStyle, "[!] "+tightLine)
+	case r.fits == nil && !r.downloaded && r.haveGB != nil && r.needGB == nil:
+		add(warnStyle, "[?] "+fitNeedUnknownLine)
 	case r.fits == nil && !r.downloaded:
 		add(warnStyle, "[?] "+fitUnknownLine)
 	}

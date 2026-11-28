@@ -198,6 +198,29 @@ func TestUnknownFitNeverInventsANumber(t *testing.T) {
 	}
 }
 
+func TestKnownPCUnknownModelNeedBlamesTheModel(t *testing.T) {
+	p := coldPlan()
+	for i := range p.Catalog {
+		p.Catalog[i].Fits, p.Catalog[i].NeedGB = nil, nil
+	}
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: discreteGPU()})
+	h.focusID(qwen)
+	h.expect("GAIA doesn't know how much memory this model needs")
+	h.expectNot(fitUnknownLine)
+}
+
+func TestUnknownPCMemoryKeepsTheOldLine(t *testing.T) {
+	p := coldPlan()
+	for i := range p.Catalog {
+		p.Catalog[i].Fits, p.Catalog[i].NeedGB, p.Catalog[i].CapacityGB = nil, nil, nil
+	}
+	p.CapacityGB = nil
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: discreteGPU()})
+	h.focusID(qwen)
+	h.expect(fitUnknownLine)
+	h.expectNot("GAIA doesn't know how much memory this model needs")
+}
+
 // An FLM-only user picks the FLM model and downloads nothing; setup still
 // tests it before calling GAIA ready.
 func TestFLMOnlyUserDownloadsNothingAndIsTested(t *testing.T) {

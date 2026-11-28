@@ -58,7 +58,7 @@ Headless runs deny tools that change things (shell, writes, web) unless you pass
 
 `gaiacpp` talks to any OpenAI-compatible endpoint. Settings apply in this order, each overriding the one before:
 
-1. Built-in defaults: the model server and model GAIA set up (below), a 32768-token context window, 16384 output tokens, temperature 0.2 and a 1000-step limit
+1. Built-in defaults: the model server and model GAIA set up (below), a 32768-token context window, 16384 output tokens, a 1000-step limit, and the sampling the model's card publishes (temperature 0.2 for a model GAIA has no card for). A `temperature` in the settings file or `--temperature` replaces the card's sampling with that temperature alone
 2. The settings file: `--config FILE`, else `$GAIACPP_CONFIG`, else `$XDG_CONFIG_HOME/gaiacpp/config.json` or `~/.config/gaiacpp/config.json` (`%APPDATA%\gaiacpp\config.json` on Windows) when it exists
 3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`, `GAIA_FEATURE_TIER`, `GAIA_MAX_HELPERS`. `GAIA_AGENT_MAX_STEPS`, the name the Python agent reads, sets the step limit too; when both are set, `GAIA_MAX_STEPS` wins
 4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--temperature`, `--native-tools`, `--feature-tier`, `--max-helpers`
