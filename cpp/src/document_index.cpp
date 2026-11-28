@@ -373,7 +373,8 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
         pages.emplace_back(0, docxText(path));
         return pages;
     }
-    if (const char* format = unsupportedDocumentFormat(ext)) {
+    // A reader the app registered for one of these formats still wins.
+    if (const char* format = isSupportedExtension(ext) ? nullptr : unsupportedDocumentFormat(ext)) {
         const std::string name = fs::path(path).filename().u8string();
         throw std::runtime_error(
             "Can't index " + name + ": " + format + " (" + ext +

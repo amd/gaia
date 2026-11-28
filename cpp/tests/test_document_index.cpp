@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <gaia/chunking.h>
 #include <gaia/document_index.h>
 #include <gaia/process.h>
 #include <gaia/tool_registry.h>
@@ -460,4 +461,14 @@ TEST(DocumentIndexTest, UnsupportedOfficeFormatsReportPlainEnglishErrors) {
             EXPECT_EQ(msg.find("NUL bytes"), std::string::npos) << "leaked binary NUL jargon: " << msg;
         }
     }
+}
+
+TEST(DocumentIndexTest, AReaderTheAppRegisteredForAnUnsupportedFormatStillRuns) {
+    // .epub is on the unsupported list and no other test registers it (the registry is process-global).
+    registerExtractor(".epub", [](const std::string&) { return std::string("Chapter one text 6621"); });
+    TempDir d;
+    const std::string book = d.write("novel.epub", "PK binary");
+    const auto pages = DocumentIndex::extractPages(book);
+    ASSERT_EQ(pages.size(), 1u);
+    EXPECT_EQ(pages[0].second, "Chapter one text 6621");
 }
