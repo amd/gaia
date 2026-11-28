@@ -64,10 +64,12 @@ def tool_result_failed(
 ) -> bool:
     """Whether *result* reports that the tool call failed.
 
-    A non-zero ``return_code`` counts unless the tool marked it
-    ``expected_exit`` (grep's exit 1 is "no match"). A bare ``error`` counts
-    only when nothing in the result claims success. ``ok: false`` beside a
-    status the tool named itself is a check's verdict, not a failed call
+    A non-zero ``return_code`` or ``exit_code`` counts unless the tool marked it
+    ``expected_exit`` (grep's exit 1 is "no match"). ``timed_out`` or
+    ``cancelled`` counts unless the call was ``denied`` (a confirmation timeout
+    is handled through ``failed_statuses``). A bare ``error`` counts only when
+    nothing in the result claims success. ``ok: false`` beside a status the tool
+    named itself is a check's verdict, not a failed call
     (:func:`reports_findings`).
     """
     data = tool_result_dict(result)
@@ -81,7 +83,14 @@ def tool_result_failed(
         or data.get("has_errors") is True
     ):
         return True
-    if data.get("return_code") not in (None, 0) and not data.get("expected_exit"):
+    if (
+        data.get("return_code") not in (None, 0)
+        or data.get("exit_code") not in (None, 0)
+    ) and not data.get("expected_exit"):
+        return True
+    if (
+        data.get("timed_out") is True or data.get("cancelled") is True
+    ) and status != "denied":
         return True
     error = data.get("error")
     return (

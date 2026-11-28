@@ -213,7 +213,7 @@ export function AutomationsSettings() {
                     onConfirm={() => remove(confirm)}
                     onCancel={() => setConfirm(null)}
                 >
-                    <p>{t('settings.automations.removeBody')}</p>
+                    <p>{t(isNative ? 'settings.automations.removeBodyNative' : 'settings.automations.removeBody')}</p>
                 </ConfirmSheet>
             )}
         </div>

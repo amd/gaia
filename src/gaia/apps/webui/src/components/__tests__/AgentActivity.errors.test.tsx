@@ -76,3 +76,33 @@ it('says a blocked page fetch in plain words and keeps the site name on the row'
     expect(screen.getByText('Fetching page: accuweather.com/…/paris/623')).toBeVisible();
     expect(container.querySelector('.flow-tool-failure')).toHaveTextContent('Site blocked it (403)');
 });
+
+it('shows the friendly fetch-failed label on gaiacpp web_fetch failures and keeps the detail inside', () => {
+    const detail = 'Could not look up nonexistent.invalid. Check the host name and network connection.';
+    const steps: AgentStep[] = [
+        {
+            id: 1, type: 'tool', label: 'Using fetch_page', tool: 'fetch_page', active: false, success: false, timestamp: 1,
+            narration: 'Fetching page: nonexistent.invalid/demo',
+            result: detail,
+        },
+    ];
+    const { container } = render(<AgentActivity steps={steps} isActive={false} />);
+    fireEvent.click(screen.getAllByRole('button')[0]);
+
+    expect(container.querySelector('.flow-tool-failure')).toHaveTextContent("Couldn't be loaded");
+    expect(screen.getByText(detail)).toBeVisible();
+});
+
+it('recognizes HTTP 403 from gaiacpp web_fetch as site blocked', () => {
+    const steps: AgentStep[] = [
+        {
+            id: 1, type: 'tool', label: 'Using fetch_page', tool: 'fetch_page', active: false, success: false, timestamp: 1,
+            narration: 'Fetching page: example.com/private',
+            result: 'GET https://example.com/private returned HTTP 403: Forbidden',
+        },
+    ];
+    const { container } = render(<AgentActivity steps={steps} isActive={false} />);
+    fireEvent.click(screen.getAllByRole('button')[0]);
+
+    expect(container.querySelector('.flow-tool-failure')).toHaveTextContent('Site blocked it (403)');
+});

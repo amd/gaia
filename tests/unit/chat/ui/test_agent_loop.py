@@ -125,7 +125,7 @@ class TestRunStepModeGate:
     def _make_loop(self, db):
         loop = AgentLoop()
         loop._db = db
-        loop._app_state = type("S", (), {"tunnel": None})()
+        loop._app_state = SimpleNamespace(tunnel=None, session_locks={})
         return loop
 
     async def _run(self, mode, tmp_path):
@@ -150,6 +150,35 @@ class TestRunStepModeGate:
     async def test_unset_mode_defaults_to_goal_driven(self, tmp_path):
         directive = await self._run(None, tmp_path)
         assert directive.directive == "idle"
+
+    async def test_gaiacpp_pauses_without_running_goals(self, tmp_path, monkeypatch):
+        import gaia.config as config_mod
+
+        gaia_dir = tmp_path / ".gaia"
+        initialized = gaia_dir / "chat" / "initialized"
+        initialized.parent.mkdir(parents=True, exist_ok=True)
+        initialized.touch()
+        config_file = gaia_dir / "config.json"
+        config_file.write_text('{"flagship_agent": "gaiacpp"}\n', encoding="utf-8")
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
+        db = FakeDB({"agent_mode": "goal_driven"}, sessions=[])
+        loop = self._make_loop(db)
+        with (
+            patch.dict(os.environ, {"GAIA_HOME": str(gaia_dir)}),
+            patch.object(
+                AgentLoop, "_get_actionable_goals", return_value=[{"id": "g1"}]
+            ) as get_goals,
+            patch.object(AgentLoop, "_execute_tick") as exec_tick,
+        ):
+            directive = await loop._run_step(
+                agent_loop_mod.AgentTrigger("idle_tick", None)
+            )
+        assert directive.directive == "paused"
+        assert directive.reason == "flagship_agent=gaiacpp"
+        get_goals.assert_not_called()
+        exec_tick.assert_not_called()
+        assert db._sessions == []
+        assert loop._calls_this_hour == 0
 
 
 class TestHourlyBudgetOnlySpentOnRealTicks:
