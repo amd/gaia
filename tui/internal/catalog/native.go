@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/gaiahome"
 )
 
 // The flagship has two programs behind it: the native C++ agent and the Python
@@ -51,7 +53,7 @@ func isPythonAgentBinary(path string) bool {
 func gaiaHome() string {
 	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
 		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
-			return ExpandHome(os.ExpandEnv(dir))
+			return gaiahome.ExpandPath(dir)
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -72,14 +74,7 @@ func gaiaHomeBin() string {
 
 // ExpandHome replaces a leading ~ with the user's home directory.
 func ExpandHome(dir string) string {
-	if dir != "~" && !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, `~\`) {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return dir
-	}
-	return filepath.Join(home, dir[1:])
+	return gaiahome.ExpandUser(dir, os.UserHomeDir)
 }
 
 // FindNative locates gaiacpp, in the order the Agent UI's backend uses

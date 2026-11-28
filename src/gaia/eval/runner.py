@@ -44,7 +44,7 @@ from gaia.eval.claude_outage import (
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
-from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
+from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_EVAL_MODEL
 from gaia.eval.eval_lock import exclusive_eval
 from gaia.eval.fixture_env import fixture_fingerprint
 from gaia.eval.fixture_env import from_env as fixture_env_from_env
@@ -189,7 +189,7 @@ _KNOWN_PERSONAS = frozenset(
     }
 )
 
-DEFAULT_MODEL = DEFAULT_CLAUDE_MODEL
+DEFAULT_MODEL = DEFAULT_EVAL_MODEL
 DEFAULT_BACKEND = f"http://localhost:{AGENT_UI_PORT}"
 DEFAULT_BUDGET = "2.00"
 DEFAULT_TIMEOUT = 900  # seconds per scenario (base)

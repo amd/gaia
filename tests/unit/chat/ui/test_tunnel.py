@@ -327,6 +327,57 @@ class TestParseNgrokError:
         assert "exited without output" in msg.lower()
         assert "ngrok http 4200" in msg
 
+    def test_empty_stderr_uses_configured_port(self, monkeypatch):
+        from gaia.ui import tunnel as tunnel_mod
+        from gaia.ui.tunnel import _parse_ngrok_error
+
+        msg = _parse_ngrok_error("", port=8080)
+        assert "exited without output" in msg.lower()
+        assert "ngrok http 8080" in msg
+        assert "4200" not in msg
+
+        manager = TunnelManager(port=8080)
+        assert "ngrok http 8080" in manager._explain_exit("")
+        assert "4200" not in manager._explain_exit("")
+
+        manager._find_ngrok = lambda: "/fake/ngrok"
+        monkeypatch.setattr(
+            tunnel_mod, "_check_ngrok_authtoken_configured", lambda: True
+        )
+
+        async def _noop_kill(self):
+            return None
+
+        monkeypatch.setattr(TunnelManager, "_kill_stale_ngrok", _noop_kill)
+
+        class _DeadProcess:
+            def __init__(self, *_a, **_kw):
+                self.stdout = None
+                self.stderr = None
+                self.stdin = None
+
+            def poll(self):
+                return 1
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 1
+
+            def kill(self):
+                pass
+
+        import subprocess as _sp
+
+        monkeypatch.setattr(_sp, "Popen", _DeadProcess)
+        monkeypatch.setattr(TunnelManager, "_drain_ngrok_output", lambda self: "")
+
+        status = asyncio.run(manager.start())
+        assert status["active"] is False
+        assert "ngrok http 8080" in status["error"]
+        assert "4200" not in status["error"]
+
     def test_authtoken_error(self):
         from gaia.ui.tunnel import _NGROK_AUTHTOKEN_HINT, _parse_ngrok_error
 

@@ -36,6 +36,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/filelock"
+	"github.com/amd/gaia/tui/internal/gaiahome"
 )
 
 const (
@@ -86,10 +87,10 @@ func ConfigPathFrom(getenv func(string) string, homeDir func() (string, error)) 
 // directory resolves.
 func ConfigDirFrom(getenv func(string) string, homeDir func() (string, error)) string {
 	if dir := strings.TrimSpace(getenv("GAIA_CONFIG_DIR")); dir != "" {
-		return expandUser(dir, homeDir)
+		return gaiahome.ExpandUser(dir, homeDir)
 	}
 	if dir := strings.TrimSpace(getenv("GAIA_HOME")); dir != "" {
-		return expandUser(os.Expand(dir, getenv), homeDir)
+		return gaiahome.ExpandPathWith(dir, gaiahome.LookupFromGetenv(getenv), homeDir)
 	}
 	home, err := homeDir()
 	if err != nil || home == "" {

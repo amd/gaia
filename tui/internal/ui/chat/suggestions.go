@@ -17,9 +17,8 @@ import (
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/gaiahome"
 	"github.com/amd/gaia/tui/internal/ui/theme"
-
-	"github.com/amd/gaia/tui/internal/catalog"
 )
 
 // The first screen suggests up to four things to try, each one a skill the
@@ -64,7 +63,7 @@ var skillsDir = userSkillsDir
 func userSkillsDir() string {
 	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
 		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
-			return filepath.Join(os.ExpandEnv(catalog.ExpandHome(dir)), "skills")
+			return filepath.Join(gaiahome.ExpandPath(dir), "skills")
 		}
 	}
 	home, err := os.UserHomeDir()

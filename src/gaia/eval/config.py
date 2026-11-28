@@ -14,7 +14,7 @@ This module contains shared configuration constants used across the evaluation f
 # comparable to runs under this one — replace them from the next nightly on the Strix
 # Halo pool and call the judge change out explicitly, rather than reading a shifted
 # score as a regression.
-DEFAULT_CLAUDE_MODEL = "claude-opus-5"
+DEFAULT_EVAL_MODEL = "claude-opus-5"
 
 # The agent under test. Every scenario scores the flagship — the agent users
 # actually meet — so a scorecard names one agent and comparing two is valid.

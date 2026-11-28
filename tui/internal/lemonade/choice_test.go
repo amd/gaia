@@ -525,7 +525,10 @@ func TestConfigDirExpandsLikePython(t *testing.T) {
 		want string
 	}{
 		{"tilde GAIA_HOME", map[string]string{"GAIA_HOME": "~/gaia-test"}, filepath.Join(home, "gaia-test")},
+		{"bare tilde GAIA_HOME", map[string]string{"GAIA_HOME": "~"}, home},
 		{"var GAIA_HOME", map[string]string{"GAIA_HOME": "$ROOT/g", "ROOT": "base"}, filepath.Join("base", "g")},
+		{"undefined var GAIA_HOME kept", map[string]string{"GAIA_HOME": "~/$UNSET_VAR/g"}, filepath.Join(home, "$UNSET_VAR", "g")},
+		{"tilde inside var not re-expanded", map[string]string{"GAIA_HOME": "$TILDE_VAR/g", "TILDE_VAR": "~/sub"}, filepath.Join("~", "sub", "g")},
 		{"tilde GAIA_CONFIG_DIR wins", map[string]string{"GAIA_CONFIG_DIR": "~/cfg", "GAIA_HOME": "/other"}, filepath.Join(home, "cfg")},
 		{"default", map[string]string{}, filepath.Join(home, ".gaia")},
 	}

@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/amd/gaia/tui/internal/gaiahome"
 )
 
 // LocalOnlyHint is how to turn Local only off; the same words Python uses.
@@ -28,11 +30,12 @@ const LocalOnlyHint = "To allow cloud models again, run `gaia config set network
 // "" when no home directory resolves.
 func PolicyPathFrom(getenv func(string) string, homeDir func() (string, error)) string {
 	if file := strings.TrimSpace(getenv("GAIA_POLICY_FILE")); file != "" {
-		return expandUser(file, homeDir)
+		return gaiahome.ExpandUser(file, homeDir)
 	}
+	lookup := gaiahome.LookupFromGetenv(getenv)
 	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
 		if dir := strings.TrimSpace(getenv(name)); dir != "" {
-			return filepath.Join(expandUser(os.Expand(dir, getenv), homeDir), "policy.json")
+			return filepath.Join(gaiahome.ExpandPathWith(dir, lookup, homeDir), "policy.json")
 		}
 	}
 	home, err := homeDir()
@@ -40,18 +43,6 @@ func PolicyPathFrom(getenv func(string) string, homeDir func() (string, error)) 
 		return ""
 	}
 	return filepath.Join(home, ".gaia", "policy.json")
-}
-
-// expandUser resolves a leading ~ as Python's expanduser does.
-func expandUser(path string, homeDir func() (string, error)) string {
-	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
-		return path
-	}
-	home, err := homeDir()
-	if err != nil || home == "" {
-		return path
-	}
-	return filepath.Join(home, path[1:])
 }
 
 // Limits every policy file must meet before it is parsed; Python's reader

@@ -6,6 +6,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -183,6 +184,19 @@ func TestSkillsFolderFollowsGaiaHome(t *testing.T) {
 	t.Setenv("GAIA_HOME", " ")
 	if got, want := userSkillsDir(), filepath.Join(cfg, "skills"); got != want {
 		t.Errorf("with only GAIA_CONFIG_DIR set: %q, want %q", got, want)
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	t.Setenv("GAIA_SUGGESTIONS_SUB", "team-skills")
+	t.Setenv("GAIA_HOME", "~/$GAIA_SUGGESTIONS_SUB")
+	if got, want := userSkillsDir(), filepath.Join(userHome, "team-skills", "skills"); got != want {
+		t.Errorf("with ~/$VAR: %q, want %q", got, want)
+	}
+	t.Setenv("GAIA_HOME", "~/$GAIA_UNSET_9099")
+	if got, want := userSkillsDir(), filepath.Join(userHome, "$GAIA_UNSET_9099", "skills"); got != want {
+		t.Errorf("with undefined var: %q, want %q", got, want)
 	}
 }
 

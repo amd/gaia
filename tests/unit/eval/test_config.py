@@ -9,19 +9,25 @@ assertion below is a deliberate tripwire, not busywork: if you bump the judge,
 update it here and regenerate the committed baselines in the same change.
 """
 
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
+from gaia.eval.config import DEFAULT_EVAL_MODEL, MODEL_PRICING
+from gaia.llm.claude_defaults import DEFAULT_CLAUDE_MODEL
 
 
 class TestJudgeModel:
     def test_default_judge_is_opus_5(self):
         """Deliberate tripwire — see the module docstring before changing this."""
-        assert DEFAULT_CLAUDE_MODEL == "claude-opus-5"
+        assert DEFAULT_EVAL_MODEL == "claude-opus-5"
+
+    def test_eval_default_is_distinct_from_agent_claude_default(self):
+        """Eval judge and general Claude defaults keep distinct names and roles."""
+        assert DEFAULT_CLAUDE_MODEL == "claude-sonnet-5"
+        assert DEFAULT_EVAL_MODEL != DEFAULT_CLAUDE_MODEL
 
     def test_runner_default_matches_config(self):
         """The runner must not drift from the shared config default."""
         from gaia.eval.runner import DEFAULT_MODEL
 
-        assert DEFAULT_MODEL == DEFAULT_CLAUDE_MODEL
+        assert DEFAULT_MODEL == DEFAULT_EVAL_MODEL
 
 
 class TestModelPricing:
@@ -33,10 +39,10 @@ class TestModelPricing:
         silent-fallback shape CLAUDE.md forbids, and it would understate the cost of
         an Opus-tier judge by ~1.7x. Keep the active judge explicitly priced.
         """
-        assert DEFAULT_CLAUDE_MODEL in MODEL_PRICING
+        assert DEFAULT_EVAL_MODEL in MODEL_PRICING
 
     def test_priced_judge_uses_opus_tier_rates(self):
-        pricing = MODEL_PRICING[DEFAULT_CLAUDE_MODEL]
+        pricing = MODEL_PRICING[DEFAULT_EVAL_MODEL]
         assert pricing["input_per_mtok"] == 5.00
         assert pricing["output_per_mtok"] == 25.00
 

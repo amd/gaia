@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/gaiahome"
 )
 
 // EnvHome overrides the daemon state directory (tests, and any non-default
@@ -33,19 +35,15 @@ func HostDir() (string, error) {
 	}
 	home, homeErr := os.UserHomeDir()
 	// GAIA_HOME isolates the whole runtime; a daemon outside it would manage
-	// another home's Lemonade. Expand ~ and $VARS like config/Lemonade do, or
+	// another home's Lemonade. Expand ~ then $VARS like Python does, or
 	// an unexpanded value resolves relative to cwd instead of $HOME. Mirrors
 	// src/gaia/daemon/paths.py.
 	if gaiaHome := strings.TrimSpace(os.Getenv("GAIA_HOME")); gaiaHome != "" {
-		gaiaHome = os.ExpandEnv(gaiaHome)
-		if gaiaHome == "~" || strings.HasPrefix(gaiaHome, "~/") || strings.HasPrefix(gaiaHome, `~\`) {
-			if homeErr != nil {
-				return "", fmt.Errorf(
-					"cannot resolve the home directory to expand GAIA_HOME=%q: %w", gaiaHome, homeErr)
-			}
-			gaiaHome = filepath.Join(home, gaiaHome[2:])
+		if gaiahome.HasTildePrefix(gaiaHome) && homeErr != nil {
+			return "", fmt.Errorf(
+				"cannot resolve the home directory to expand GAIA_HOME=%q: %w", gaiaHome, homeErr)
 		}
-		return filepath.Join(gaiaHome, "host"), nil
+		return filepath.Join(gaiahome.ExpandPath(gaiaHome), "host"), nil
 	}
 	if homeErr != nil {
 		return "", fmt.Errorf(

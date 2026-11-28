@@ -186,4 +186,19 @@ func TestPolicyPathExpandsTheHomeDirectory(t *testing.T) {
 	if want := filepath.Join("/home/u", "gaia-home", "policy.json"); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+	env = map[string]string{"GAIA_HOME": "~/$UNSET_DIR"}
+	got = PolicyPathFrom(func(k string) string { return env[k] }, home)
+	if want := filepath.Join("/home/u", "$UNSET_DIR", "policy.json"); got != want {
+		t.Errorf("undefined var: got %q, want %q", got, want)
+	}
+	env = map[string]string{"GAIA_CONFIG_DIR": "~/$SUB", "SUB": "cfg"}
+	got = PolicyPathFrom(func(k string) string { return env[k] }, home)
+	if want := filepath.Join("/home/u", "cfg", "policy.json"); got != want {
+		t.Errorf("GAIA_CONFIG_DIR var: got %q, want %q", got, want)
+	}
+	env = map[string]string{"GAIA_HOME": "$TILDE_VAL", "TILDE_VAL": "~/sub"}
+	got = PolicyPathFrom(func(k string) string { return env[k] }, home)
+	if want := filepath.Join("~", "sub", "policy.json"); got != want {
+		t.Errorf("tilde in var: got %q, want %q", got, want)
+	}
 }

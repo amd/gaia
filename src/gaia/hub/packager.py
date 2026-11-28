@@ -30,8 +30,6 @@ from gaia.utils.hashing import sha256_file as _sha256_file
 
 log = get_logger(__name__)
 
-# Read SHA-256 in 1 MiB chunks so a large native-deps wheel doesn't balloon RAM.
-
 _SPEC_URL = "https://amd-gaia.ai/docs/spec/agent-hub-restructure"
 
 

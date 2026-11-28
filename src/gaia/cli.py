@@ -21,7 +21,7 @@ from gaia.agents.install_hints import (
 )
 from gaia.config import gaia_agents_dir
 from gaia.env import load_env
-from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
+from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_EVAL_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_LEMONADE_URL,
@@ -34,7 +34,7 @@ from gaia.llm.lemonade_client import (
     resolve_local_chat_model,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
-from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
+from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL
 from gaia.log_rotation import log_family
 from gaia.logger import get_logger
 from gaia.login_path import apply_login_path
@@ -675,7 +675,7 @@ async def async_main(action, **kwargs):
             # Create configuration with CLI values
             config = GaiaAgentConfig(
                 use_claude=kwargs.get("use_claude", False),
-                claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
+                claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_MODEL),
                 base_url=kwargs.get(
                     "base_url",
                     resolve_lemonade_base_url(),
@@ -783,7 +783,7 @@ async def async_main(action, **kwargs):
             model=kwargs.get("model") or resolve_local_chat_model(),
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
-            claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
+            claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_MODEL),
             base_url=lemonade_base_url,
             # RAG configuration
             rag_documents=rag_documents,
@@ -877,7 +877,7 @@ def _run_registered_agent(agent_id: str, kwargs: dict, registry) -> int:
     debug = kwargs.get("debug", False)
     create_kwargs = {
         "use_claude": kwargs.get("use_claude", False),
-        "claude_model": kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
+        "claude_model": kwargs.get("claude_model", DEFAULT_CLAUDE_MODEL),
         "base_url": kwargs.get("base_url") or resolve_lemonade_base_url(),
         "streaming": kwargs.get("stream", False),
         "show_prompts": kwargs.get("show_prompts", False),
@@ -1440,8 +1440,8 @@ def build_parser():
     )
     claude_parser.add_argument(
         "--claude-model",
-        default=DEFAULT_CLAUDE_CHAT_MODEL,
-        help=f"Claude model to use when --use-claude is specified (default: {DEFAULT_CLAUDE_CHAT_MODEL})",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=f"Claude model to use when --use-claude is specified (default: {DEFAULT_CLAUDE_MODEL})",
     )
     # A removed provider, not a backend capability: it is parsed only so main()
     # can answer with the migration guidance. It therefore belongs on every
@@ -2436,8 +2436,8 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--model",
-        default=DEFAULT_CLAUDE_MODEL,
-        help=f"Judge model that scores the run (default: {DEFAULT_CLAUDE_MODEL})",
+        default=DEFAULT_EVAL_MODEL,
+        help=f"Judge model that scores the run (default: {DEFAULT_EVAL_MODEL})",
     )
     agent_eval_parser.add_argument(
         "--agent-model",
@@ -4381,7 +4381,7 @@ def _handle_eval_tasks(args):
     # is alive. Redirected to a log, block buffering holds every line to the end.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
-    judge_model = getattr(args, "judge_model", None) or DEFAULT_CLAUDE_MODEL
+    judge_model = getattr(args, "judge_model", None) or DEFAULT_EVAL_MODEL
     in_actions = os.environ.get("GITHUB_ACTIONS") == "true"
 
     def _judge(run_dir, env):
@@ -6061,9 +6061,7 @@ Let me know your answer!
                 keep_sessions=getattr(args, "keep_sessions", False),
                 resume_dir=resume_dir,
                 # Only a value the user chose is checked against the run's own.
-                resume_model=(
-                    eval_model if eval_model != DEFAULT_CLAUDE_MODEL else None
-                ),
+                resume_model=(eval_model if eval_model != DEFAULT_EVAL_MODEL else None),
                 resume_agent_type=(
                     args.agent_type if args.agent_type != DEFAULT_AGENT_TYPE else None
                 ),

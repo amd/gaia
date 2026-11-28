@@ -19,8 +19,8 @@ import os
 import sys
 import tempfile
 import webbrowser
-from typing import TYPE_CHECKING, Any, Dict, Optional
-from urllib.parse import quote
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -52,6 +52,20 @@ logger = logging.getLogger(__name__)
 
 # Default GAIA Agent UI backend URL
 DEFAULT_BACKEND = f"http://localhost:{AGENT_UI_PORT}"
+
+
+def _screenshot_window_titles(backend_url: str) -> List[str]:
+    """Fallback browser window title substrings matching *backend_url*."""
+    parsed = urlsplit(backend_url)
+    host_port = parsed.netloc or f"localhost:{AGENT_UI_PORT}"
+    titles = ["GAIA", host_port]
+    if parsed.port is not None:
+        local_port = f"localhost:{parsed.port}"
+        if local_port not in titles:
+            titles.append(local_port)
+    titles.extend(["Chrome", "Edge", "Firefox"])
+    return titles
+
 
 # Every /api request carries the X-Gaia-UI CSRF header and the Agent UI API
 # token (see gaia/ui/security.py and gaia/ui/api_token.py). ``auth_headers``
@@ -856,13 +870,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
                 hwnd = _find_browser_window("GAIA Agent UI")
                 if not hwnd:
                     # Fallback: try common browser titles
-                    for title in [
-                        "GAIA",
-                        "localhost:4200",
-                        "Chrome",
-                        "Edge",
-                        "Firefox",
-                    ]:
+                    for title in _screenshot_window_titles(backend_url):
                         hwnd = _find_browser_window(title)
                         if hwnd:
                             break
