@@ -441,3 +441,23 @@ TEST(DocumentIndexTest, AWordFileWithPercentSignsInItsNameIsRead) {
     TempDir d;
     expectDocxIsRead(d.path / "budget %PATH% 100%.docx");
 }
+
+TEST(DocumentIndexTest, UnsupportedOfficeFormatsReportPlainEnglishErrors) {
+    TempDir d;
+    const std::string xlsx = d.write("budget_sheet.xlsx", std::string("PK\x03\x04\x00\x00binary", 12));
+    const std::string pptx = d.write("pitch_deck.pptx", std::string("PK\x03\x04\x00\x00binary", 12));
+    const std::string bin = d.write("blob.bin", std::string("\x00\x01\x02\x03", 4));
+
+    for (const auto& [file, expectedFormat] :
+         std::vector<std::pair<std::string, std::string>>{{xlsx, "Excel"}, {pptx, "PowerPoint"}, {bin, "binary"}}) {
+        try {
+            DocumentIndex::extractPages(file);
+            FAIL() << "unsupported file should have failed: " << file;
+        } catch (const std::runtime_error& e) {
+            const std::string msg = e.what();
+            EXPECT_NE(msg.find(expectedFormat), std::string::npos) << msg;
+            EXPECT_EQ(msg.find("registerExtractor"), std::string::npos) << "leaked C++ SDK jargon: " << msg;
+            EXPECT_EQ(msg.find("NUL bytes"), std::string::npos) << "leaked binary NUL jargon: " << msg;
+        }
+    }
+}

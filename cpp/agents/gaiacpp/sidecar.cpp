@@ -1569,21 +1569,71 @@ private:
         json names = json::array();
         for (const auto& d : pending) names.push_back(fs::path(d).filename().string());
         s.console->emit({{"type", "tool_call"}, {"tool", "index_documents"}, {"args", {{"documents", names}}}});
-        json results = json::array();
+        json indexed = json::array();
+        json failed = json::array();
+        size_t totalChunks = 0;
         for (const auto& d : pending) {
+            const std::string name = fs::path(d).filename().string();
             json r = s.agent->toolRegistry().executeTool("index_document", {{"path", d}});
-            results.push_back({{"document", fs::path(d).filename().string()}, {"result", r}});
-            if (r.value("status", "") != "error" && !r.contains("error")) s.indexed.insert(d);
-            if (!unreadable.empty() || !r.contains("failed") || !r["failed"].is_array()) continue;
-            for (const auto& f : r["failed"]) {
-                if (f.is_object() && f.contains("missing_program")) {
-                    unreadable = MissingDocumentReader::remedy(fs::path(d).filename().string(),
-                                                               f.value("missing_program", ""));
-                    break;
+            const bool ok = r.value("status", "") != "error" && !r.contains("error");
+            if (ok) {
+                s.indexed.insert(d);
+                const size_t chunks = r.value("chunks", size_t{0});
+                totalChunks += chunks;
+                indexed.push_back({{"document", name}, {"file", d}, {"chunks", chunks}});
+                continue;
+            }
+            std::string err = r.value("error", "");
+            if (err.empty() && r.contains("failed") && r["failed"].is_array() && !r["failed"].empty() &&
+                r["failed"][0].is_object()) {
+                err = r["failed"][0].value("error", "");
+            }
+            if (err.empty()) err = "Could not index " + name + ".";
+            failed.push_back({{"document", name}, {"file", d}, {"error", err}});
+            if (unreadable.empty() && r.contains("failed") && r["failed"].is_array()) {
+                for (const auto& f : r["failed"]) {
+                    if (f.is_object() && f.contains("missing_program")) {
+                        unreadable = MissingDocumentReader::remedy(name, f.value("missing_program", ""));
+                        break;
+                    }
                 }
             }
         }
-        s.console->emit({{"type", "tool_result"}, {"tool", "index_documents"}, {"data", results}});
+        const std::string status = failed.empty() ? "ok" : (indexed.empty() ? "error" : "partial");
+        auto passageLabel = [](size_t n) { return std::to_string(n) + (n == 1 ? " passage" : " passages"); };
+        auto bulletDetail = [](const json& f) {
+            const std::string doc = f.value("document", "");
+            std::string err = f.value("error", "");
+            const std::string prefix = "Can't index " + doc + ": ";
+            if (err.rfind(prefix, 0) == 0) err = err.substr(prefix.size());
+            return "\n- " + doc + ": " + err;
+        };
+        std::string summary;
+        if (status == "ok") {
+            if (indexed.size() == 1) {
+                summary = "Indexed " + indexed[0].value("document", "") + " (" + passageLabel(totalChunks) + ")";
+            } else {
+                summary = "Indexed " + std::to_string(indexed.size()) + " documents (" + passageLabel(totalChunks) + ")";
+            }
+        } else if (status == "error") {
+            if (failed.size() == 1) {
+                summary = failed[0].value("error", "Couldn't index document.");
+            } else {
+                summary = "Couldn't index " + std::to_string(failed.size()) + " documents:";
+                for (const auto& f : failed) summary += bulletDetail(f);
+            }
+        } else {
+            summary = indexed.size() == 1
+                          ? "Indexed " + indexed[0].value("document", "") + " (" + passageLabel(totalChunks) + ")"
+                          : "Indexed " + std::to_string(indexed.size()) + " documents (" + passageLabel(totalChunks) + ")";
+            summary += "; couldn't index " + std::to_string(failed.size()) +
+                       (failed.size() == 1 ? " document:" : " documents:");
+            for (const auto& f : failed) summary += bulletDetail(f);
+        }
+        json data = {{"status", status}, {"indexed", indexed}, {"failed", failed},
+                     {"summary", summary}, {"display_message", summary}};
+        if (!failed.empty()) data["has_errors"] = true;
+        s.console->emit({{"type", "tool_result"}, {"tool", "index_documents"}, {"data", data}});
         return unreadable;
     }
 

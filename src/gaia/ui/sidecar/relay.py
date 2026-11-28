@@ -200,6 +200,13 @@ def _derive_summary(tool: str, data: Any, profile: RelayProfile = GAIA_PROFILE) 
     if _is_summary_view(data) and data["summary"]:
         # The sidecar already summarized it; re-summarizing names its keys.
         return data["summary"]
+    if (
+        tool == "index_documents"
+        and isinstance(data, dict)
+        and isinstance(data.get("summary"), str)
+        and data["summary"].strip()
+    ):
+        return data["summary"]
     if isinstance(data, dict) and data:
         return _summarize_tool_result(data)
     return f"Ran {_tool_label(tool, profile).lower()}"

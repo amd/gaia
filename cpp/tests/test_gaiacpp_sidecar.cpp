@@ -1609,8 +1609,9 @@ TEST_F(GaiacppSidecar, AnAttachedPdfIsReadOrTheTurnSaysWhyNot) {
     EXPECT_FALSE(final.value("failed", false)) << t.describe();
     const int indexed = indexOf(events, "tool_result");
     ASSERT_GE(indexed, 0) << t.describe();
-    EXPECT_EQ(events[indexed]["data"][0]["result"].value("status", ""), "success") << t.describe();
-    EXPECT_GT(events[indexed]["data"][0]["result"].value("chunks", 0), 20) << t.describe();
+    EXPECT_EQ(events[indexed]["data"].value("status", ""), "ok") << t.describe();
+    ASSERT_EQ(events[indexed]["data"]["indexed"].size(), 1u) << t.describe();
+    EXPECT_GT(events[indexed]["data"]["indexed"][0].value("chunks", 0), 20) << t.describe();
 #else
     EXPECT_TRUE(final.value("failed", false)) << t.describe();
     const std::string answer = final.value("answer", "");
@@ -2315,6 +2316,87 @@ TEST_F(GaiacppSidecar, NoWebLeavesOutWebFetchAndTellsTheModel) {
     ASSERT_FALSE(bodies.empty());
     EXPECT_EQ(bodies.front().find("- web_fetch("), std::string::npos) << "the model isn't offered it";
     EXPECT_NE(bodies.front().find("Web access is off for this run"), std::string::npos);
+}
+
+TEST_F(GaiacppSidecar, IndexDocumentsReportsErrorPartialAndOkWithPlainSummary) {
+    fs::create_directories(root_ / "home" / "chat" / "uploads");
+    const fs::path xlsx = root_ / "home" / "chat" / "uploads" / "budget_sheet.xlsx";
+    const fs::path pptx = root_ / "home" / "chat" / "uploads" / "pitch_deck.pptx";
+    const fs::path memo = root_ / "home" / "chat" / "uploads" / "memo.txt";
+    {
+        const std::string fakeZip("PK\x03\x04\x00\x00binary", 12);
+        std::ofstream(xlsx, std::ios::binary).write(fakeZip.data(), static_cast<std::streamsize>(fakeZip.size()));
+        std::ofstream(pptx, std::ios::binary).write(fakeZip.data(), static_cast<std::streamsize>(fakeZip.size()));
+        std::ofstream(memo) << "Quarterly budget cap is $48,250.";
+    }
+    mock().pushResponse(answerReply("Unsupported."));
+    mock().pushResponse(answerReply("Partial."));
+    mock().pushResponse(answerReply("Indexed."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    // All unsupported -> status: "error", empty indexed, two failed, plain-English summary.
+    {
+        Turn t(port_, queryBody("run-idx-err", "check files",
+                                {{"session_id", "chat-idx-err"},
+                                 {"documents", json::array({xlsx.string(), pptx.string()})},
+                                 {"allowed_paths", json::array({work_.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+        const int idx = indexOf(events, "tool_result");
+        ASSERT_GE(idx, 0) << t.describe();
+        const json& data = events[idx]["data"];
+        ASSERT_TRUE(data.is_object()) << data.dump();
+        EXPECT_EQ(data.value("status", ""), "error") << data.dump();
+        EXPECT_TRUE(data.value("has_errors", false)) << data.dump();
+        EXPECT_TRUE(data["indexed"].is_array() && data["indexed"].empty()) << data.dump();
+        ASSERT_TRUE(data["failed"].is_array() && data["failed"].size() == 2u) << data.dump();
+        const std::string summary = data.value("summary", "");
+        EXPECT_NE(summary.find("budget_sheet.xlsx"), std::string::npos) << summary;
+        EXPECT_NE(summary.find("pitch_deck.pptx"), std::string::npos) << summary;
+        EXPECT_EQ(summary.find("registerExtractor"), std::string::npos) << summary;
+    }
+
+    // Mix of supported + unsupported -> status: "partial", has_errors: true.
+    {
+        Turn t(port_, queryBody("run-idx-partial", "check mixed",
+                                {{"session_id", "chat-idx-partial"},
+                                 {"documents", json::array({memo.string(), xlsx.string()})},
+                                 {"allowed_paths", json::array({work_.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+        const int idx = indexOf(events, "tool_result");
+        ASSERT_GE(idx, 0) << t.describe();
+        const json& data = events[idx]["data"];
+        ASSERT_TRUE(data.is_object()) << data.dump();
+        EXPECT_EQ(data.value("status", ""), "partial") << data.dump();
+        EXPECT_TRUE(data.value("has_errors", false)) << data.dump();
+        ASSERT_EQ(data["indexed"].size(), 1u) << data.dump();
+        ASSERT_EQ(data["failed"].size(), 1u) << data.dump();
+        EXPECT_NE(data.value("summary", "").find("memo.txt"), std::string::npos) << data.dump();
+        EXPECT_NE(data.value("summary", "").find("budget_sheet.xlsx"), std::string::npos) << data.dump();
+    }
+
+    // Supported only -> status: "ok", no has_errors.
+    {
+        Turn t(port_, queryBody("run-idx-ok", "check memo",
+                                {{"session_id", "chat-idx-ok"},
+                                 {"documents", json::array({memo.string()})},
+                                 {"allowed_paths", json::array({work_.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+        const int idx = indexOf(events, "tool_result");
+        ASSERT_GE(idx, 0) << t.describe();
+        const json& data = events[idx]["data"];
+        ASSERT_TRUE(data.is_object()) << data.dump();
+        EXPECT_EQ(data.value("status", ""), "ok") << data.dump();
+        EXPECT_FALSE(data.value("has_errors", false)) << data.dump();
+        ASSERT_EQ(data["indexed"].size(), 1u) << data.dump();
+        EXPECT_TRUE(data["failed"].is_array() && data["failed"].empty()) << data.dump();
+        EXPECT_NE(data.value("summary", "").find("memo.txt"), std::string::npos) << data.dump();
+    }
 }
 
 }  // namespace
