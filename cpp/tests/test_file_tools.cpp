@@ -290,6 +290,33 @@ TEST_F(FileToolsTest, FileWrite_CreatesParentDirs) {
     EXPECT_EQ(readFile(path), "nested content");
 }
 
+TEST_F(FileToolsTest, FileWriteAndEdit_RelativePathReturnsAbsolutePath) {
+    struct CwdGuard {
+        fs::path prev = fs::current_path();
+        explicit CwdGuard(const fs::path& dir) { fs::current_path(dir); }
+        ~CwdGuard() {
+            std::error_code ec;
+            fs::current_path(prev, ec);
+        }
+    } cwd(tempDir_);
+
+    json written = FileIOTools::fileWrite().callback({{"path", "rel_notes.md"}, {"content", "hello world\n"}});
+    ASSERT_FALSE(written.contains("error")) << written.dump();
+    ASSERT_EQ(written["success"], true);
+    const fs::path writtenPath = fs::u8path(written["path"].get<std::string>());
+    EXPECT_TRUE(writtenPath.is_absolute()) << written.dump();
+    EXPECT_EQ(fs::weakly_canonical(writtenPath), fs::weakly_canonical(tempDir_ / "rel_notes.md"));
+
+    json edited = FileIOTools::fileEdit().callback(
+        {{"path", "rel_notes.md"}, {"old_string", "world"}, {"new_string", "gaia"}});
+    ASSERT_FALSE(edited.contains("error")) << edited.dump();
+    ASSERT_EQ(edited["success"], true);
+    const fs::path editedPath = fs::u8path(edited["path"].get<std::string>());
+    EXPECT_TRUE(editedPath.is_absolute()) << edited.dump();
+    EXPECT_EQ(fs::weakly_canonical(editedPath), fs::weakly_canonical(tempDir_ / "rel_notes.md"));
+    EXPECT_EQ(readFile((tempDir_ / "rel_notes.md").string()), "hello gaia\n");
+}
+
 TEST_F(FileToolsTest, FileWrite_EmptyPath) {
     ToolInfo tool = FileIOTools::fileWrite();
     json result = tool.callback({{"path", ""}, {"content", "data"}});

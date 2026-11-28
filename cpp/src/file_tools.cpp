@@ -1457,6 +1457,14 @@ TextKind textKind(const std::string& head) {
 
 bool looksBinary(const std::string& head) { return textKind(head) == TextKind::Binary; }
 
+static std::string absoluteResultPath(const std::string& path) {
+    const fs::path p = fs::u8path(path);
+    if (p.is_absolute()) return path;
+    std::error_code ec;
+    const fs::path abs = fs::absolute(p, ec);
+    return ec ? path : abs.lexically_normal().u8string();
+}
+
 // ---------------------------------------------------------------------------
 // fileWrite
 // ---------------------------------------------------------------------------
@@ -1553,7 +1561,7 @@ json FileIOTools::doFileWrite(const json& args) {
 
         json result{
             {"success", true},
-            {"path", path},
+            {"path", absoluteResultPath(path)},
             {"bytes_written", static_cast<int>(content.size())},
             {"content_hash", shortHash(FileStateTracker::hashContent(content))},
         };
@@ -1722,7 +1730,7 @@ json FileIOTools::doFileEdit(const json& args) {
 
         json result{
             {"success", true},
-            {"path", path},
+            {"path", absoluteResultPath(path)},
             {"replacements", replacements},
             {"content_hash", shortHash(FileStateTracker::hashContent(content))},
         };

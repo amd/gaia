@@ -79,8 +79,7 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
     Dev mode only changes how the Python agent starts. With gaiacpp chosen as
     the agent, the daemon runs the same `gaiacpp` binary in either mode, so
     setting `GAIA_GAIA_AGENT_MODE=dev` changes nothing and never conflicts with
-    a running `gaiacpp`. The one exception is `gaia-cli` itself: in dev mode it
-    still needs to start inside a checkout, even with gaiacpp chosen.
+    a running `gaiacpp`, from inside a checkout or not.
 
     Installing the wheel also registers the agent under the id `gaia` in GAIA's agent registry, so anything that enumerates installed agents picks it up.
   </Tab>

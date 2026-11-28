@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { AlertCircle, ArrowRight, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
@@ -12,11 +12,11 @@ import { useChatStore } from '../stores/chatStore';
 import {
     useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, sameModelId, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
-import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
+import { RECOMMENDED_NOTES, STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
 import { SupportTag } from './SupportTag';
 import { formatPrice } from './settings/cloudPrice';
-import { useT } from '../i18n/useT';
+import { useT, type Translate } from '../i18n/useT';
 import { providerName, providerNotice } from '../utils/providerText';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { MarkedText, markLtr } from './MarkedText';
@@ -34,17 +34,39 @@ const KEY_LOCKED = 'store_locked';
 // How many polls a picked model may show no download before the pick is given up.
 const PICK_START_POLLS = 5;
 
+type DetailItem = { key: string; content: ReactNode };
+
 /** What the info bubble lists for *m*: where it runs, size, speed, rank, price. */
-function modelDetails(m: ProviderModel, remote: boolean): string[] {
-    const rank = m.rank ? `#${m.rank} ${m.note ?? ''}`.trim() : null;
-    if (remote) return [rank, formatPrice(m.price)].filter((x): x is string => !!x);
-    return [
-        placementText(m.placement),
-        m.size_gb ? `${m.size_gb} GB` : null,
-        m.tokens_per_second ? `${Math.round(m.tokens_per_second)} tok/s on this PC` : null,
+function modelDetails(m: ProviderModel, remote: boolean, t: Translate): DetailItem[] {
+    const noteKey = m.note ? RECOMMENDED_NOTES[m.note] : undefined;
+    const rank: DetailItem | null = m.rank ? {
+        key: 'rank',
+        content: (
+            <>
+                <bdi dir="ltr">#{m.rank}</bdi>
+                {m.note ? <> {noteKey ? t(noteKey) : <bdi>{m.note}</bdi>}</> : null}
+            </>
+        ),
+    } : null;
+    if (remote) {
+        const price = formatPrice(m.price, t);
+        const items: Array<DetailItem | null> = [
+            rank,
+            price ? { key: 'price', content: price } : null,
+        ];
+        return items.filter((x): x is DetailItem => x !== null);
+    }
+    const placement = placementText(m.placement, t);
+    const items: Array<DetailItem | null> = [
+        placement ? { key: 'placement', content: placement } : null,
+        m.size_gb ? { key: 'size', content: <bdi dir="ltr">{m.size_gb} GB</bdi> } : null,
+        m.tokens_per_second
+            ? { key: 'speed', content: <MarkedText text={t('settings.model.speed', { speed: markLtr(`${Math.round(m.tokens_per_second)} tok/s`) })} /> }
+            : null,
         rank,
-        m.custom ? 'added by you' : null,
-    ].filter((x): x is string => !!x);
+        m.custom ? { key: 'custom', content: t('settings.model.custom') } : null,
+    ];
+    return items.filter((x): x is DetailItem => x !== null);
 }
 
 /** Not on this PC yet, so listed under "Available to download"; the model in use never is. */
@@ -506,7 +528,7 @@ export function ModelChip() {
                             const current = sameModelId(queued ?? active?.model, m.id);
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const modelName = rowLabels[provider.id][m.id];
-                            const details = modelDetails(m, provider.remote);
+                            const details = modelDetails(m, provider.remote, t);
                             const infoId = `${listId}-info-${provider.id}-${m.id}`;
                             return (
                                 <Fragment key={m.id}>
@@ -545,7 +567,7 @@ export function ModelChip() {
                                             </span>
                                         </button>
                                         <InfoBubble
-                                            label={`About ${modelName}`}
+                                            label={t('modelMenu.aboutModel', { name: modelName })}
                                             warning={!!m.placement?.warning}
                                             id={infoId}
                                             pinned={infoRow === m.id}
@@ -553,10 +575,10 @@ export function ModelChip() {
                                             // The row's ArrowRight opens it, so the icon needs no Tab stop.
                                             tabIndex={-1}
                                         >
-                                            <div className="info-bubble-title">{modelName}</div>
+                                            <div className="info-bubble-title"><bdi dir="ltr">{modelName}</bdi></div>
                                             {details.length > 0 && (
                                                 <ul className="info-bubble-lines">
-                                                    {details.map((d) => <li key={d}>{d}</li>)}
+                                                    {details.map((d) => <li key={d.key}>{d.content}</li>)}
                                                 </ul>
                                             )}
                                             {m.placement?.warning && (
@@ -564,7 +586,7 @@ export function ModelChip() {
                                                     <li className="is-warning">{m.placement.warning}</li>
                                                 </ul>
                                             )}
-                                            <div className="info-bubble-id">{m.id}</div>
+                                            <div className="info-bubble-id" dir="ltr">{m.id}</div>
                                         </InfoBubble>
                                         <span className="popover-row-state">
                                             {!provider.remote && (

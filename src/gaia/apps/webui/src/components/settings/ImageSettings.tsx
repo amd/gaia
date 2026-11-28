@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { ApiError } from '../../services/api';
 import * as api from '../../services/imageApi';
+import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import { useChatStore } from '../../stores/chatStore';
 import { displayModelName, useModelNames } from '../../stores/modelStore';
 import { useT } from '../../i18n/useT';
@@ -23,6 +24,7 @@ function errorText(err: unknown): string {
 export function ImageSettings() {
     const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
+    const isFastAgent = useActiveAgentStore((s) => s.current) === 'gaiacpp';
     useModelNames();
     const [settings, setSettings] = useState<api.ImageSettings | null>(null);
     const [loadError, setLoadError] = useState<{ unreachable: boolean; detail: string } | null>(null);
@@ -36,7 +38,9 @@ export function ImageSettings() {
             detail: errorText(err),
         }));
     };
-    useEffect(load, []);
+    useEffect(() => {
+        if (!isFastAgent) load();
+    }, [isFastAgent]);
 
     const save = (change: Parameters<typeof api.updateImageSettings>[0]) => {
         setSaving(true);
@@ -48,6 +52,19 @@ export function ImageSettings() {
     };
 
     const title = <h2 className="settings-pane-title">{t('settings.section.images')}</h2>;
+    if (isFastAgent) {
+        return (
+            <div className="settings-pane">
+                {title}
+                <div className="settings-notice" role="status">
+                    <p>{t('images.settings.fastAgentCannot')}</p>
+                    <button type="button" className="btn-secondary" onClick={() => openSettings('model')}>
+                        {t.compose((say) => say('mem.store.change', { tab: say('settings.section.model') }))}
+                    </button>
+                </div>
+            </div>
+        );
+    }
     if (loadError) {
         return (
             <div className="settings-pane">
