@@ -164,6 +164,13 @@ def _in_users_files(real: str) -> bool:
     return any(security._path_is_within(Path(real), Path(root)) for root in roots)
 
 
+def _is_public_system_file(text: str) -> bool:
+    """*text* is exactly a world-readable system file such as ``/etc/passwd``."""
+    from gaia import security
+
+    return security.is_public_system_file(text)
+
+
 def _path_reason(text: str, cwd: str, validator: Any, may_write: bool) -> str:
     """Why the file tools would refuse the path *text*, or ""."""
     if not text or len(text) > _MAX_PATH_TEXT or "\n" in text or "\x00" in text:
@@ -174,7 +181,8 @@ def _path_reason(text: str, cwd: str, validator: Any, may_write: bool) -> str:
     elif "://" in text:
         return ""  # a web address; reaching it is the network rules' business
     text = _with_home(text)
-    reason = _name_reason(text)
+    public = _is_public_system_file(text)
+    reason = "" if public else _name_reason(text)
     if reason or validator is None:
         return reason
     if not (
@@ -194,7 +202,7 @@ def _path_reason(text: str, cwd: str, validator: Any, may_write: bool) -> str:
     blocked, why = validator.is_read_blocked(real)
     if blocked:
         return why
-    if may_write and _in_users_files(real):
+    if may_write and (public or _in_users_files(real)):
         blocked, why = validator.is_write_blocked(real)
         if blocked:
             return why
