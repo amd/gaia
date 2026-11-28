@@ -180,7 +180,7 @@ void printUsage() {
         "  --mcp-config FILE         Connect the MCP servers in FILE (mcp.json)\n"
         "  --vision-model ID         Model analyze_image uses (default: the main model)\n"
         "  --transcribe-model ID     Whisper model for transcribe_audio (e.g. Whisper-Base on Lemonade)\n"
-        "  --image-model ID          Image model for generate_image (e.g. SDXL-Turbo on Lemonade)\n"
+        "  --image-model ID          Override the image model (default: image_model in config.json, else SDXL-Turbo); also enables image tools on compact models\n"
         "  --embedding-model ID      Embedding model for document search (default with\n"
         "                            --provider fireworks; otherwise keyword search)\n"
         "  --config FILE             Settings file (default $GAIACPP_CONFIG, else\n"

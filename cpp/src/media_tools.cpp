@@ -541,7 +541,7 @@ void MediaTools::registerAll(ToolRegistry& registry, MediaToolsOptions options) 
             const std::string model = !requestedModel.empty() ? requestedModel : configuredDefault;
 
             const bool useSavedParams =
-                opts->imageModel.empty() && !saved.model.empty() && (requestedModel.empty() || requestedModel == saved.model);
+                opts->imageModel.empty() && (requestedModel.empty() || requestedModel == configuredDefault);
 
             std::string size =
                 a.contains("size") && a["size"].is_string() ? trim(a["size"].get<std::string>()) : std::string();
