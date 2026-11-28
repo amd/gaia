@@ -909,9 +909,9 @@ func callerDevSrcDir(agentID string) (string, error) {
 // import cycle. Left nil, dev mode always resolves a checkout.
 var SavedFlagshipHarness func() (string, error)
 
-// devModeApplies mirrors the daemon's dev_mode_applies: gaiacpp starts the same
+// DevModeApplies mirrors the daemon's dev_mode_applies: gaiacpp starts the same
 // way in either mode, so dev mode resolves no checkout for it.
-func devModeApplies(agentID string) (bool, error) {
+func DevModeApplies(agentID string) (bool, error) {
 	if agentID != "gaia" || SavedFlagshipHarness == nil {
 		return true, nil
 	}
@@ -934,7 +934,7 @@ func ensureRequestBody(agentID string) ([]byte, error) {
 	if mode != "dev" {
 		return json.Marshal(body)
 	}
-	applies, err := devModeApplies(agentID)
+	applies, err := DevModeApplies(agentID)
 	if err != nil {
 		return nil, err
 	}
