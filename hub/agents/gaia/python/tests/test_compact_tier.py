@@ -10,6 +10,7 @@ import pytest
 from gaiapy import stdio
 from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
+from gaia.agents.base import model_switch  # noqa: E402
 from gaia.agents.base.model_features import COMPACT, FULL, TIER_ENV, withheld_tools
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.llm.lemonade_client import (
@@ -191,7 +192,7 @@ def test_switching_to_gemma_unloads_a_skill_it_cannot_run(monkeypatch):
         agent.load_skill("data-explore")
         agent.load_skill("research-report")
         monkeypatch.setattr(
-            stdio,
+            model_switch,
             "_reachable_lemonade_models",
             lambda *a: (
                 "http://localhost:13305/api/v1",
@@ -199,7 +200,7 @@ def test_switching_to_gemma_unloads_a_skill_it_cannot_run(monkeypatch):
             ),
         )
         # A stand-in client: the switch must not reach a server.
-        monkeypatch.setattr(stdio, "create_client", lambda **k: object())
+        monkeypatch.setattr(model_switch, "create_client", lambda **k: object())
         statuses = []
         stdio._apply_local_switch(agent, DEFAULT_MODEL_NAME, statuses.append)
         assert statuses == [
