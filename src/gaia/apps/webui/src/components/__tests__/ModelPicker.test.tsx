@@ -156,7 +156,7 @@ describe('ModelChip model states', () => {
         const bubble = await screen.findByRole('tooltip');
         expect(bubble).toHaveTextContent('GPU · Vulkan');
         expect(bubble).toHaveTextContent('5.6 GB');
-        expect(bubble).toHaveTextContent('41 tok/s on this PC');
+        expect(bubble).toHaveTextContent('41 tok/s measured here');
         fireEvent.mouseLeave(within(dialog).getByRole('button', { name: 'About Gemma 4 E4B' }));
         expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
         // Keyboard focus opens it too.

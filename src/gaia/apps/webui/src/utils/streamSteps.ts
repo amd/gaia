@@ -10,10 +10,13 @@ export function isProgressTick(event: StreamEvent): boolean {
         && (event.message ?? '').startsWith('Model is processing');
 }
 
-/** A status event's line for the user; the tool-list re-read is said in their language. */
+/** A status event's line for the user; known phases are said in their language. */
 export function statusText(event: StreamEvent): string {
     if (event.phase === 'loading_tools') return getT()('chat.loadingTools');
     if (event.phase === 'model_queue' && event.queue) return queueText(event.queue);
+    if (event.phase === 'reasoning' && typeof event.words === 'number') {
+        return getT().plural('chat.reasoningWords', event.words, { n: event.words.toLocaleString('en-US') });
+    }
     return (event.message || '').trim();
 }
 
