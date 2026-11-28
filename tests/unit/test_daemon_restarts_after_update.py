@@ -871,7 +871,7 @@ def test_an_agent_ui_chat_shows_why_the_update_is_not_running_yet(monkeypatch):
 
     handle = SimpleNamespace(api_version="2.24", proxy=lambda: _Done())
     monkeypatch.setattr(daemon_client, "acquire_handle", lambda _id: handle)
-    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: None)
+    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: True)
     monkeypatch.setattr(
         client, "_deferred_notice", "GAIA's background service is out of date"
     )

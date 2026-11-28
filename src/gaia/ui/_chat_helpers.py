@@ -2835,15 +2835,16 @@ def _missing_local_model_text(init_body: dict) -> str:
     )
 
 
-def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
+def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> bool:
     """Hand Lemonade the remembered key for a cloud model before a relayed turn.
 
     Lemonade keeps a cloud key in memory only, so after it restarts every cloud
     model vanishes until the key is replayed. In-process agents get that from
     the readiness gate; a relayed turn skips it, so it happens here. One
-    ``/system-info`` read when the key is already held. A failed replay is
-    surfaced, never swallowed, but does not stop the turn: the sidecar's own
-    answer names the missing model.
+    ``/system-info`` read when the key is already held. False, with the turn
+    ended in the app's words, when the provider has no working key: the sidecar
+    would otherwise pass Lemonade's raw 404 to the chat. A replay that fails to
+    run is surfaced but does not stop the turn.
     """
     import requests
 
@@ -2853,9 +2854,9 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     provider, dot, _ = str(model_id or "").partition(".")
     provider = provider.lower()
     if not dot or provider not in PROVIDERS:
-        return
+        return True
     try:
-        reconnect_provider(provider)
+        usable = reconnect_provider(provider)
     except (CloudKeyError, GatewayError, requests.RequestException) as exc:
         logger.warning("chat: could not reconnect the %s provider: %s", provider, exc)
         sse_handler._emit(
@@ -2867,6 +2868,23 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
                 ),
             }
         )
+        return True
+    if not usable:
+        from .routers.providers import display_name
+
+        logger.warning("chat: %s has no working key for %s", provider, model_id)
+        sse_handler._emit(
+            {
+                "type": "agent_error",
+                "content": _agent_ui_wording(
+                    f"{display_name(model_id)} isn't connected, so GAIA can't answer. "
+                    f"Reconnect {provider} under Settings > Agent & model, or pick "
+                    "another model."
+                ),
+            }
+        )
+        return False
+    return True
 
 
 def _refuse_internet_off(
@@ -3137,7 +3155,8 @@ def _dispatch_sidecar_query(
     proxy = handle.proxy()
 
     # Before /init: a cloud model whose key Lemonade forgot reads as "not present".
-    _replay_cloud_key_for_relay(sse_handler, model_id)
+    if not _replay_cloud_key_for_relay(sse_handler, model_id):
+        return
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.

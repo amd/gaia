@@ -612,7 +612,7 @@ def _dispatch(monkeypatch, api_version, memory, agent_type="gaia", proxy=None):
     monkeypatch.setattr(
         daemon_client_module, "acquire_handle", lambda _agent_id: handle
     )
-    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: None)
+    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: True)
     calls: list = []
     monkeypatch.setattr(relay, "relay_query", lambda *a, **k: calls.append(k))
     handler = _Handler()

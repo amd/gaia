@@ -147,7 +147,7 @@ def test_a_relayed_scheduled_run_uses_the_model_the_user_picked(
     """Not the local default, which may not even fit this machine."""
     db.set_setting("custom_model", "fireworks.deepseek-v4p1-flash")
     monkeypatch.setattr(
-        chat_helpers_module, "_replay_cloud_key_for_relay", lambda *_a: None
+        chat_helpers_module, "_replay_cloud_key_for_relay", lambda *_a: True
     )
     proxy, _ = _sidecar_answers(monkeypatch, [_final("PONG")])
 
