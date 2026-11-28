@@ -868,4 +868,47 @@ describe('ModelChip in Arabic', () => {
         expect(chip).toHaveClass('is-warning');
         expect(chip.querySelector('[aria-label*="غير منزَّل"]')).not.toBeNull();
     });
+
+    it('localizes cloud and local model InfoBubble details and aria-labels in Arabic with LTR isolation', async () => {
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Gemma-4-E4B-it-GGUF', {
+                    size_gb: 6,
+                    tokens_per_second: 42.4,
+                    custom: true,
+                    placement: { label: 'GPU · Vulkan', source: 'expected', device: 'gpu' } as never,
+                })]
+                : [model('fireworks.accounts/fireworks/models/kimi-k2', {
+                    rank: 1,
+                    note: 'best overall, fastest',
+                    price: { input_per_million: 0.3, output_per_million: 1.2, cached_input_per_million: 0, source: 'test' },
+                })],
+        }));
+        render(<ModelChip />);
+        fireEvent.click(screen.getByRole('button', { name: /Gemma/ }));
+        const dialog = await screen.findByRole('dialog', { name: /Choose a model/ });
+
+        const cloudInfoBtn = await within(dialog).findByRole('button', { name: /حول.*kimi-k2/ });
+        fireEvent.click(cloudInfoBtn);
+        const cloudBubble = await screen.findByRole('tooltip');
+        expect(cloudBubble.querySelector('bdi[dir="ltr"]')).toHaveTextContent('kimi-k2');
+        expect(cloudBubble).toHaveTextContent('#1');
+        expect(cloudBubble).toHaveTextContent('الأفضل إجمالًا والأسرع');
+        expect(cloudBubble).toHaveTextContent('للإدخال');
+        expect(cloudBubble).toHaveTextContent('للإخراج');
+        expect(cloudBubble.querySelector('.info-bubble-id')).toHaveAttribute('dir', 'ltr');
+
+        fireEvent.click(cloudInfoBtn);
+        const localInfoBtn = within(dialog).getByRole('button', { name: /حول.*Gemma-4-E4B-it-GGUF/ });
+        fireEvent.click(localInfoBtn);
+        const localBubble = await screen.findByRole('tooltip');
+        expect(localBubble).toHaveTextContent('(متوقع)');
+        expect(localBubble).toHaveTextContent('6 GB');
+        expect(localBubble).toHaveTextContent('42 tok/s');
+        expect(localBubble).toHaveTextContent('مقيسة هنا');
+        expect(localBubble).toHaveTextContent('أضفته بنفسك');
+        const ltrBdis = Array.from(localBubble.querySelectorAll('bdi[dir="ltr"]')).map((el) => el.textContent);
+        expect(ltrBdis).toEqual(expect.arrayContaining(['6 GB', '42 tok/s']));
+    });
 });

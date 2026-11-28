@@ -48,7 +48,7 @@ beforeEach(() => {
 afterEach(() => {
     vi.unstubAllGlobals();
     useActiveAgentStore.setState({ current: null });
-    useChatStore.setState({ locale: 'en' });
+    useChatStore.setState({ locale: 'en', settingsSection: null });
 });
 
 describe('AutomationsSettings', () => {
@@ -158,6 +158,36 @@ describe('AutomationsSettings', () => {
         routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         expect(await screen.findByText('Inbox digest')).toBeTruthy();
+    });
+
+    it('shows a Full-featured notice and Agent & model link on gaiacpp without chat-prompt hints', async () => {
+        useActiveAgentStore.setState({ current: 'gaiacpp' });
+        routes = { 'GET /automations': () => ({ body: { automations: [], delivers: false } }) };
+        render(<AutomationsSettings />);
+        const note = await screen.findByRole('note');
+        expect(note.textContent).toMatch(/requires Full-featured/);
+        expect(screen.queryByText(/Ask GAIA in chat/)).toBeNull();
+        expect(await screen.findByText('No automations yet.')).toBeTruthy();
+        fireEvent.click(within(note).getByRole('button', { name: /Agent & model/ }));
+        expect(useChatStore.getState().settingsSection).toBe('model');
+    });
+
+    it('keeps existing automations manageable while showing the gaiacpp notice', async () => {
+        useActiveAgentStore.setState({ current: 'gaiacpp' });
+        routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
+        render(<AutomationsSettings />);
+        expect(await screen.findByRole('note')).toBeTruthy();
+        expect(await screen.findByText('Inbox digest')).toBeTruthy();
+    });
+
+    it('renders the Arabic gaiacpp notice and Agent & model link', async () => {
+        useActiveAgentStore.setState({ current: 'gaiacpp' });
+        useChatStore.setState({ locale: 'ar' });
+        routes = { 'GET /automations': () => ({ body: { automations: [], delivers: false } }) };
+        render(<AutomationsSettings />);
+        const note = await screen.findByRole('note');
+        expect(note.textContent).toContain('كامل الميزات');
+        expect(note.textContent).toContain('الوكيل والنموذج');
     });
 });
 

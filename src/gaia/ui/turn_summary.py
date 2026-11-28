@@ -290,8 +290,10 @@ class TurnLedger:
                 continue
             path = call["args"].get("file_path")
             data = call["data"]
-            if isinstance(data, dict) and isinstance(data.get("file_path"), str):
-                path = data["file_path"]
+            if isinstance(data, dict):
+                resolved = data.get("file_path") or data.get("path")
+                if isinstance(resolved, str):
+                    path = resolved
             if isinstance(path, str) and os.path.isabs(path):
                 paths.append(path)
         return paths

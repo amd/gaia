@@ -904,6 +904,24 @@ func callerDevSrcDir(agentID string) (string, error) {
 	return filepath.Join(root, "hub", "agents", agentID, "python"), nil
 }
 
+// SavedFlagshipHarness returns the saved flagship_agent, "" when none was
+// chosen. The CLI sets it: this package can't read config.json without an
+// import cycle. Left nil, dev mode always resolves a checkout.
+var SavedFlagshipHarness func() (string, error)
+
+// DevModeApplies mirrors the daemon's dev_mode_applies: gaiacpp starts the same
+// way in either mode, so dev mode resolves no checkout for it.
+func DevModeApplies(agentID string) (bool, error) {
+	if agentID != "gaia" || SavedFlagshipHarness == nil {
+		return true, nil
+	}
+	harness, err := SavedFlagshipHarness()
+	if err != nil {
+		return false, err
+	}
+	return harness != "gaiacpp", nil
+}
+
 func ensureRequestBody(agentID string) ([]byte, error) {
 	body := map[string]string{}
 	mode, explicit := CallerMode(agentID)
@@ -913,7 +931,14 @@ func ensureRequestBody(agentID string) ([]byte, error) {
 		return json.Marshal(body)
 	}
 	body["mode"] = mode
-	if mode == "dev" {
+	if mode != "dev" {
+		return json.Marshal(body)
+	}
+	applies, err := DevModeApplies(agentID)
+	if err != nil {
+		return nil, err
+	}
+	if applies {
 		devSrcDir, err := callerDevSrcDir(agentID)
 		if err != nil {
 			return nil, err
