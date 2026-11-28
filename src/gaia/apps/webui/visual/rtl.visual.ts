@@ -78,14 +78,23 @@ const audit = async (page: Page): Promise<string[]> => {
     await nextFrames(page);
     // A state that just landed (a fetch resolving) is mid-transition, and an inherited
     // colour starts a second one on the child; audit where they all end.
+    // Bounded by time, not frames: a page still loading on a busy CI runner starts a few in a row.
     await page.evaluate(async () => {
-        for (let round = 0; round < 10; round++) {
-            const moving = document.getAnimations().filter((a) => a instanceof CSSTransition);
+        const deadline = performance.now() + 3_000;
+        const running = () => document.getAnimations().filter((a) => a instanceof CSSTransition);
+        while (performance.now() < deadline) {
+            const moving = running();
             if (!moving.length) return;
             await Promise.all(moving.map((a) => a.finished.catch(() => undefined)));
             await new Promise((done) => requestAnimationFrame(done));
         }
-        throw new Error('audit: CSS transitions still starting after 10 rounds');
+        const moving = running();
+        if (!moving.length) return;
+        const names = moving.map((a) => {
+            const el = (a.effect as KeyframeEffect | null)?.target;
+            return `${el?.tagName.toLowerCase()}.${el?.className} ${(a as CSSTransition).transitionProperty}`;
+        });
+        throw new Error(`audit: CSS transitions still starting after 3 s: ${names.join(', ')}`);
     });
     return page.evaluate(() => {
         const problems: string[] = [];
