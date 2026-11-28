@@ -184,7 +184,8 @@ void GaiaAgent::registerTools() {
                 if (!askPathAccess_(asked)) {
                     return "Refused: the user did not allow GAIA to use " + asked +
                            ". Don't ask again or reach it another way this turn. Tell the user what you "
-                           "could not do without it.";
+                           "could not do without it. That no is for this turn only: if the user asks for it "
+                           "again in a later message, try again so they can be asked.";
                 }
                 ws->addRoot(asked);
                 std::lock_guard<std::mutex> lock(turnListingMu_);
@@ -446,6 +447,17 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
 }
 
 namespace {
+// The user's profile folder, "" when the environment names none.
+std::string userHomeFolder() {
+#ifdef _WIN32
+    // Read wide: the narrow environment is in the code page, not UTF-8.
+    const wchar_t* profile = _wgetenv(L"USERPROFILE");
+    return profile ? fs::path(profile).u8string() : std::string();
+#else
+    return getEnvVar("HOME");
+#endif
+}
+
 // What is in `dir`, two levels deep, for the prompt. Empty for the home folder
 // or a drive root: those names are the user's business until they ask.
 std::string folderListing(const fs::path& dir) {
@@ -654,6 +666,11 @@ std::string GaiaAgent::systemContext() const {
     std::error_code ec;
     // UTF-8, not the code page: the prompt goes into a JSON request body.
     out << "- Working directory: " << fs::current_path(ec).u8string() << "\n";
+    if (const std::string home = userHomeFolder(); !home.empty()) {
+        out << "- The user's own folders (Documents, Desktop, Downloads) are under " << home
+            << ". When the user names one of them, use its full path there, not the working directory, even "
+               "when that has a similar name.\n";
+    }
     // A small model guesses at file names and concludes a file is missing; this shows it what is there.
     std::optional<std::string> listing;
     {
@@ -679,6 +696,10 @@ std::string GaiaAgent::systemContext() const {
         out << "- Folders you may use:";
         if (options_.workspaceRoots.empty()) out << " " << fs::current_path(ec).u8string();
         for (const auto& r : options_.workspaceRoots) out << " " << r;
+        {
+            std::lock_guard<std::mutex> lock(turnListingMu_);
+            for (const auto& opened : openedFolders_) out << " " << opened << " (the user allowed it in this chat)";
+        }
         out << ". Tools refuse other locations, so don't search the whole disk or the home "
                "folder. If a file the user needs isn't in these folders, say so.\n";
     }
@@ -2773,6 +2794,11 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         if (path.is_absolute()) return fs::exists(path, ec) ? std::optional<fs::path>(path) : std::nullopt;
         const std::string name = path.filename().string();
         for (const auto& root : roots) {
+            // A file the user allowed by itself is its own root.
+            if (root.filename() == path.filename() && fs::is_regular_file(root, ec) &&
+                (!path.has_parent_path() || fs::equivalent(root.parent_path() / path.filename(), root, ec))) {
+                return root;
+            }
             if (fs::exists(root / path, ec)) return root / path;
             fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
             int budget = 20000;
