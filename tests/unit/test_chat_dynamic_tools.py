@@ -794,8 +794,7 @@ def test_the_cap_and_sent_docs_reset_each_turn(searching):
     for _ in range(MAX_TOOL_SEARCHES):
         _search(agent)
 
-    with patch.object(Agent, "_on_task_start"):
-        agent._on_task_start("next turn")
+    agent._on_task_start("next turn")
 
     assert agent._tool_searches == 0
     assert agent._tool_docs_sent == set()
