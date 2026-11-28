@@ -2317,4 +2317,26 @@ TEST_F(GaiacppSidecar, NoWebLeavesOutWebFetchAndTellsTheModel) {
     EXPECT_NE(bodies.front().find("Web access is off for this run"), std::string::npos);
 }
 
+TEST_F(GaiacppSidecar, AttachedDocumentAppearsInSystemPromptAsIndexed) {
+    fs::create_directories(root_ / "home" / "chat" / "uploads");
+    const fs::path attached = root_ / "home" / "chat" / "uploads" / "quarterly_report.txt";
+    std::ofstream(attached) << "Total Active Units: 1,480 robots. Battery Replacement Cost: $18,200.";
+    mock().pushResponse(answerReply("1,480 robots."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-indexed-prompt", "What are the Total Active Units?",
+                            {{"session_id", "chat-indexed-prompt"},
+                             {"documents", json::array({attached.string()})},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+
+    const auto reqs = modelRequests();
+    ASSERT_FALSE(reqs.empty());
+    const std::string system = reqs.front()["messages"][0]["content"].get<std::string>();
+    EXPECT_NE(system.find("Indexed documents"), std::string::npos) << system;
+    EXPECT_NE(system.find("quarterly_report.txt"), std::string::npos) << system;
+    EXPECT_NE(system.find("query_documents"), std::string::npos) << system;
+}
+
 }  // namespace
