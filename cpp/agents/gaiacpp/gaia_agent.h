@@ -261,6 +261,7 @@ private:
     std::set<std::string> turnTablesPointedAt_;  // CSVs a command was sent to file_read for, once each
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
+    bool skillToolsRegistered_ = false;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
     std::unique_ptr<DocumentIndex> code_;
