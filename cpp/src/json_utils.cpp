@@ -4,6 +4,7 @@
 #include "gaia/json_utils.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 
 namespace gaia {
@@ -41,6 +42,24 @@ std::vector<std::string> delimitedBlocks(const std::string& text, const std::str
         at = text.find(open, end + close.size());
     }
     return blocks;
+}
+
+// Arguments a model wrote beside "tool" instead of inside "tool_args" are still the call's arguments.
+void liftFlatArgs(json& call) {
+    if (!call.is_object() || !call.contains("tool") || !call["tool"].is_string()) return;
+    if (call.contains("tool_args") && !call["tool_args"].is_null()) return;
+    json args = json::object();
+    for (auto it = call.begin(); it != call.end();) {
+        const std::string& key = it.key();
+        if (key == "tool" || key == "tool_args" || key == "thought" || key == "goal" || key == "plan" ||
+            key == "answer") {
+            ++it;
+            continue;
+        }
+        args[key] = it.value();
+        it = call.erase(it);
+    }
+    call["tool_args"] = std::move(args);
 }
 }  // namespace
 
@@ -127,10 +146,7 @@ std::optional<json> extractJsonFromResponse(const std::string& response) {
             try {
                 json result = json::parse(match);
                 if (result.is_object()) {
-                    // Ensure tool_args exists if tool is present
-                    if (result.contains("tool") && (!result.contains("tool_args") || result["tool_args"].is_null())) {
-                        result["tool_args"] = json::object();
-                    }
+                    liftFlatArgs(result);
                     return result;
                 }
             } catch (const json::parse_error&) {
@@ -147,9 +163,7 @@ std::optional<json> extractJsonFromResponse(const std::string& response) {
         try {
             json result = json::parse(fixed);
             if (result.is_object()) {
-                if (result.contains("tool") && (!result.contains("tool_args") || result["tool_args"].is_null())) {
-                    result["tool_args"] = json::object();
-                }
+                liftFlatArgs(result);
                 return result;
             }
         } catch (const json::parse_error&) {
@@ -235,10 +249,46 @@ json validateJsonResponse(const std::string& responseText) {
 }
 
 namespace {
+bool insideCodeFence(const std::string& text, size_t at) {
+    size_t fences = 0;
+    for (size_t p = text.find("```"); p != std::string::npos && p < at; p = text.find("```", p + 3)) ++fences;
+    return fences % 2 == 1;
+}
+
+// Nothing but space and code-fence marks: calls on either side of it were written as one run.
+bool onlySpaceOrFences(const std::string& text) {
+    for (size_t i = 0; i < text.size();) {
+        if (std::isspace(static_cast<unsigned char>(text[i])) != 0) {
+            ++i;
+        } else if (text.compare(i, 3, "```") == 0) {
+            i += 3;
+            while (i < text.size() && std::isalpha(static_cast<unsigned char>(text[i])) != 0) ++i;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The call a JSON object holds, with its arguments in "tool_args"; nullopt when it is not only a call.
+// Arguments beside "tool" count only for a tool that exists: {"tool": "saw", "teeth": 40} is data.
+std::optional<json> asTextToolCall(const std::string& object, const ToolNameCheck& isTool) {
+    json call = json::parse(object, nullptr, false);
+    if (!call.is_object() || !call.contains("tool") || !call["tool"].is_string()) return std::nullopt;
+    if (call.contains("tool_args") && !call["tool_args"].is_null() && !call["tool_args"].is_object()) {
+        return std::nullopt;
+    }
+    if (isTool && isTool(call["tool"].get<std::string>())) liftFlatArgs(call);
+    for (const auto& [key, value] : call.items()) {
+        if (key != "tool" && key != "tool_args" && key != "thought" && key != "goal") return std::nullopt;
+    }
+    return call;
+}
+
 // A tool call that ends the reply, and the prose before it. Only an object that
 // is the last thing in the reply and holds nothing but tool-call keys counts,
 // so an answer that merely quotes one as an example stays an answer.
-std::optional<std::pair<json, std::string>> trailingToolCall(const std::string& reply) {
+std::optional<std::pair<json, std::string>> trailingToolCall(const std::string& reply, const ToolNameCheck& isTool) {
     static const char* const kSpace = " \t\r\n";
     std::string body = reply;
     auto rtrim = [&body] {
@@ -253,13 +303,41 @@ std::optional<std::pair<json, std::string>> trailingToolCall(const std::string& 
 
     for (size_t at = body.find('{'); at != std::string::npos; at = body.find('{', at + 1)) {
         const std::string candidate = extractFirstJsonObject(body.substr(at));
-        if (candidate.empty() || at + candidate.size() != body.size()) continue;
-        json call = json::parse(candidate, nullptr, false);
-        if (!call.is_object() || !call.contains("tool") || !call["tool"].is_string()) return std::nullopt;
-        if (call.contains("tool_args") && !call["tool_args"].is_object()) return std::nullopt;
-        for (const auto& [key, value] : call.items()) {
-            if (key != "tool" && key != "tool_args" && key != "thought" && key != "goal") return std::nullopt;
+        if (candidate.empty()) continue;
+        if (at + candidate.size() != body.size()) {
+            at += candidate.size() - 1;  // a brace inside this object's text opens nothing
+            continue;
         }
+        if (!asTextToolCall(candidate, isTool)) return std::nullopt;
+        // The reply ends in a run of calls. They run in the order written, so the first of the run is the
+        // one to run. Prose between two calls ends a run: "that call failed, retrying: {...}" quotes the first.
+        json call;
+        size_t dropped = 0;
+        size_t runEnd = 0;
+        const size_t closing = at;
+        for (size_t from = body.find('{'); from != std::string::npos && from <= closing;) {
+            const std::string object = extractFirstJsonObject(body.substr(from));
+            std::optional<json> found;
+            if (!object.empty() && !insideCodeFence(body, from)) found = asTextToolCall(object, isTool);
+            if (!found) {
+                from = body.find('{', from + (object.empty() ? 1 : object.size()));
+                continue;
+            }
+            if (call.is_null() || !onlySpaceOrFences(body.substr(runEnd, from - runEnd))) {
+                call = std::move(*found);
+                at = from;
+                dropped = 0;
+            } else {
+                ++dropped;
+            }
+            runEnd = from + object.size();
+            from = body.find('{', runEnd);
+        }
+        if (call.is_null()) {  // the closing call sits in a code fence the reply never closed
+            call = *asTextToolCall(candidate, isTool);
+            at = closing;
+        }
+        call["dropped_calls"] = dropped;
         std::string prose = body.substr(0, at);
         const auto fence = prose.rfind("```");
         if (fence != std::string::npos && prose.find_first_not_of(kSpace, fence + 3) == std::string::npos) {
@@ -291,12 +369,6 @@ bool startsWithAt(const std::string& text, size_t at, const char* what) {
 size_t skipSpace(const std::string& text, size_t at) {
     const size_t next = text.find_first_not_of(" \t\r\n", at);
     return next == std::string::npos ? text.size() : next;
-}
-
-bool insideCodeFence(const std::string& text, size_t at) {
-    size_t fences = 0;
-    for (size_t p = text.find("```"); p != std::string::npos && p < at; p = text.find("```", p + 3)) ++fences;
-    return fences % 2 == 1;
 }
 
 std::string trimmedCopy(const std::string& text) {
@@ -457,7 +529,7 @@ std::string stringField(const json& object, const char* key) {
 }
 }  // namespace
 
-ParsedResponse parseLlmResponse(const std::string& response) {
+ParsedResponse parseLlmResponse(const std::string& response, const ToolNameCheck& isTool) {
     ParsedResponse parsed;
 
     // Handle empty response
@@ -491,10 +563,11 @@ ParsedResponse parseLlmResponse(const std::string& response) {
             return parsed;
         }
         // Models often say what they are about to do, then emit the call.
-        if (auto call = trailingToolCall(trimmed)) {
+        if (auto call = trailingToolCall(trimmed, isTool)) {
             parsed.thought = call->second;
             parsed.toolName = call->first.at("tool").get<std::string>();
             parsed.toolArgs = call->first.value("tool_args", json::object());
+            parsed.droppedToolCalls = call->first.value("dropped_calls", size_t{0});
             return parsed;
         }
         parsed.thought = "";
@@ -513,6 +586,7 @@ ParsedResponse parseLlmResponse(const std::string& response) {
     try {
         json j = json::parse(trimmed);
         if (j.is_object()) {
+            liftFlatArgs(j);
             parsed.thought = stringField(j, "thought");
             parsed.goal = stringField(j, "goal");
 
