@@ -555,3 +555,163 @@ def test_cross_thread_close_unblocks_parked_read_promptly_real_socket():
         park.set()
         server.shutdown()
         server_thread.join(timeout=5.0)
+
+
+# -- gaiacpp's own memory (GET/POST /memory, PUT/DELETE /memory/{id}) ---------
+
+
+class _VerbSession:
+    """Records every outgoing call with its verb, URL and keyword arguments."""
+
+    def __init__(self, payload, *, status=200, raises=None, json_raises=False):
+        self._payload, self._status, self._raises = payload, status, raises
+        self._json_raises = json_raises
+        self.calls = []
+
+    def _call(self, verb, url, **kwargs):
+        kwargs.pop("timeout")
+        self.calls.append((verb, url, kwargs))
+        if self._raises is not None:
+            raise self._raises
+        return _Resp(self._payload, self._status, json_raises=self._json_raises)
+
+    def get(self, url, **kwargs):
+        return self._call("get", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self._call("post", url, **kwargs)
+
+    def put(self, url, **kwargs):
+        return self._call("put", url, **kwargs)
+
+    def delete(self, url, **kwargs):
+        return self._call("delete", url, **kwargs)
+
+
+def _memory_proxy(payload=None, **kwargs):
+    sess = _VerbSession(payload if payload is not None else {}, **kwargs)
+    return SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess), sess
+
+
+def test_memory_lists_with_no_params_when_none_are_given():
+    proxy, sess = _memory_proxy({"available": True, "items": []})
+    assert proxy.memory() == {"available": True, "items": []}
+    assert sess.calls == [
+        ("get", "http://127.0.0.1:9100/v1/gaia/memory", {"params": None})
+    ]
+
+
+def test_memory_sends_the_search_category_and_limit_as_query_params():
+    proxy, sess = _memory_proxy({"available": True, "items": []})
+    proxy.memory(q="tea oolong", category="preference", limit=1000)
+    assert sess.calls == [
+        (
+            "get",
+            "http://127.0.0.1:9100/v1/gaia/memory",
+            {"params": {"q": "tea oolong", "category": "preference", "limit": 1000}},
+        )
+    ]
+
+
+def test_create_memory_posts_only_the_fields_that_were_given():
+    proxy, sess = _memory_proxy({"status": "created", "id": "m1"})
+    assert proxy.create_memory("Likes oolong") == {"status": "created", "id": "m1"}
+    proxy.create_memory(
+        "Sister is Ana",
+        category="fact",
+        sensitive=True,
+        entity="person:ana",
+        context="family",
+    )
+    assert sess.calls == [
+        (
+            "post",
+            "http://127.0.0.1:9100/v1/gaia/memory",
+            {"json": {"content": "Likes oolong"}},
+        ),
+        (
+            "post",
+            "http://127.0.0.1:9100/v1/gaia/memory",
+            {
+                "json": {
+                    "content": "Sister is Ana",
+                    "category": "fact",
+                    "sensitive": True,
+                    "entity": "person:ana",
+                    "context": "family",
+                }
+            },
+        ),
+    ]
+
+
+def test_update_memory_puts_the_new_text_to_the_memory_id():
+    proxy, sess = _memory_proxy({"status": "updated", "id": "m1"})
+    assert proxy.update_memory("m1", "Likes green tea") == {
+        "status": "updated",
+        "id": "m1",
+    }
+    assert sess.calls == [
+        (
+            "put",
+            "http://127.0.0.1:9100/v1/gaia/memory/m1",
+            {"json": {"content": "Likes green tea"}},
+        )
+    ]
+
+
+def test_delete_memory_deletes_the_memory_id_with_no_body():
+    proxy, sess = _memory_proxy({"status": "deleted", "id": "m1"})
+    assert proxy.delete_memory("m1") == {"status": "deleted", "id": "m1"}
+    assert sess.calls == [("delete", "http://127.0.0.1:9100/v1/gaia/memory/m1", {})]
+
+
+def test_memory_id_cannot_reach_another_route():
+    proxy, sess = _memory_proxy({"status": "deleted", "id": "x"})
+    proxy.delete_memory("../sessions/s1")
+    assert sess.calls[0][1] == (
+        "http://127.0.0.1:9100/v1/gaia/memory/..%2Fsessions%2Fs1"
+    )
+
+
+@pytest.mark.parametrize(
+    "call, status, detail",
+    [
+        (lambda p: p.create_memory("sk-secret"), 422, "That looks like a credential"),
+        (lambda p: p.update_memory("nope", "text"), 404, "No memory with id nope"),
+        (lambda p: p.delete_memory("nope"), 404, "No memory with id nope"),
+        (lambda p: p.memory(limit=5000), 422, "limit must be a whole number"),
+    ],
+)
+def test_memory_routes_keep_the_sidecars_own_refusal(call, status, detail):
+    proxy, _ = _memory_proxy({"detail": detail}, status=status)
+    with pytest.raises(SidecarHTTPError) as ei:
+        call(proxy)
+    assert ei.value.status_code == status
+    assert ei.value.detail == detail
+
+
+def test_memory_routes_say_which_sidecar_could_not_be_reached():
+    import requests
+
+    proxy, _ = _memory_proxy(raises=requests.exceptions.ConnectionError("refused"))
+    with pytest.raises(
+        SidecarError,
+        match="could not reach the gaia sidecar to list its memory: refused",
+    ):
+        proxy.memory()
+    with pytest.raises(SidecarError, match="to save a memory"):
+        proxy.create_memory("x")
+    with pytest.raises(SidecarError, match="to change a memory"):
+        proxy.update_memory("m1", "x")
+    with pytest.raises(SidecarError, match="to delete a memory"):
+        proxy.delete_memory("m1")
+
+
+def test_memory_reply_that_is_not_a_json_object_is_an_error():
+    proxy, _ = _memory_proxy(["not", "an", "object"])
+    with pytest.raises(SidecarError, match="is a list, not a JSON object"):
+        proxy.memory()
+    proxy, _ = _memory_proxy(json_raises=True)
+    with pytest.raises(SidecarError, match="is not JSON"):
+        proxy.memory()

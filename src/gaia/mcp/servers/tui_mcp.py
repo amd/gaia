@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import requests
 
+from gaia.daemon.instance import pid_alive
 from gaia.logger import get_logger
 from gaia.mcp.ports import TUI_MCP_PORT
 
@@ -167,21 +168,6 @@ def read_control_file() -> Optional[Dict[str, Any]]:
             "tui: %s is present but malformed (%s); treating as stale", path, e
         )
         return None
-
-
-def pid_alive(pid: int) -> bool:
-    """True if *pid* refers to a running (non-zombie) process."""
-    import psutil
-
-    try:
-        return psutil.pid_exists(pid) and psutil.Process(pid).status() not in (
-            psutil.STATUS_ZOMBIE,
-            psutil.STATUS_DEAD,
-        )
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        # AccessDenied means the pid exists but belongs to another user; the
-        # token-authed probe below is the real check either way.
-        return bool(psutil.pid_exists(pid))
 
 
 def base_url_of(info: Dict[str, Any]) -> str:

@@ -74,7 +74,7 @@ def _cache_folder_usage(folder: Path) -> tuple:
 def _print_cache_folders() -> None:
     """Print each folder under GAIA's cache root, largest first, with its size."""
     from gaia.home import gaia_home
-    from gaia.security import _format_size
+    from gaia.utils.sizes import format_size
 
     root = gaia_home() / "cache"
     print(f"\n=== GAIA caches ({root}) ===")
@@ -103,10 +103,10 @@ def _print_cache_folders() -> None:
 
     for name, size, files, unreadable in rows:
         note = f"  ({unreadable} unreadable)" if unreadable else ""
-        print(f"  {name:<{width}}  {_format_size(size):>10}  {count(files)}{note}")
+        print(f"  {name:<{width}}  {format_size(size):>10}  {count(files)}{note}")
     total_size = sum(row[1] for row in rows)
     total_files = sum(row[2] for row in rows)
-    print(f"  {'Total':<{width}}  {_format_size(total_size):>10}  {count(total_files)}")
+    print(f"  {'Total':<{width}}  {format_size(total_size):>10}  {count(total_files)}")
 
 
 def handle(args):

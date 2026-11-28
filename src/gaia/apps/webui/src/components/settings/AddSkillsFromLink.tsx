@@ -7,6 +7,7 @@ import * as api from '../../services/api';
 import { isMessageKey, ref } from '../../i18n/registry';
 import { useT, type Translate } from '../../i18n/useT';
 import { requestErrorText } from '../../utils/requestErrors';
+import { SkillDescription } from './SkillDescription';
 import type { FeaturedLibrary, LinkAddResult, LinkPreview, LinkSkill } from '../../types';
 
 /** Ready to add: readable, not blocked, new or an update, and code only when allowed. */
@@ -190,7 +191,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                                                 {s.has_code && <span className="skill-link-tag">{t('settings.skills.link.tagCode')}</span>}
                                                 {s.verdict === 'REVIEW' && <span className="skill-link-tag">{t('settings.skills.link.tagReview')}</span>}
                                             </span>
-                                            {s.description && <span className="skill-row-desc skill-link-desc" dir="auto" title={s.description}><bdi>{s.description}</bdi></span>}
+                                            {s.description && <SkillDescription text={s.description} />}
                                             {s.permissions.length > 0 ? (
                                                 <span className="skill-link-perms">
                                                     <span className="skill-link-perms-label">{t('settings.skills.link.can')}</span>

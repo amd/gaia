@@ -60,6 +60,10 @@ public:
         printInfo(message);
     }
 
+    /// The model is still reasoning and has written `words` words of it so far. Sent every
+    /// few seconds, so a long think is not silence. Default: nothing.
+    virtual void printReasoningProgress(size_t /*words*/) {}
+
     // === Completion Methods ===
     virtual void printFinalAnswer(const std::string& answer,
                                   const UsageStats& usage = {}) = 0;

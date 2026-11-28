@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// A chat title orders its own text (dir="auto") but takes its side from the row.
+// A chat title and snippet order their own text (dir="auto") but take their side from the row.
 // A fade drawn on one physical side was wrong for a Latin title in an Arabic
 // sidebar (#7628), so long titles end in an ellipsis. jsdom does no layout, so
 // this reads the shipped stylesheet and the row markup.
@@ -15,11 +15,13 @@ const SOURCES = import.meta.glob(['/src/components/Sidebar.css', '/src/component
 const sidebarCss = SOURCES['/src/components/Sidebar.css'];
 const sidebarSource = SOURCES['/src/components/Sidebar.tsx'];
 
+// The declarations of the rule whose selector list names `selector`.
 function rule(css: string, selector: string): string {
     const bare = css.replace(/\/\*[\s\S]*?\*\//g, '');
-    const escaped = selector.replace(/[.()]/g, (c) => `\\${c}`);
-    const re = new RegExp(String.raw`(?:^|\})\s*` + escaped + String.raw`\s*\{([^}]*)\}`);
-    return bare.match(re)?.[1] ?? '';
+    for (const [, list, body] of bare.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        if (list.split(',').some((s) => s.trim() === selector)) return body;
+    }
+    return '';
 }
 
 describe('sidebar title direction', () => {
@@ -29,8 +31,10 @@ describe('sidebar title direction', () => {
     });
 
     it('takes the side from the row: right in a right-to-left row, left in a left-to-right one', () => {
-        expect(rule(sidebarCss, '.sb-row-main:dir(rtl) .sb-row-title')).toMatch(/text-align:\s*right/);
-        expect(rule(sidebarCss, '.sb-row-main:dir(ltr) .sb-row-title')).toMatch(/text-align:\s*left/);
+        for (const part of ['.sb-row-title', '.sb-row-snippet']) {
+            expect(rule(sidebarCss, `.sb-row-main:dir(rtl) ${part}`)).toMatch(/text-align:\s*right/);
+            expect(rule(sidebarCss, `.sb-row-main:dir(ltr) ${part}`)).toMatch(/text-align:\s*left/);
+        }
     });
 
     it('fills the row and fades a long title at its own end, never at a side fixed for every title', () => {

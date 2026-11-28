@@ -215,8 +215,13 @@ class SidecarRegistry:
             if manager.is_running:
                 # Attaching without an explicit mode is not a mode request —
                 # only an explicit, differing mode conflicts (compared against
-                # the mode CAPTURED at spawn, never the live env).
-                if mode is not None and mode != manager.resolved_mode:
+                # the mode CAPTURED at spawn, never the live env). gaiacpp has
+                # no dev variant, so no mode conflicts with it.
+                if (
+                    mode is not None
+                    and not getattr(manager, "mode_agnostic", False)
+                    and mode != manager.resolved_mode
+                ):
                     raise ModeConflictError(
                         f"agent '{agent_id}' is already running in "
                         f"'{manager.resolved_mode}' mode but '{mode}' was "

@@ -200,7 +200,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                     {snippet || note ? (
                         <span className="sb-row-text">
                             {title}
-                            {snippet && <span className="sb-row-snippet"><Highlight parts={snippet} /></span>}
+                            {snippet && <span className="sb-row-snippet" dir="auto"><Highlight parts={snippet} /></span>}
                             {/* Its own line, so the notes never cut a long title short; the second wraps rather than clip. */}
                             {note && (
                                 <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`} title={note}>

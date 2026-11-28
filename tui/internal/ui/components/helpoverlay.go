@@ -1,6 +1,7 @@
 package components
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -97,8 +98,16 @@ func HelpMaxScrollForCommands(ctx HelpContext, width, height int, commands []str
 	return maxScrollFor(len(lines), helpContentRows(rows))
 }
 
+// helpContextMention is the /cost row's pointer at /context, dropped for a
+// session that cannot run it.
+const helpContextMention = " · /context fill"
+
 func helpTextFor(_ HelpContext, commands []string) string {
-	return renderCommandsSection(chatHelpText, commands)
+	text := renderCommandsSection(chatHelpText, commands)
+	if len(commands) > 0 && !slices.Contains(commands, "/context") {
+		text = strings.Replace(text, helpContextMention, "", 1)
+	}
+	return text
 }
 
 // helpCommandsLabel/helpCommandsIndent match the fixed two-line layout
@@ -285,7 +294,7 @@ const chatHelpText = `  GAIA Chat
   Esc         Cancel the turn (clears the composer
               when there is nothing running)
   Esc twice   Give up waiting on the cancel
-  Ctrl+C      Quit
+  Ctrl+C      Quit (/quit and /exit too)
 
   Commands    /help /clear /full-access /slack /discord
               /setup /memory /models /provider /gateway

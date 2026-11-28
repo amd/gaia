@@ -7,7 +7,10 @@
  * way the UI sends one is checked here, and a new raw request has to be added.
  */
 
+import { createElement } from 'react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AttachmentLink } from '../../components/AttachmentLink';
 import { apiFetch, sendMessageStream, uploadDocumentBlob, uploadFile, uploadMedia } from '../api';
 import { createKnowledge, deleteKnowledge, editKnowledge } from '../memoryApi';
 import { speak } from '../speechApi';
@@ -84,6 +87,15 @@ describe('every mutating request carries x-gaia-ui', () => {
         expect(uiHeaderOf(fetchMock)).toBe('1');
     });
 
+    it('opening an attached file in the preview', async () => {
+        fetchMock.mockResolvedValue(new Response('hello', { status: 200 }));
+        const { getByRole } = render(createElement(AttachmentLink, { href: '/api/files/uploads/a.txt', children: 'a.txt' }));
+        fireEvent.click(getByRole('button', { name: 'a.txt' }));
+        await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/files/uploads/a.txt');
+        expect(uiHeaderOf(fetchMock)).toBe('1');
+    });
+
     it('uploading a recording, which uses XMLHttpRequest for its progress', async () => {
         const sent: Record<string, string> = {};
         class FakeRequest {
@@ -116,6 +128,7 @@ const SOURCES = import.meta.glob(['/src/**/*.{ts,tsx}', '!/src/**/__tests__/**',
 
 /** Every file that sends a request itself instead of through apiFetch, and how often. */
 const RAW_REQUESTS: Record<string, { fetch: number; xhr: number }> = {
+    '/src/components/AttachmentLink.tsx': { fetch: 1, xhr: 0 },
     '/src/services/api.ts': { fetch: 5, xhr: 1 },
     '/src/services/memoryApi.ts': { fetch: 1, xhr: 0 },
     '/src/services/setupApi.ts': { fetch: 1, xhr: 0 },

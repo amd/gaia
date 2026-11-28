@@ -185,7 +185,7 @@ std::string MemoryStore::remember(const std::string& content, const std::string&
 
 std::vector<MemoryEntry> MemoryStore::recall(const std::string& query, const std::string& category,
                                              int limit, bool includeSensitive) {
-    limit = std::clamp(limit, 1, 100);
+    limit = std::clamp(limit, 1, 1000);
     std::lock_guard<std::mutex> lock(mutex_);
     const std::string cols =
         "k.id, k.category, k.content, k.domain, k.entity, k.sensitive, k.created_at, k.updated_at";
@@ -300,7 +300,9 @@ void MemoryStore::registerTools(ToolRegistry& registry) {
         const std::string query = a.value("query", "");
         // Sensitive only keeps a fact out of listings; asked for by name, it is the user's own.
         const bool sensitive = !ftsQuery(query).empty() || a.value("include_sensitive", false);
-        for (const auto& e : this->recall(query, a.value("category", ""), a.value("limit", 10), sensitive)) {
+        // The model's own recall stays small; the Memory page asks for more.
+        const int limit = std::clamp(a.value("limit", 10), 1, 100);
+        for (const auto& e : this->recall(query, a.value("category", ""), limit, sensitive)) {
             items.push_back(entryJson(e));
         }
         return {{"status", "success"}, {"memories", items}, {"count", items.size()}};

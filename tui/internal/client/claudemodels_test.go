@@ -68,14 +68,14 @@ func TestClaudeModelShortName(t *testing.T) {
 // experiences as "it worked yesterday". Parsed out of the Python source the
 // same way palette_test parses submit — the source file IS the contract.
 func TestGoAndPythonClaudeModelListsAgree(t *testing.T) {
-	src, err := os.ReadFile(pythonStdioPath(t))
+	src, err := os.ReadFile(pythonClaudeModelsPath(t))
 	if err != nil {
 		t.Skipf("agent source not available in this checkout: %v", err)
 	}
 	block := regexp.MustCompile(`(?s)CLAUDE_MODELS: Dict\[str, str\] = \{(.*?)\}`).
 		FindSubmatch(src)
 	if block == nil {
-		t.Fatal("CLAUDE_MODELS not found in gaiapy/stdio.py — has it been renamed?")
+		t.Fatal("CLAUDE_MODELS not found in gaia/agents/base/model_switch.py — has it been renamed or moved?")
 	}
 	var pyIDs []string
 	for _, m := range regexp.MustCompile(`"(claude-[^"]+)"\s*:`).FindAllSubmatch(block[1], -1) {
@@ -87,16 +87,16 @@ func TestGoAndPythonClaudeModelListsAgree(t *testing.T) {
 	}
 }
 
-// pythonStdioPath locates the agent module relative to THIS source file, so
-// the test does not depend on the working directory the suite is run from.
-func pythonStdioPath(t *testing.T) string {
+// pythonClaudeModelsPath locates the module that owns CLAUDE_MODELS relative to
+// THIS source file, so the test does not depend on the suite's working directory.
+func pythonClaudeModelsPath(t *testing.T) string {
 	t.Helper()
 	_, self, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate this test's own source file")
 	}
 	repo := filepath.Join(filepath.Dir(self), "..", "..", "..")
-	return filepath.Join(repo, "hub", "agents", "gaia", "python", "gaiapy", "stdio.py")
+	return filepath.Join(repo, "src", "gaia", "agents", "base", "model_switch.py")
 }
 
 // Every refusal and every help string names ExampleClaudeModelID. If it ever

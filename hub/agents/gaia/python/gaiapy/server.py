@@ -66,6 +66,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base import file_snapshots
+from gaia.agents.base.agent import TurnCancel
 from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.agents.tools.rag_tools import (
@@ -78,6 +79,7 @@ from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
+from gaia.print_mode import HARD_STOP_GRACE_S, NO_WEB_NOTE, restrict_tools
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 from gaia.ui.turn_insights import turn_record
 from gaia.version import LEMONADE_MIN_VERSION
@@ -112,7 +114,26 @@ AGENT_ID = "gaia"
 #: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
 #: 2.31 added ``session_created`` on ``final``/``error``: the sidecar rebuilt
 #: this turn's agent (eviction, restart, or first use).
-API_VERSION = "2.31"
+#: 2.32 added ``/query``'s one-shot ``time_limit``, ``disallowed_tools``,
+#: ``no_web``, ``no_skills``, ``skip_permissions`` and ``full_access`` (the
+#: ``gaia -p`` flags), and ``final.time_limit_reached`` / ``withheld_tools``.
+API_VERSION = "2.32"
+
+#: ``/query`` fields that apply to one run only, so a request with a
+#: ``session_id`` may not carry them: they must never outlive that run.
+RUN_SCOPED_FIELDS = frozenset(
+    {
+        "time_limit",
+        "disallowed_tools",
+        "no_web",
+        "no_skills",
+        "skip_permissions",
+        "full_access",
+    }
+)
+
+#: How long a model call still running at the time limit is waited for.
+_HARD_STOP_GRACE_S = HARD_STOP_GRACE_S
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -387,6 +408,84 @@ class QueryRequest(_Strict):
             )
         return list(dict.fromkeys(v))
 
+    time_limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Seconds this one-shot run may take (contract >= 2.32), as `gaia -p "
+            "--time-limit`: the agent wraps up before it, a stop ends the turn "
+            "at it, and a model call still running a few seconds later is "
+            "abandoned. `final.time_limit_reached` is true when it stopped the "
+            "turn. Needs a request with no session_id."
+        ),
+    )
+    disallowed_tools: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Tool-name globs this one-shot run never offers or runs (contract "
+            ">= 2.32), as `gaia -p --disallowed-tools`. A glob that matches no "
+            "tool is a 400. `final.withheld_tools` lists what was withheld. "
+            "Needs a request with no session_id."
+        ),
+    )
+    no_web: bool = Field(
+        default=False,
+        description=(
+            "Withhold GAIA's web search, fetch, browser and download tools for "
+            "this one-shot run and tell the model web access is off (contract "
+            ">= 2.32), as `gaia -p --no-web`. Needs a request with no session_id."
+        ),
+    )
+    no_skills: bool = Field(
+        default=False,
+        description=(
+            "Run this one-shot with no skills: none suggested, found, loaded or "
+            "learned (contract >= 2.32), as `gaia -p --no-skills`. Needs a "
+            "request with no session_id."
+        ),
+    )
+    skip_permissions: bool = Field(
+        default=False,
+        description=(
+            "Run confirmation-gated tools in this one-shot run without asking "
+            "(contract >= 2.32), as `gaia -p --dangerously-skip-permissions`. "
+            "The shell guardrails stay on and paths outside the run's scope are "
+            "still refused. Applies to this run only; needs a request with no "
+            "session_id."
+        ),
+    )
+    full_access: bool = Field(
+        default=False,
+        description=(
+            "Full access for this one-shot run (contract >= 2.32), as `gaia -p "
+            "--full-access`: gated tools run without asking, the shell "
+            "guardrails are off, and paths outside the run's scope are granted. "
+            "Applies to this run only; needs a request with no session_id. A "
+            "chat's full access is /sessions/{id}/bypass."
+        ),
+    )
+
+    @field_validator("disallowed_tools")
+    @classmethod
+    def _disallowed_tools_named(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        names = [p.strip() for p in v]
+        if not all(names):
+            raise ValueError("disallowed_tools entries must be non-empty tool globs.")
+        return list(dict.fromkeys(names))
+
+    @model_validator(mode="after")
+    def _run_scoped_fields_are_one_shot(self) -> "QueryRequest":
+        sent = sorted(f for f in RUN_SCOPED_FIELDS if getattr(self, f))
+        if sent and self.session_id:
+            raise ValueError(
+                f"{', '.join(sent)} apply to one run only, so they need a one-shot "
+                "request: drop session_id. A chat's full access is "
+                "/sessions/{id}/bypass (contract >= 2.32)."
+            )
+        return self
+
     @field_validator("run_id")
     @classmethod
     def _run_id_is_uuid(cls, v: str) -> str:
@@ -612,7 +711,12 @@ class _QueryRun:
         self.run_id = run_id
         self.agent = agent
         self.handler = handler
-        self.cancel_event = threading.Event()
+        #: A stop that can say why: the time limit ends the turn with its reason.
+        self.cancel_event = TurnCancel()
+        #: When a turn still running is abandoned at its time limit (monotonic).
+        self.hard_stop_at: Optional[float] = None
+        #: Tools this run's flags withheld, reported on ``final``.
+        self.withheld: List[str] = []
         #: Mid-turn follow-ups (contract >= 2.15). The agent drains this at its
         #: step boundary; see Agent._drain_followups.
         self.followups: "queue.Queue[str]" = queue.Queue()
@@ -953,22 +1057,35 @@ def _report_live_context(run: "_QueryRun") -> None:
     run.handler._emit({"type": "context_usage", **usage})
 
 
-def _confirmation_refusal(action: str) -> Dict[str, Any]:
+def _confirmation_refusal(action: str, surface: str = "service") -> Dict[str, Any]:
     """Terminal refusal for a confirmation-gated tool (the stateless D1 stub).
 
     ``failed``: the request was not done, so a scripted caller must not read
-    it as a success.
+    it as a success. A ``cli`` caller is ``gaia -p``, whose remedy is a flag.
     """
-    return {
-        "type": "final",
-        "failed": True,
-        "answer": (
+    if surface == "cli":
+        from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+
+        remedy = (
+            "Re-run with --full-access to grant paths outside the current folder "
+            "for this run (it also turns the shell guardrails off)."
+            if action == PATH_ACCESS_PROMPT_TOOL
+            else "Re-run with --dangerously-skip-permissions to let this run use "
+            "gated tools without asking, or --full-access to also turn the shell "
+            "guardrails off."
+        )
+        answer = (
+            f"I stopped before running '{action}' because it needs your approval, "
+            f"and gaia -p has nobody to ask. {remedy}"
+        )
+    else:
+        answer = (
             f"I stopped before running '{action}' because it needs your explicit "
             "approval, and this streaming surface cannot collect that yet. "
             "Re-run the request through a surface that supports confirmation, or "
             "perform the action directly."
-        ),
-    }
+        )
+    return {"type": "final", "failed": True, "answer": answer}
 
 
 #: Step name the attached-document indexing is reported under — the same one
@@ -1194,6 +1311,102 @@ def _declare_who_answers(handler: Any, session: Any, request: "QueryRequest") ->
         session is not None and request.can_answer_questions is not False
     )
     handler.nobody_answers = not handler.answers_confirmations
+
+
+def _apply_run_permissions(handler: Any, request: "QueryRequest") -> None:
+    """A one-shot run's own permission override, as ``gaia -p`` applies it.
+
+    Set on this run's handler only: a session never carries these fields (the
+    request model refuses them), so no chat inherits the override.
+    """
+    if not (request.skip_permissions or request.full_access):
+        return
+    if request.session_id:
+        raise RuntimeError("a permission override reached a session turn")
+    handler.auto_approve_gated_tools = True
+    handler.full_access = request.full_access
+    from gaiapy.stdio import audit
+
+    audit.warning(
+        "%s for one-shot run %s (shell gates %s)",
+        "Full access ENABLED" if request.full_access else "Gated tools pre-approved",
+        request.run_id,
+        "off" if request.full_access else "on",
+    )
+
+
+def _arm_time_limit(run: "_QueryRun", seconds: int) -> threading.Timer:
+    """Stop *run* at *seconds*, as ``gaia -p --time-limit`` does in-process.
+
+    The agent already knows the limit (``time_limit_s``) and wraps up before
+    it; this stop ends a turn still busy at it. The stream abandons a model
+    call still running :data:`_HARD_STOP_GRACE_S` later.
+    """
+    run.hard_stop_at = time.monotonic() + seconds + _HARD_STOP_GRACE_S
+    timer = threading.Timer(
+        seconds,
+        run.cancel_event.cancel,
+        args=[
+            f"Stopped at the {seconds}-second time limit (--time-limit) before "
+            "the turn finished."
+        ],
+    )
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def _past_hard_stop(run: "_QueryRun", thread: threading.Thread) -> bool:
+    """Whether *run*'s turn is still running past its time limit's grace."""
+    return (
+        run.hard_stop_at is not None
+        and thread.is_alive()
+        and time.monotonic() >= run.hard_stop_at
+    )
+
+
+def _abandoned_final(run: "_QueryRun") -> Dict[str, Any]:
+    """The ``final`` of a turn given up on mid-call at its time limit."""
+    from gaiapy.stdio import _usage_from_result
+
+    seconds = int(run.agent.time_limit_s or 0)
+    logger.warning(
+        "Abandoning run_id=%s %ss past its %ss time limit",
+        run.run_id,
+        _HARD_STOP_GRACE_S,
+        seconds,
+    )
+    result = run.agent.time_limit_abandoned_result(
+        f"Stopped at the {seconds}-second time limit (--time-limit) while a "
+        "model call was still running."
+    )
+    final: Dict[str, Any] = {
+        "type": "final",
+        "answer": result.get("result") or "",
+        "time_limit_reached": True,
+    }
+    usage = _usage_from_result(result)
+    if usage:
+        final["usage"] = usage
+    if run.withheld:
+        final["withheld_tools"] = list(run.withheld)
+    return final
+
+
+async def _with_run_limits(
+    final: Dict[str, Any], run: "_QueryRun", thread: threading.Thread, timed: bool
+) -> Dict[str, Any]:
+    """*final* saying what this run's flags did (contract >= 2.32)."""
+    if final.get("type") != "final":
+        return final
+    if run.withheld:
+        final = {**final, "withheld_tools": list(run.withheld)}
+    if timed:
+        # The answer is printed before the loop returns the flag with it.
+        await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
+        if isinstance(run.result, dict) and run.result.get("time_limit_reached"):
+            final = {**final, "time_limit_reached": True}
+    return final
 
 
 def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
@@ -1754,7 +1967,8 @@ _QUERY_SSE_RESPONSES = {
             "prompt_context?} | needs_input {run_id, request_id, question, "
             "options, allow_free_text, sensitive, respond_url, "
             "timeout_seconds?} | final {answer, usage?, failed?, failure?, "
-            "performance?, context?, context_error?, model_messages?, route?} | "
+            "performance?, context?, context_error?, model_messages?, route?, "
+            "time_limit_reached?, withheld_tools?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
@@ -1799,11 +2013,12 @@ async def query(request: QueryRequest):
         _check_model_matches_provider(request.provider, request.model)
     if request.session_id:
         _require_valid_session_id(request.session_id)
+    if request.skip_permissions or request.full_access:
+        _require_authenticated_caller()
 
     handler = SSEOutputHandler()
-    # Full access belongs to a session, set through /sessions/{id}/bypass
-    # (#3373). There is no request field that could ask for it — this pins
-    # that, so a query with no session never runs with it.
+    # A chat's full access is set through /sessions/{id}/bypass (#3373); only a
+    # one-shot run's own skip_permissions/full_access, applied below, lift it.
     handler.full_access = False
     session = None
     #: Whether this turn's session handle was just built fresh (eviction,
@@ -1813,6 +2028,7 @@ async def query(request: QueryRequest):
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
     one_shot_agent: Optional[Any] = None
+    withheld: List[str] = []
     #: Whether THIS request owns the run-table entry under its run_id. A request
     #: that fails before registering must not remove that id: it may belong to
     #: the live run it collided with.
@@ -1961,11 +2177,32 @@ async def query(request: QueryRequest):
             # No session handle — a genuine one-shot. Nothing persists past this
             # turn, and the agent is told so rather than over-promising. Nothing
             # else will ever reference it either, so this run owns its teardown.
+            if request.no_skills:
+                kwargs["skill_discovery"] = False
+                kwargs["skill_suggestions"] = False
             agent = await _off_loop(
                 functools.partial(build_query_agent, **kwargs),
                 on_abandon=lambda built: built is not None and close_agent(built),
             )
             one_shot_agent = agent
+            try:
+                # Off the loop: rebuilding the system prompt can take a while.
+                withheld = await _off_loop(
+                    functools.partial(
+                        restrict_tools,
+                        agent,
+                        request.disallowed_tools or (),
+                        no_web=request.no_web,
+                        no_skills=request.no_skills,
+                    ),
+                    on_abandon=lambda _withheld: close_agent(agent),
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"disallowed_tools: {exc}"
+                ) from exc
+            if request.time_limit:
+                agent.time_limit_s = request.time_limit
         agent.console = handler
         # Streamed model calls are what put ``token`` events on this wire and let
         # Stop cut a call short. Set per turn so a retained agent can't drift.
@@ -1975,6 +2212,7 @@ async def query(request: QueryRequest):
         # the caller's own declaration that a human is watching (spec >= 2.6); a
         # one-shot sets it False precisely so the agent never parks on a prompt.
         _declare_who_answers(handler, session, request)
+        _apply_run_permissions(handler, request)
         _apply_memory_mode(agent, request.memory)
         _apply_internet_switch(agent, request.internet_off)
         if request.can_answer_questions is False:
@@ -2002,6 +2240,7 @@ async def query(request: QueryRequest):
                 mark()
 
         run = _QueryRun(request.run_id, agent, handler)
+        run.withheld = withheld
         precancelled = _registry.add(run)
         registered = True
         if session is not None:
@@ -2053,19 +2292,22 @@ async def query(request: QueryRequest):
             if request.turns is not None and hasattr(agent, "conversation_history")
             else None
         )
-        run.query = request.query
+        # The shell can still reach the web, so the model is told the rule too.
+        turn_query = request.query + NO_WEB_NOTE if request.no_web else request.query
+        run.query = turn_query
         run.pushed = pushed
         run.received_turns = received_turns
         if received_turns is not None:
             # Before the answer: the same live event an in-process turn streams.
             _report_live_context(run)
+        timer = _arm_time_limit(run, request.time_limit) if request.time_limit else None
         try:
             if request.max_steps is not None:
                 run.result = agent.process_query(
-                    request.query, max_steps=request.max_steps
+                    turn_query, max_steps=request.max_steps
                 )
             else:
-                run.result = agent.process_query(request.query)
+                run.result = agent.process_query(turn_query)
             if getattr(handler, "staged_model_messages", None) is None:
                 # No record was sealed at the answer, so this is the only chance.
                 try:
@@ -2080,6 +2322,8 @@ async def query(request: QueryRequest):
                         f"GAIA couldn't measure this chat's context: {exc}"
                     )
         finally:
+            if timer is not None:
+                timer.cancel()
             run.context_done.set()
 
     def _run_agent() -> None:
@@ -2187,6 +2431,9 @@ async def query(request: QueryRequest):
             final = {**final, "session_created": True}
         if final.get("type") != "final":
             return final
+        final = await _with_run_limits(
+            final, run, thread, timed=request.time_limit is not None
+        )
         if run.result is None and thread.is_alive() and run.received_turns is not None:
             # Timings are sealed only when the loop returns, and only a caller
             # that sent ``turns`` is owed them: the TUI's final keeps its
@@ -2232,6 +2479,14 @@ async def query(request: QueryRequest):
                 except queue.Empty:
                     if not thread.is_alive() and handler.event_queue.empty():
                         break
+                    if _past_hard_stop(run, thread):
+                        # A model call already sent does not hear the stop.
+                        for warning in await _finish_changes(run):
+                            yield _emit(warning)
+                        handler.cancelled.set()
+                        yield _emit(_abandoned_final(run))
+                        terminated = True
+                        return
                     # `:` lines are SSE comments — every conformant reader skips
                     # them and resets its read-idle timer.
                     if time.monotonic() - last_write >= _HEARTBEAT_SECONDS:
@@ -2278,7 +2533,9 @@ async def query(request: QueryRequest):
                             yield _emit(warning)
                         handler.cancelled.set()
                         run.cancel_event.set()
-                        refusal = _confirmation_refusal(canonical.get("action", ""))
+                        refusal = _confirmation_refusal(
+                            canonical.get("action", ""), _wording_surface(request)
+                        )
                         # The steps and tokens spent before the stop are known
                         # once the cancelled loop returns.
                         await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
@@ -2473,6 +2730,23 @@ async def tool_decision(run_id: str, body: ToolDecisionRequest):
     return ToolDecisionResponse(run_id=run_id, decision=body.decision, delivered=True)
 
 
+def _require_authenticated_caller() -> None:
+    """Refuse a permission override from a caller this server can't identify."""
+    auth = caller_auth.get_config()
+    if auth is not None and not auth.token:
+        # Full access is an unrestricted shell: never hand it to a caller this
+        # server cannot tell apart from any other local process.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Full access needs caller authentication, and this sidecar was "
+                "started without a token. Start it through the GAIA daemon or "
+                f"the Agent UI, or set {caller_auth.TOKEN_FILE_ENV_VAR} (or "
+                f"{caller_auth.TOKEN_ENV_VAR}) before starting it."
+            ),
+        )
+
+
 @router.post("/sessions/{session_id}/bypass", response_model=BypassResponse)
 async def set_bypass(session_id: str, body: BypassRequest):
     """Turn full access on or off for a session.
@@ -2489,19 +2763,8 @@ async def set_bypass(session_id: str, body: BypassRequest):
     against a typo'd session id.
     """
     _require_valid_session_id(session_id)
-    auth = caller_auth.get_config()
-    if body.enabled and auth is not None and not auth.token:
-        # Full access is an unrestricted shell: never hand it to a caller this
-        # server cannot tell apart from any other local process.
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Full access needs caller authentication, and this sidecar was "
-                "started without a token. Start it through the GAIA daemon or "
-                f"the Agent UI, or set {caller_auth.TOKEN_FILE_ENV_VAR} (or "
-                f"{caller_auth.TOKEN_ENV_VAR}) before starting it."
-            ),
-        )
+    if body.enabled:
+        _require_authenticated_caller()
     session = session_registry.get(session_id)
     if session is None:
         raise HTTPException(

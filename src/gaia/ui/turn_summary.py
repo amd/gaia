@@ -315,6 +315,31 @@ class TurnLedger:
                 found[path] = chunks if isinstance(chunks, int) else 0
         return list(found.items())
 
+    def unreadable_documents(self) -> List[Tuple[str, str]]:
+        """``(path, reason)`` for each file ``index_document`` failed on this turn.
+
+        A file a later call in the turn did index is left out.
+        """
+        failed: Dict[str, str] = {}
+        for call in self._finished():
+            if call["tool"] != "index_document":
+                continue
+            data = call["data"]
+            path = call["args"].get("file_path") or call["args"].get("path")
+            if isinstance(data, dict) and isinstance(data.get("file_path"), str):
+                path = data["file_path"]
+            if not isinstance(path, str) or not os.path.isabs(path):
+                continue
+            ok = call["success"] and not (
+                isinstance(data, dict) and data.get("status") == "error"
+            )
+            if ok:
+                failed.pop(path, None)
+                continue
+            reason = data.get("error") if isinstance(data, dict) else data
+            failed[path] = str(reason or "").removeprefix("error: ").strip()
+        return list(failed.items())
+
     def _produced(self) -> List[Dict[str, Any]]:
         """Things the turn made besides files: images, indexed documents,
         memories and schedules, for the session panel's Outputs (#5277)."""

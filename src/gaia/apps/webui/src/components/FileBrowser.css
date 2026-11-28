@@ -201,7 +201,7 @@
 }
 
 .fb-up-btn {
-    margin-inline-start: auto;
+    flex-shrink: 0;
     background: none;
     border: 1px solid var(--border);
     color: var(--text-secondary);

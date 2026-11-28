@@ -5,7 +5,8 @@ import React, { createContext, useCallback, useContext, useId, useLayoutEffect, 
 import type { Components } from 'react-markdown';
 import { Copy, Check, AlertCircle, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
+import { SAFE_DISALLOWED_ELEMENTS, isUploadUrl, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
+import { AttachmentLink } from './AttachmentLink';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import temml from 'temml';
@@ -26,6 +27,7 @@ import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { ranChangingTool } from '../hooks/useSessionProgram';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, messageExcerpt, sizeLabel } from './LongContent';
@@ -976,7 +978,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <div className="msg-route-notice" role="status">{message.stats.route.notice}</div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
-                        <TurnChanges sessionId={message.session_id} messageId={message.id} />
+                        <TurnChanges sessionId={message.session_id} messageId={message.id} ranChangingTool={ranChangingTool(agentSteps)} />
                     )}
                     {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
                     {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}
@@ -1346,6 +1348,7 @@ const MARKDOWN_COMPONENTS: Components = {
     },
     // Links open in new tab
     a({ href, children }) {
+        if (isUploadUrl(href)) return <AttachmentLink href={href}>{children}</AttachmentLink>;
         return (
             <a
                 href={href}
