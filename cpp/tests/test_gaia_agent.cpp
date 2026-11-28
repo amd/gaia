@@ -2524,3 +2524,65 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
     }
     EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
 }
+
+TEST(GaiaAgentTest, GeneralKnowledgeAbsenceIsNotSentBack) {
+    struct Case {
+        const char* request;
+        const char* reply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"What does HTTP 404 mean? Answer in one short sentence.",
+              "HTTP 404 means that the server could not find the requested resource."},
+             {"What does HTTP 404 Not Found mean?",
+              "HTTP 404 means the requested file or page was not found on the server."},
+             {"What does ENOENT mean in POSIX?",
+              "ENOENT stands for 'No such file or directory' - the path does not exist."},
+             {"Is there a largest prime number?", "No, a largest prime number does not exist."},
+             {"What is wrong with 'The cat sat on mat'?", "The article 'the' is missing before 'mat'."},
+             {"What does Python's dict.get() return when a key is not present?",
+              "It returns None if the key is not found."},
+             {"What happens in Python when you open a file that doesn't exist?",
+              "Python raises FileNotFoundError: No such file or directory."},
+             {"What is Node.js?", "Node.js is a JavaScript runtime; browser DOM APIs do not exist in it."},
+             {"Write a short story about lost keys.",
+              "I looked everywhere, but I couldn't find my keys. They were missing from the hook."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("unexpected retry"));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << tc.request << " -> " << tc.reply;
+        EXPECT_EQ(r["result"], tc.reply) << tc.request;
+    }
+}
+
+TEST(GaiaAgentTest, UnlookedWorkspaceAbsenceIsStillSentBack) {
+    struct Case {
+        const char* request;
+        const char* firstReply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"total budget.xlsx", "budget.xlsx doesn't exist in your folder."},
+             {"Read stats.py", "stats.py was not found."},
+             {"Summarize the README", "I could not find a README."},
+             {"List the files in this folder", "I couldn't find any files."},
+             {"Check /tmp/data for errors", "/tmp/data does not exist."},
+             {"Do you remember my Wi-Fi password?", "I couldn't find anything about your Wi-Fi password."},
+             {"What skills are installed?", "I couldn't find any installed skills."},
+             {"Fetch https://example.com/status", "That page was not found."},
+             {"What is the early termination fee?", "I couldn't find an early termination fee in your folder."},
+             {"Open the invoice and sum the totals.", "The invoice is missing."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.firstReply));
+        mock.pushResponse(answer("I checked and confirmed it."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        ASSERT_EQ(mock.receivedBodies().size(), 2u) << tc.request << " -> " << tc.firstReply;
+        EXPECT_NE(mock.receivedBodies()[1].find("you didn't look"), std::string::npos) << tc.request;
+        EXPECT_EQ(r["result"], "I checked and confirmed it.") << tc.request;
+    }
+}

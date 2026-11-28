@@ -191,6 +191,12 @@ public:
                                                         const std::vector<std::filesystem::path>& roots,
                                                         const std::vector<CallSeen>& calls);
 
+    /// The answer says something is absent, no lookup tool ran, and the turn is about a
+    /// local or tool-checkable target rather than general knowledge or prose.
+    static std::optional<std::string> unlookedAbsentNote(const std::string& request,
+                                                         const std::string& answer,
+                                                         const std::vector<CallSeen>& calls);
+
     /// The answer offers to read or work something out instead of doing it.
     static std::optional<std::string> handBackNote(const std::string& answer,
                                                    const std::vector<CallSeen>& calls);

@@ -1195,6 +1195,79 @@ std::optional<std::string> GaiaAgent::unopenedFilesNote(const std::string& answe
            "say which files you checked.";
 }
 
+namespace {
+
+bool hasLookupTarget(const std::string& request, const std::string& answer) {
+    if (!GaiaAgent::namedFiles(request).empty() || !requestPaths(request).empty()) return true;
+
+    // Code, script, config, or media file names beyond namedFiles() (excluding bare JS brand names).
+    static const std::regex extraFile(
+        R"((?:^|[\s`'"(\\/])([A-Za-z0-9_-][\w.-]*)\.(?:py|pyw|cc|cpp|cxx|hh|hpp|hxx|cs|go|rs|java|kt|swift|rb|php|pl|sh|bash|zsh|bat|cmd|ps1|sql|lua|ts|tsx|jsx|mjs|cjs|js|css|scss|sass|less|vue|svelte|env|cfg|conf|properties|gradle|cmake|mk|lock|rtf|odt|ods|odp|png|jpg|jpeg|gif|svg|webp|bmp|ico|mp3|wav|mp4|mov|db|sqlite|sqlite3|parquet|gz|tar|tgz|bz2|xz|7z|rar|pem|crt|key|pub|ics)\b)"
+        R"(|(?:^|[\s`'"(\\/])([A-Za-z0-9_-]{2,})\.(?:c|h|r)\b)",
+        std::regex::icase);
+    static const std::set<std::string> jsBrands = {
+        "node",   "next",   "vue",   "react", "nuxt",   "nest",  "express",  "three", "chart", "d3",
+        "p5",     "alpine", "ember", "svelte","solid",  "astro", "remix",    "angular",
+        "electron", "bun",  "deno",
+    };
+    for (auto it = std::sregex_iterator(request.begin(), request.end(), extraFile);
+         it != std::sregex_iterator(); ++it) {
+        const std::string full = lowered((*it)[0].str());
+        const std::string stem = lowered((*it)[1].matched ? (*it)[1].str() : (*it)[2].str());
+        const bool hasSlash = full.find('/') != std::string::npos || full.find('\\') != std::string::npos;
+        const bool isJs = full.size() >= 3 && full.compare(full.size() - 3, 3, ".js") == 0;
+        if (!hasSlash && isJs && jsBrands.count(stem)) continue;
+        return true;
+    }
+
+    static const std::regex requestTarget(
+        R"((?:^|[\s`'"(])(?:~[\\/]\S|\.\.?[\\/]\S|https?://\S))"
+        R"(|\b(?:readme|makefile|dockerfile|jenkinsfile|procfile|gemfile|rakefile|vagrantfile|cmakelists|license|changelog|contributing)\b)"
+        R"(|(?:^|[\s`'"(])\.(?:gitignore|gitattributes|env|dockerignore|editorconfig|bashrc|zshrc|npmrc|eslintrc|prettierrc)\b)"
+        R"(|\b(?:this|the|my|our|your|current|working|local)\s+(?:[\w-]+\s+){0,2}?(?:folders?|director(?:y|ies)|workspace|repo(?:sitory)?|project|codebase)\b)"
+        R"(|\b(?:current|working)\s+(?:folder|directory|dir)\b)"
+        R"(|\b(?:my|this|these|our|your|attached|uploaded|indexed)\s+(?:[\w-]+\s+){0,2}?(?:files?|documents?|docs?|spreadsheets?|sheets?|reports?|notes?|logs?|configs?|configurations?|scripts?|datasets?|tables?|invoices?|receipts?|contracts?|leases?|budgets?|resumes?|csvs?|pdfs?)\b)"
+        R"(|\b(?:read|open|check|inspect|search|list|summarize|summarise|total|sum|parse|load|scan|grep|find|edit|update|fix|delete|remove|show)\s+(?:[\w-]+\s+){0,2}?the\s+(?:[\w-]+\s+){0,2}?(?:files?|documents?|docs?|spreadsheets?|sheets?|reports?|notes?|logs?|configs?|configurations?|scripts?|datasets?|tables?|invoices?|receipts?|contracts?|leases?|budgets?|resumes?|csvs?|pdfs?)\b)"
+        R"(|\b(?:my|the|this|installed|available|loaded|gaia)\s+skills?\b|\b(?:list|load|run|use)\s+(?:the\s+)?(?:[\w-]+\s+)?skills?\b|\bskills?\s+(?:are\s+)?(?:installed|available|loaded)\b)"
+        R"(|\b(?:do\s+you\s+remember|what\s+do\s+you\s+remember|did\s+i\s+(?:tell|ask)\s+you\s+to\s+remember|saved\s+in\s+memory|in\s+(?:your|my)\s+memory|memory\s+store|recall)\b)"
+        R"(|\bmcp\b)",
+        std::regex::icase);
+    if (std::regex_search(request, requestTarget)) return true;
+
+    // Even on a brief request, claiming absence inside the user's local folder/workspace needs a check.
+    static const std::regex localAbsence(
+        R"(\b(?:in|under|inside|from)\s+(?:the|this|your|our)\s+(?:working\s+|current\s+|project\s+)?(?:folder|directory|workspace|repo(?:sitory)?|project)\b)"
+        R"(|\b(?:the|this|your)\s+(?:working\s+|current\s+)?(?:folder|directory|workspace)\s+(?:does(?:n't| not)\s+(?:have|contain)|has\s+no|is\s+empty)\b)",
+        std::regex::icase);
+    return std::regex_search(answer, localAbsence);
+}
+
+}  // namespace
+
+std::optional<std::string> GaiaAgent::unlookedAbsentNote(const std::string& request,
+                                                         const std::string& answer,
+                                                         const std::vector<CallSeen>& calls) {
+    if (asksForNoAction(request)) return std::nullopt;
+    static const std::set<std::string> lookupTools = {
+        "file_search", "file_read", "bash_execute", "list_skills", "query_documents",
+        "index_document", "read_mcp_resource", "list_mcp_resources", "web_fetch", "recall",
+    };
+    if (std::any_of(calls.begin(), calls.end(),
+                    [](const CallSeen& c) { return lookupTools.count(c.name) > 0; })) {
+        return std::nullopt;
+    }
+    static const std::regex absentClaim(
+        R"(\b(does(n't| not) exist|do(n't| not) exist|is(n't| not) (there|present|in the folder)|)"
+        R"(could(n't| not) find|no such file|not found|is missing|are missing)\b)",
+        std::regex::icase);
+    const std::string plain = plainPunctuation(answer, "-");
+    if (!std::regex_search(plain, absentClaim)) return std::nullopt;
+    if (!hasLookupTarget(plainPunctuation(request, "-"), plain)) return std::nullopt;
+    return "Your answer says something is missing or not found, but you didn't "
+           "look. Check (list the folder, search, or read the file) before "
+           "saying it isn't there.";
+}
+
 std::optional<std::string> GaiaAgent::handBackNote(const std::string& answer, const std::vector<CallSeen>& calls) {
     static const std::regex offer(
         R"(\b(?:would you like (?:me )?to|do you want me to|shall i|should i|want me to)"
@@ -2916,20 +2989,9 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
     }
 
     bool lookedNote = false;
-    static const std::regex absentClaim(
-        R"(\b(does(n't| not) exist|do(n't| not) exist|is(n't| not) (there|present|in the folder)|)"
-        R"(could(n't| not) find|no such file|not found|is missing|are missing)\b)",
-        std::regex::icase);
-    // "Use no tools": the user's own words win over the nudge to look first.
-    if (std::regex_search(answer, absentClaim) && !asksForNoAction(turnRequest()) &&
-        !called({"file_search", "file_read", "bash_execute", "list_skills", "query_documents",
-                 "index_document", "read_mcp_resource", "list_mcp_resources", "web_fetch",
-                 "recall"},
-                false)) {
+    if (auto note = unlookedAbsentNote(turnRequest(), answer, seen)) {
         lookedNote = true;
-        notes.push_back("Your answer says something is missing or not found, but you didn't "
-                        "look. Check (list the folder, search, or read the file) before "
-                        "saying it isn't there.");
+        notes.push_back(*note);
     }
 
     if (!asksForNoAction(turnRequest())) {
