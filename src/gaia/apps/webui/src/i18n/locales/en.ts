@@ -2747,6 +2747,8 @@ export const enMessages = {
     'settings.skills.link.read': 'Read',
     'settings.skills.link.reading': 'Reading…',
     'settings.skills.link.featuredFailed': 'Could not load suggested libraries: {error}',
+    // The backend's link_not_found message, word for word.
+    'settings.skills.link.notFound': "Nothing found at {link}. Check the link — a private repository can't be read without signing in. If you have a copy of the skill, put its folder in the skills folder inside .gaia in your home folder.",
     'settings.skills.link.trust': 'Only add skills from people you trust.',
     'settings.skills.link.found': '{n} in {source}',
     'settings.skills.link.all': 'All',

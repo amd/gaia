@@ -2746,6 +2746,7 @@ const messages: Messages = {
     'settings.skills.link.read': 'قراءة',
     'settings.skills.link.reading': 'جارٍ القراءة…',
     'settings.skills.link.featuredFailed': 'تعذّر تحميل المكتبات المقترحة: {error}',
+    'settings.skills.link.notFound': 'لم يُعثر على شيء في {link}. تحقّق من الرابط، فالمستودع الخاص لا يمكن قراءته دون تسجيل الدخول. إن كانت لديك نسخة من المهارة، فضع مجلدها في مجلد skills داخل ⁦.gaia⁩ في مجلد المستخدم.',
     'settings.skills.link.trust': 'أضف المهارات من أشخاص تثق بهم فقط.',
     'settings.skills.link.found': 'العدد: {n} في {source}',
     'settings.skills.link.all': 'الكل',

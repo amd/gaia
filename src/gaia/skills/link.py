@@ -86,6 +86,16 @@ class SkillLinkError(SkillError):
 class SkillLinkNotFoundError(SkillLinkError):
     """The download URL answered 404."""
 
+    def __init__(self, message: str, link: str):
+        super().__init__(message)
+        #: The link named in *message*, for a surface that words the error itself.
+        self.link = link
+
+
+_PRIVATE_REPO = (
+    "Check the link — a private repository can't be read without signing in."
+)
+
 
 #: How a GAIA app user adds a skill they have a copy of: no terminal involved.
 APP_LOCAL_COPY_REMEDY = (
@@ -289,8 +299,7 @@ def _download(url: str, destination: Path) -> Path:
         if status == 404:
             # Neutral: each surface adds the local-copy remedy its user can follow.
             raise SkillLinkNotFoundError(
-                f"Nothing found at {url}. Check the link — a private repository "
-                "can't be read without signing in."
+                f"Nothing found at {url}. {_PRIVATE_REPO}", url
             ) from exc
         raise SkillLinkError(f"Could not download {url}: {exc}.") from exc
     except (requests.RequestException, IOError) as exc:
@@ -342,13 +351,15 @@ def fetch_library(
     try:
         archive = _download(source.download_url, workdir / "library.zip")
     except SkillLinkNotFoundError as exc:
+        # Name the link the user pasted, not the archive URL it resolved to.
+        message = f"Nothing found at {source.link}. {_PRIVATE_REPO}"
         if source.repo and re.search(r"/(tree|blob)/", source.link):
-            raise SkillLinkNotFoundError(
-                f"{exc} If the branch name in {source.link} contains a '/', the "
+            message += (
+                f" If the branch name in {source.link} contains a '/', the "
                 "link can't tell it from the folder: paste the repository link "
                 "instead, or a link on a branch without a '/'."
-            ) from exc
-        raise
+            )
+        raise SkillLinkNotFoundError(message, source.link) from exc
     try:
         pin = _archive_pin(archive, source)
     except zipfile.BadZipFile as exc:

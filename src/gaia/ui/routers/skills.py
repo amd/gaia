@@ -13,7 +13,7 @@ the running agent is asked instead.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -130,12 +130,19 @@ def add_skill_link(body: SkillLinkAddRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-def _link_error(e: Exception) -> str:
-    """*e* as the desktop app shows it: a missing link gets a remedy without a terminal."""
+def _link_error(e: Exception) -> Union[str, Dict[str, str]]:
+    """*e* as the desktop app shows it: a missing link gets a remedy without a terminal.
+
+    The app words a missing link itself, in the user's language, from ``link``.
+    """
     from gaia.skills.link import APP_LOCAL_COPY_REMEDY, SkillLinkNotFoundError
 
     if isinstance(e, SkillLinkNotFoundError):
-        return f"{e} {APP_LOCAL_COPY_REMEDY} Then reopen Settings > Skills."
+        return {
+            "status": "link_not_found",
+            "link": e.link,
+            "message": f"{e} {APP_LOCAL_COPY_REMEDY}",
+        }
     return str(e)
 
 
