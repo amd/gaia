@@ -12,9 +12,9 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SETTINGS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, withResourceStrip, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
-import { translateBare } from '../src/i18n/registry';
+import { stripIsolates, translateBare } from '../src/i18n/registry';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -76,6 +76,17 @@ const nextFrames = (page: Page) =>
 
 const audit = async (page: Page): Promise<string[]> => {
     await nextFrames(page);
+    // A state that just landed (a fetch resolving) is mid-transition, and an inherited
+    // colour starts a second one on the child; audit where they all end.
+    await page.evaluate(async () => {
+        for (let round = 0; round < 10; round++) {
+            const moving = document.getAnimations().filter((a) => a instanceof CSSTransition);
+            if (!moving.length) return;
+            await Promise.all(moving.map((a) => a.finished.catch(() => undefined)));
+            await new Promise((done) => requestAnimationFrame(done));
+        }
+        throw new Error('audit: CSS transitions still starting after 10 rounds');
+    });
     return page.evaluate(() => {
         const problems: string[] = [];
         const label = (el: Element) =>
@@ -719,7 +730,59 @@ for (const locale of ['en', 'ar']) {
             expect(await audit(page)).toEqual([]);
         });
     }
+
+    test(`an open chat whose gaiacpp went missing offers the same two fixes under the turn (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/onboarding/start', (route) => route.fulfill({ json: GAIACPP_MISSING_START }));
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: { messages: GAIACPP_MISSING_TURN, total: GAIACPP_MISSING_TURN.length },
+            }));
+            await withAgentPrograms(p, { gaiacpp: 'downloadable' });
+        });
+        const turn = page.locator('[data-message-id="2"]');
+        const panel = turn.locator('.agent-recovery');
+        await expect(panel).toBeVisible();
+        await expect(panel.locator('.agent-recovery-actions button')).toHaveCount(2);
+        await shot(page, `chat-gaiacpp-missing-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
+
+const uncut = (el: Element) => el.scrollWidth <= el.clientWidth + 1;
+
+for (const locale of ['en', 'ar']) {
+    const name = locale === 'ar' ? 'سريع وخفيف · تجريبي' : 'Fast and light · Beta';
+    for (const [where, hash, width] of [['new chat', '', 1440], ['new chat', '', 390], ['chat', `#${ANSWER_SESSION}`, 1440]] as const) {
+        test(`a ${where} on Fast and light says so beside the model (${locale}, ${width}px)`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await open(page, hash, locale, async (p) => {
+                await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+                await withAgentPrograms(p, { current: 'gaiacpp' });
+            });
+            const chip = page.locator('main .composer-chip-agent');
+            await expect(chip).toContainText(name);
+            await expect(chip).toHaveAttribute('title', locale === 'ar' ? /سريع وخفيف/ : /^Fast and light \(Beta\)/);
+            // Under the box in a new chat it has room; in a busier chat row it fades before the model name does.
+            if (!hash) expect(await chip.locator('.composer-chip-label').evaluate(uncut)).toBe(true);
+            const model = page.locator('main .composer-row-right .composer-chip-wrap .composer-chip-label').last();
+            if (width > 480) expect(await model.evaluate(uncut)).toBe(true);
+            await shot(page, `${hash ? 'chat' : 'new-chat'}-agent-chip-${width}-${locale}`);
+            // The closed sidebar drawer waits off screen on a phone; judge the rest there.
+            const problems = await audit(page);
+            expect(width > 480 ? problems : problems.filter((p) => /composer|new-chat|scrolls sideways/.test(p))).toEqual([]);
+            await chip.click();
+            await expect(page.locator('.settings-pane-title')).toHaveText(locale === 'ar' ? /الوكيل والنموذج/ : /^Agent & model$/);
+        });
+    }
+}
+
+const GAIACPP_MISSING_TURN = [
+    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Plan three days in Lisbon.', created_at: NOW.toISOString(), rag_sources: null },
+    {
+        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: '', created_at: NOW.toISOString(), rag_sources: null, failed: true,
+        agent_steps: [{ id: 1, type: 'error', label: 'Error', detail: "GAIA couldn't start its agent. Send your message again.", active: false, success: false, timestamp: 1 }],
+    },
+];
 
 for (const locale of ['en', 'ar']) {
     test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
@@ -809,27 +872,88 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+const START_TASKS = {
+    cards: [
+        { skill: 'document-brief', title: 'Ask about your documents', note: '12 indexed documents', prompt: 'Using my indexed documents, give me the key points and anything I should act on.', needs_input: false },
+        { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research and write a short cited report on: ', needs_input: true },
+        { skill: 'coding', title: 'Work on code', note: 'In gaia', prompt: 'Look around gaia and tell me what this project does.', needs_input: false },
+    ],
+    working_folder: { path: '/home/you/projects/gaia', name: 'gaia', gaia_folder: false, choosable: true },
+};
+
 for (const locale of ['ar', 'en']) {
-    for (const width of [1440, 390]) {
-        test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
-            await page.setViewportSize({ width, height: 900 });
-            await open(page, '', locale);
-            const chips = page.locator('.try-chip');
-            await expect(chips).toHaveCount(7);
-            await expect(chips.first()).toBeVisible();
-            if (locale === 'ar') await expect(chips.first()).toContainText('وصفة');
-            await shot(page, `try-chips-${locale}-${width}`);
-            // The closed sidebar drawer waits off screen at phone width; judge the chips.
-            const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
-            expect(problems).toEqual([]);
-        });
+    for (const tasks of [false, true]) {
+        for (const width of [1200, 390]) {
+            test(`new-chat starters fit in ${locale} at ${width}px${tasks ? ", with this PC's tasks" : ''}`, async ({ page }) => {
+                await page.setViewportSize({ width, height: 900 });
+                await open(page, '', locale, tasks ? (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({ json: START_TASKS })) : undefined);
+                const chips = page.locator('.try-chip');
+                await expect(chips).toHaveCount(3);
+                await expect(chips.first()).toBeVisible();
+                if (locale === 'ar') await expect(chips.first()).toContainText(tasks ? 'اسأل عن مستنداتك' : 'وصفة');
+                if (tasks) await expect(chips.last()).toContainText(locale === 'ar' ? 'وصفة' : 'Recipe');
+                await shot(page, `starters-${locale}-${width}${tasks ? '-tasks' : ''}`);
+                if (width >= 1200) {
+                    const tops = await chips.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+                    expect(new Set(tops).size, 'the starters sit in one row').toBe(1);
+                }
+                // The closed sidebar drawer waits off screen at phone width; judge the chips.
+                const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
+                expect(problems).toEqual([]);
+            });
+        }
     }
 }
 
 test('finished answer', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`);
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.resource-strip')).toHaveCount(0);
     expect(await audit(page)).toEqual([]);
+});
+
+test('a finished answer gets the full width until the session panel is asked for', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await open(page, `#${ANSWER_SESSION}`, 'en');
+    await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.session-panel')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show session panel' }).click();
+    await expect(page.locator('.session-panel.is-docked')).toBeVisible();
+    expect(await audit(page)).toEqual([]);
+});
+
+test("a reply that makes the chat's first file opens the session panel beside it", async ({ page }) => {
+    const path = 'C:\\Users\\me\\Documents\\packing-list.md';
+    const summary = { pages: [], documents: [], sites: [], cost: { kind: 'local' }, files: [{ path, name: 'packing-list.md', openable: true }] };
+    await page.addInitScript(streamThenWait, [{ type: 'done', content: 'I wrote your packing list.', message_id: 9, turn_summary: summary }]);
+    await open(page, `#${ANSWER_SESSION}`, 'en', async (p) => {
+        await p.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, json({
+            session_id: ANSWER_SESSION,
+            items: [{
+                id: 'o1', kind: 'file', name: 'packing-list.md', path, detail: null,
+                message_id: 9, created_at: null, change: 'created', state: 'present', openable: true, revealable: true,
+            }],
+        }));
+        await p.route('**/api/files/status', json({ files: [{ path, exists: true, mtime: null }] }));
+    });
+    await expect(page.locator('.session-panel')).toHaveCount(0);
+    const box = page.getByRole('textbox').first();
+    await box.fill('Write me a packing list');
+    await box.press('Enter');
+    await expect(page.getByText('I wrote your packing list.')).toBeVisible();
+    const panel = page.locator('.session-panel.is-docked');
+    await expect(panel.locator('[data-section="outputs"]')).toContainText('packing-list.md');
+    expect(await page.evaluate(() => document.activeElement?.closest('.session-panel') ?? null)).toBeNull();
+    expect(await audit(page)).toEqual([]);
+});
+
+test('a chat at phone width goes straight from the header to the conversation', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, `#${ANSWER_SESSION}`);
+    await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.resource-strip')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'استخدام الموارد' })).toHaveAttribute('aria-pressed', 'false');
+    await page.screenshot({ path: 'visual/test-results/chat-ar-phone-no-strip.png' });
 });
 
 const RECIPE_CARD = {
@@ -1122,6 +1246,58 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A gaiacpp turn that wrote a file: no record to undo from, and no context measurement. */
+async function withNativeWrite(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'اكتب ملاحظاتي في notes.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'كتبت ملاحظاتك في الملف.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', label: 'Write file', tool: 'write_file', narration: 'Writing file: notes.txt', active: false, success: true, timestamp: 1 },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`, (route) =>
+        route.fulfill({ json: { session_id: ANSWER_SESSION, agent_type: 'gaia', skills: null, program: 'gaiacpp', tools: [{ name: 'write_file', description: 'Write a file.', category: 'file_io' }] } }));
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
+        json: { available: false, reason: "Not available yet: gaiacpp doesn't report what fills its context." },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a gaiacpp turn that wrote a file says undo is not available (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withNativeWrite);
+        const note = page.locator('.msg-assistant .turn-changes.is-unavailable');
+        await expect(note).toBeVisible();
+        await expect(note).toContainText(locale === 'ar' ? 'سريع وخفيف' : 'Fast and light');
+        await expect(page.locator('.msg-assistant .turn-changes-btn')).toHaveCount(0);
+        if (locale === 'ar') expect(await untranslated(page, '.turn-changes')).toEqual([]);
+        await shot(page, `native-no-undo-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`the same turn on the Python agent has no such line (${locale})`, async ({ page }) => {
+        // The line waits on this answer, so its absence is only checked once it has arrived.
+        const asked = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`);
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withNativeWrite(p);
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`, (route) =>
+                route.fulfill({ json: { session_id: ANSWER_SESSION, agent_type: 'gaia', skills: [], program: 'gaiapy', tools: [] } }));
+        });
+        await expect(page.locator('.msg-assistant')).toBeVisible();
+        await asked;
+        await nextFrames(page);
+        await expect(page.locator('.turn-changes.is-unavailable')).toHaveCount(0);
+    });
+}
+
 /** The server's crash notice is English; it ends a partial answer and repeats as the last error step. */
 const CRASH_NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. Send your message again.';
 
@@ -1371,9 +1547,12 @@ for (const locale of ['ar', 'en']) {
         await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
         await expect(page.getByText('Question 22')).toBeVisible();
         await page.locator('.messages-scroll').hover();
-        await page.mouse.wheel(0, -20_000);
         const button = page.locator('.scroll-bottom-btn');
-        await expect(button).toBeVisible();
+        // A slow runner can still be settling onto the last answer and pull the list back down.
+        await expect(async () => {
+            await page.mouse.wheel(0, -20_000);
+            await expect(button).toBeVisible({ timeout: 1_000 });
+        }).toPass({ timeout: 15_000 });
         await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
         const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
         // 12px above the composer, never over its border (#7864), at its end, never in the middle of a line.
@@ -1430,6 +1609,32 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.code-copy')).toBeInViewport();
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath(`sticky-code-${locale}.png`) });
+    });
+
+    test(`a copy the clipboard refused says so, never Copied (${locale})`, async ({ page }, info) => {
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'clipboard', {
+                configurable: true,
+                value: { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) },
+            });
+            document.execCommand = () => false;
+        });
+        await page.setViewportSize({ width: 1400, height: 900 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongCode);
+        const failed = locale === 'ar' ? 'تعذّر النسخ' : "Couldn't copy";
+        const codeCopy = page.locator('.code-copy');
+        await codeCopy.click();
+        await expect(codeCopy).toHaveClass(/\bfailed\b/);
+        await expect(codeCopy).toContainText(failed);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        const msgCopy = reply.locator('.msg-copy');
+        await msgCopy.click();
+        await expect(msgCopy).toHaveClass(/\bfailed\b/);
+        await expect(msgCopy).toHaveAttribute('aria-label', new RegExp(failed));
+        await expect(page.locator('.copied')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`copy-failed-${locale}.png`) });
     });
 }
 
@@ -1738,6 +1943,38 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`the queued-message strip and its buttons stay inside the message area at 800x500 (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 500 });
+        await page.addInitScript(holdOnReading);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        await expect(page.locator('.thinking-indicator').last()).toBeVisible();
+        await box.fill('And what if the rate were 5%?');
+        await box.press('Enter');
+        const strip = page.locator('.queued-message');
+        await expect(strip).toHaveCount(1);
+        await expect(strip.locator('.queued-message-steer')).toBeVisible();
+        await expect(strip.locator('.queued-message-text')).toHaveAttribute('dir', 'auto');
+        const spills = await strip.evaluate((row) => {
+            const box = row.getBoundingClientRect();
+            const problems: string[] = [];
+            if (box.left < 0 || box.right > window.innerWidth) problems.push('the strip runs off the screen');
+            for (const el of Array.from(row.children) as HTMLElement[]) {
+                const r = el.getBoundingClientRect();
+                if (r.left < box.left - 1 || r.right > box.right + 1) problems.push(`${el.className} spills out of the strip`);
+                if (!el.classList.contains('queued-message-text') && el.scrollWidth > el.clientWidth + 1) problems.push(`${el.className} is cut`);
+            }
+            return problems;
+        });
+        expect(spills).toEqual([]);
+        await shot(page, `queued-strip-800-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const QUESTION_EVENTS = [
     {
         type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',
@@ -1783,6 +2020,44 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const UNANSWERABLE_CONFIRMATION = [
+    { type: 'needs_confirmation', action: 'write_file', summary: 'Write notes.txt in /home/you/projects/gaia' },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`a step an old agent stopped at says it did not run and offers nothing to approve (${locale})`, async ({ page }) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, UNANSWERABLE_CONFIRMATION);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Save my notes');
+        await box.press('Enter');
+        const card = page.locator('.render-confirmation');
+        await expect(card).toBeVisible();
+        await expect(card.getByRole('button')).toHaveCount(1);
+        await expect(card).not.toContainText('write_file');
+        await expect(card.locator('.render-confirmation__label')).toContainText(locale === 'ar' ? 'كتابة ملف' : 'Writing file');
+        const footer = await card.locator('.render-confirmation__footer').evaluate((row) => {
+            const box = row.getBoundingClientRect();
+            const button = row.querySelector('button')!.getBoundingClientRect();
+            return { inside: button.left >= box.left - 1 && button.right <= box.right + 1, atEnd: getComputedStyle(row).direction === 'rtl' ? button.left - box.left < 2 : box.right - button.right < 2 };
+        });
+        expect(footer, 'Dismiss sits at the end of the footer, inside the card').toEqual({ inside: true, atEnd: true });
+        await shot(page, `confirmation-not-run-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** A multi-step turn that reasons before every call, then keeps thinking. */
 function holdOnThoughtfulSteps(): void {
     const realFetch = window.fetch.bind(window);
@@ -1824,6 +2099,9 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+/** The user opened the session panel before, so it starts open; it is closed on a fresh profile. */
+const withPanelOpen = (page: Page) => page.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.open', '1'));
+
 /** Every tile and the close button sit beside the docked session panel, not under it. */
 async function expectClearOfPanel(page: Page): Promise<void> {
     const panel = (await page.locator('.session-panel.is-docked').boundingBox())!;
@@ -1835,7 +2113,8 @@ async function expectClearOfPanel(page: Page): Promise<void> {
 }
 
 test('resource usage strip', async ({ page }) => {
-    await open(page, `#${ANSWER_SESSION}`);
+    await withPanelOpen(page);
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withResourceStrip);
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
@@ -1851,7 +2130,8 @@ test('resource usage strip', async ({ page }) => {
 });
 
 test('closing the resource usage strip says how to bring it back', async ({ page }) => {
-    await open(page, `#${ANSWER_SESSION}`);
+    await withPanelOpen(page);
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withResourceStrip);
     await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
     const note = page.locator('.resource-hidden-note');
     await expect(note).toContainText('أيقونة النبض');
@@ -1862,7 +2142,9 @@ test('closing the resource usage strip says how to bring it back', async ({ page
 });
 
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
+        await withResourceStrip(p);
         await p.route('**/api/system/resources', (route) =>
             route.fulfill({
                 json: { ...RESOURCES, devices: [], networks: [], devices_error: "function 'D3DKMTEnumAdapters3' not found", networks_error: null },
@@ -1879,7 +2161,7 @@ test('resource usage strip with no GPU counters keeps CPU and memory', async ({ 
 
 test('resource usage strip at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await open(page, `#${ANSWER_SESSION}`);
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withResourceStrip);
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.locator('.resource-spark').first()).toBeHidden();
@@ -2262,6 +2544,7 @@ for (const locale of ['ar', 'en']) {
     });
 
     test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
@@ -2434,6 +2717,7 @@ const arabicNameGaps = (page: Page) =>
     );
 
 test('session panel with Arabic names', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'ar', withArabicEnvironment);
     await expect(page.locator('.sp-item-name', { hasText: 'تقارير' })).toBeVisible();
     const gaps = await arabicNameGaps(page);
@@ -2444,6 +2728,7 @@ test('session panel with Arabic names', async ({ page }) => {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel leads with the environment, details last (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale);
         const panel = page.locator('.session-panel');
         await expect(panel.locator('.sp-group-title')).toBeVisible();
@@ -2458,6 +2743,7 @@ for (const locale of ['ar', 'en'] as const) {
 }
 
 test('a long folder path stays on its row and gives way to the folder name', async ({ page }) => {
+    await withPanelOpen(page);
     const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await p.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
@@ -2540,6 +2826,7 @@ async function withBusyPanel(page: Page): Promise<void> {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel with outputs, a skill and internet off (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, withBusyPanel);
         const panel = page.locator('.session-panel');
         await expect(panel.locator('.sp-item-name', { hasText: 'action-items.md' })).toBeVisible();
@@ -2688,6 +2975,7 @@ const USE_CASES: Array<{ name: string; setup: (page: Page) => Promise<void>; chi
 for (const useCase of USE_CASES) {
     for (const locale of ['ar', 'en'] as const) {
         test(`the session panel for a ${useCase.name} chat brings that work's rows (${locale})`, async ({ page }) => {
+            await withPanelOpen(page);
             await open(page, `#${ANSWER_SESSION}`, locale, useCase.setup);
             const panel = page.locator('.session-panel');
             await expect(panel.locator(`[data-section="${useCase.section}"]`)).toBeVisible();
@@ -2746,6 +3034,7 @@ async function holdOnPlan(page: Page, narrations: string[]): Promise<void> {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel shows the plan a running turn is working through (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnPlan(p, PLAN_LINES[locale]));
         const panel = page.locator('.session-panel');
         await expect(panel.locator('[data-section="plan"]')).toHaveCount(0);
@@ -2766,6 +3055,7 @@ expect(await forcedLeftToRight(page)).toEqual([]);
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel keeps a finished plan, all ticked, after the reply ends (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, json({
                 messages: [
@@ -2802,6 +3092,7 @@ expect(await forcedLeftToRight(page)).toEqual([]);
 }
 
 test('a plain chat keeps the panel to its environment, with one quiet chip', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'en');
     const panel = page.locator('.session-panel');
     await expect(panel.locator('.sp-chip')).toHaveText(['Chat']);
@@ -2811,6 +3102,7 @@ test('a plain chat keeps the panel to its environment, with one quiet chip', asy
 });
 
 test('a section that turns up later eases in; one there from the start does not', async ({ page }) => {
+    await withPanelOpen(page);
     let made = false;
     await open(page, `#${ANSWER_SESSION}`, 'en', async (p) => {
         await p.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, (route) =>
@@ -2848,11 +3140,14 @@ test.describe('English', () => {
     test('finished answer', async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, 'en');
         await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await expect(page.locator('.resource-strip')).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Resource usage' })).toHaveAttribute('aria-pressed', 'false');
         expect(await audit(page)).toEqual([]);
     });
 
     test('resource usage strip', async ({ page }) => {
-        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await withPanelOpen(page);
+        await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         const strip = page.getByRole('region', { name: 'Resource usage on this PC' });
         await expect(strip.getByText('S: 0 R: 8.0 Kbps')).toBeVisible();
         await expect(strip.locator('li')).toHaveCount(5);
@@ -2865,7 +3160,8 @@ test.describe('English', () => {
     });
 
     test('closing the resource usage strip says how to bring it back', async ({ page }) => {
-        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await withPanelOpen(page);
+        await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         await page.getByRole('button', { name: 'Hide resource usage' }).click();
         const note = page.locator('.resource-hidden-note');
         await expect(note).toContainText('pulse icon');
@@ -2878,7 +3174,8 @@ test.describe('English', () => {
 
     test('resource usage strip on a wide window is one row', async ({ page }) => {
         await page.setViewportSize({ width: 1920, height: 1000 });
-        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await withPanelOpen(page);
+        await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         const tiles = page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li');
         await expect(tiles).toHaveCount(5);
         const tops = await tiles.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
@@ -2889,7 +3186,7 @@ test.describe('English', () => {
     });
 
     test('resource usage strip in the dark theme', async ({ page }) => {
-        await open(page, `#${ANSWER_SESSION}`, 'en', undefined, 'dark');
+        await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip, 'dark');
         await expect(page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li')).toHaveCount(5);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: 'visual/test-results/resource-strip-en-dark.png' });
@@ -2910,6 +3207,7 @@ test.describe('English', () => {
     });
 
     test('an Arabic name in the session panel stays on the left', async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en', withArabicEnvironment);
         await expect(page.locator('.sp-item-name', { hasText: 'تقارير' })).toBeVisible();
         const gaps = await arabicNameGaps(page);
@@ -3090,6 +3388,17 @@ for (const locale of ['ar', 'en']) {
                     if (expanded) await more.click();
                     await expect(more).toHaveAttribute('aria-expanded', String(expanded));
                     await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+                    if (expanded) {
+                        // What changes on gaiacpp is a list of its own, each line inside the card.
+                        const diffs = agent.locator('.agent-choice-diffs li');
+                        await expect(diffs).toHaveCount(5);
+                        const card = (await agent.boundingBox())!;
+                        for (const line of await diffs.all()) {
+                            const box = (await line.boundingBox())!;
+                            expect(box.x).toBeGreaterThanOrEqual(card.x - 1);
+                            expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+                        }
+                    }
                     for (const row of await agent.locator('[role="radio"]').all()) {
                         expect((await row.boundingBox())!.height).toBeLessThan(48);
                     }
@@ -3134,6 +3443,42 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a gaiacpp from another GAIA release is marked out of date, with Update on its row', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'outdated', poll: AGENT_DOWNLOADING } });
+            const agent = page.locator('.agent-choice');
+            const row = agent.locator('[role="radio"]').nth(1);
+            // Still pickable: an older copy is flagged, not blocked.
+            await expect(row).not.toHaveAttribute('aria-disabled', 'true');
+            // Update and the sentence under the row say it is out of date; no tag repeats it.
+            await expect(row.locator('.agent-choice-off')).toHaveCount(0);
+            const note = agent.locator('.agent-choice-why');
+            await expect(note).toBeVisible();
+            await expect(note).toContainText('0.27.0-rc.8');
+            await expect(note).toContainText('0.27.0-rc.10');
+            const button = agent.locator('.agent-choice-download');
+            await expect(button).toBeVisible();
+            // The button stays inside its row, clear of the row's text and tags.
+            const [rowBox, btn] = await Promise.all([row.boundingBox(), button.boundingBox()]);
+            expect(btn!.x).toBeGreaterThanOrEqual(rowBox!.x);
+            expect(btn!.x + btn!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
+            for (const part of await row.locator('.agent-choice-what, .setup-choice-tag').all()) {
+                const box = (await part.boundingBox())!;
+                expect(btn!.x >= box.x + box.width || btn!.x + btn!.width <= box.x, 'Update overlaps the row').toBe(true);
+            }
+            expect(rowBox!.height).toBeLessThan(48);
+            await expectSnugTags(agent);
+            await shot(page, `model-${locale}-agent-outdated`);
+            expect(await audit(page)).toEqual([]);
+
+            await button.click();
+            await expect(agent.getByRole('progressbar', { name: /gaiacpp/ })).toHaveAttribute('aria-valuenow', '40');
+            await expect(button).toHaveCount(0);
+            // Updating never switches the agent in use.
+            await expect(agent.locator('[role="radio"]').first()).toHaveAttribute('aria-checked', 'true');
+            await shot(page, `model-${locale}-agent-updating`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('a failed gaiacpp download says so in the card, with Retry', async ({ page }) => {
             await openModelPage(page, locale, { agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } });
             const failed = page.locator('.agent-choice .dl-fail');
@@ -3157,11 +3502,14 @@ for (const locale of ['ar', 'en']) {
 
         test('long list, every group and detail open', async ({ page }) => {
             await openModelPage(page, locale);
-            const closed = await groups(page).evaluateAll((els) => els.filter((el) => !(el as HTMLDetailsElement).open).length);
-            expect(closed).toBeGreaterThan(0);
-            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
-            await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
-            await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible();
+            await expect.poll(() => groups(page).evaluateAll((els) => els.filter((el) => !(el as HTMLDetailsElement).open).length))
+                .toBeGreaterThan(0);
+            // Open again until it shows: a group that renders late is still closed after one pass.
+            await expect(async () => {
+                await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+                await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+                await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible({ timeout: 1_000 });
+            }).toPass({ timeout: 15_000 });
             // A model that fits but squeezes other apps says so instead of "Fits this PC".
             await expect(page.locator('.model-badge.is-tight')).toHaveCount(1);
             await page.locator('.model-badge.is-tight').scrollIntoViewIfNeeded();
@@ -3343,7 +3691,7 @@ for (const locale of ['ar', 'en']) {
     });
 
     test(`Mobile access without ngrok (${locale})`, async ({ page }) => {
-        const missing = { active: false, url: null, token: null, startedAt: null, publicIp: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
+        const missing = { active: false, url: null, token: null, startedAt: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
         await open(page, '', locale, (p) => p.route('**/api/tunnel/start', (route) => route.fulfill({ json: missing })));
         await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
         const dialog = page.locator('.mobile-modal');
@@ -3354,6 +3702,22 @@ for (const locale of ['ar', 'en']) {
         const dot = await dialog.locator('.status-dot').boundingBox();
         expect(dot && dot.width <= 10 && dot.height <= 10).toBe(true);
         await shot(page, `mobile-access-ngrok-missing-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`Mobile access with the tunnel on (${locale})`, async ({ page }) => {
+        const active = { active: true, url: 'https://quiet-otter.ngrok.app', token: 'a1b2c3d4-0000-4000-8000-00000000beef', startedAt: NOW.toISOString(), error: null, reason: null, installCommands: [], device: null };
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/tunnel/start', (route) => route.fulfill({ json: active }));
+            await p.route('**/api/tunnel/status', (route) => route.fulfill({ json: active }));
+        });
+        await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
+        const dialog = page.locator('.mobile-modal');
+        await expect(dialog.locator('.tunnel-url-area')).toBeVisible();
+        // ngrok is a third party; the dialog must not promise the data stays secure.
+        await expect(dialog).toContainText('ngrok');
+        await expect(dialog).not.toContainText('stays secure');
+        await shot(page, `mobile-access-active-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 
@@ -3512,6 +3876,12 @@ for (const locale of ['en', 'ar']) {
         const menu = page.getByRole('dialog');
         await expect(menu.locator('.popover-heading').first()).toHaveText('Fireworks AI');
         await expect(menu.locator('.popover-subheading')).toBeVisible();
+        // Each local row carries setup's tag, on one line beside the name.
+        await expect(menu.locator('.mc-chip.is-verified').first()).toBeVisible();
+        await expect(menu.locator('.mc-chip.is-untested').first()).toBeVisible();
+        for (const chip of await menu.locator('.mc-chip').all()) {
+            expect((await chip.boundingBox())!.height).toBeLessThan(24);
+        }
         await shot(page, `model-menu-${locale}`);
         expect(await audit(page)).toEqual([]);
         await menu.getByRole('option', { name: /gpt-oss 20B/ }).click();
@@ -3519,6 +3889,32 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `model-menu-confirm-${locale}`);
         // The question scrolls into view under its row, so the list is scrolled on purpose here.
         expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`the model menu's last row can be reached in a 1280x800 window (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        // A verified model to download, sent last: the menu still lists it before the untested ones.
+        const verified = { ...MODEL_LIST[1], id: 'Qwen3.5-4B-GGUF', display_name: 'Qwen3.5 4B', downloaded: false, state: 'not_downloaded', size_gb: 7, support: 'verified' };
+        await open(page, '', locale, (p) => withModelPage(p, [...MODEL_LIST, verified], null));
+        await page.locator('.composer-chip').filter({ hasText: /Gemma/ }).first().click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-subheading')).toBeVisible();
+        // Every provider's list is in, so nothing grows the menu after it is measured.
+        await expect(menu.getByRole('option', { name: /glm-5p3-flash/ })).toBeAttached();
+        await menu.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+        const box = (await menu.boundingBox())!;
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height).toBeLessThanOrEqual(800);
+        const last = menu.locator('button').last();
+        await expect(last).toBeInViewport();
+        const row = (await last.boundingBox())!;
+        expect(row.y + row.height).toBeLessThanOrEqual(box.y + box.height + 1);
+        // Verified rows to download come before untested ones.
+        const tags = await menu.locator('.popover-subheading ~ .popover-row .mc-chip').evaluateAll((chips) => chips.map((c) => c.classList.contains('is-verified')));
+        expect(tags[0]).toBe(true);
+        expect(tags.slice(tags.indexOf(false))).not.toContain(true);
     });
 }
 
@@ -4044,6 +4440,7 @@ for (const locale of ['ar', 'en']) {
         });
 
         test(`session panel Runs on: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await withPanelOpen(page);
             await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
             const row = page.locator('.session-panel .sp-row').filter({ has: page.locator('.sp-error') });
             await row.scrollIntoViewIfNeeded();
@@ -4120,6 +4517,7 @@ async function withCloudSpending(page: Page): Promise<void> {
 for (const locale of ['ar', 'en']) {
     // Fonts differ by OS, so a row that fits on one PC runs past the panel's edge on another. Narrowest panel, longest row.
     test(`a cloud chat's rows stay inside the session panel at its narrowest (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await withCloudSpending(p);
             await p.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.width', '280'));
@@ -4617,6 +5015,88 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const NATIVE_FAILED_REPLY = 'The model call failed at step 1, so this request is unfinished. '
+    + 'The model server at http://127.0.0.1:13305/api/v1 did not answer.\n\nNothing had run yet.';
+
+/** The turn fails on gaiacpp; `python` says whether the Python agent is on this PC. */
+const withNativeAgentFailure = (python: boolean) => async (page: Page): Promise<void> => {
+    let sent = false;
+    await page.route('**/api/chat/send', (route) => {
+        sent = true;
+        const done = { type: 'done', message_id: 42, content: NATIVE_FAILED_REPLY, failed: true, agent_program: 'gaiacpp' };
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify(done)}\n\n` });
+    });
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => (sent
+        ? route.fulfill({
+            json: {
+                messages: [
+                    { id: 41, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 42, session_id: ANSWER_SESSION, role: 'assistant', content: NATIVE_FAILED_REPLY, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        })
+        : route.fallback()));
+    await page.route((url) => url.pathname === '/api/agent-programs', (route) => route.fulfill({
+        json: {
+            current: 'gaiacpp',
+            programs: [
+                { id: 'gaiapy', installed: python, size_bytes: 412_000_000, can_download: false, unavailable_reason: null },
+                { id: 'gaiacpp', installed: true, size_bytes: 6_800_000, can_download: false, unavailable_reason: null },
+            ],
+            download: { state: 'idle', bytes_done: 0, bytes_total: null, error: null },
+        },
+    }));
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const python of [true, false]) {
+        test(`a turn that failed on gaiacpp says so and offers Full-featured, switching only when asked (${python ? 'switch' : 'no gaiapy'}, ${locale})`, async ({ page }) => {
+            const saves: unknown[] = [];
+            await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+                await withNativeAgentFailure(python)(p);
+                await p.route('**/api/settings', async (route) => {
+                    if (route.request().method() !== 'PUT') return route.fallback();
+                    saves.push(route.request().postDataJSON());
+                    return route.fulfill({ json: { ...SETTINGS, flagship_agent: 'gaiapy' } });
+                });
+            });
+            const box = page.getByRole('textbox').first();
+            await box.fill('Summarize the minutes');
+            await box.press('Enter');
+            const notice = page.locator('.native-agent-notice');
+            await expect(notice).toHaveCount(1);
+            await expect(notice).toContainText(locale === 'ar' ? 'سريع وخفيف' : 'Fast and light');
+            await expect(notice.getByRole('button')).toHaveCount(2);
+            await notice.scrollIntoViewIfNeeded();
+            // Nothing is switched until the button is pressed.
+            expect(saves).toEqual([]);
+            await shot(page, `native-agent-failed-${locale}`);
+            expect(await audit(page)).toEqual([]);
+
+            await notice.getByRole('button').first().click();
+            if (python) {
+                await expect(notice).toHaveAttribute('role', 'status');
+                expect(saves).toEqual([{ flagship_agent: 'gaiapy' }]);
+            } else {
+                await expect(notice.getByRole('alert')).toBeVisible();
+                expect(saves).toEqual([]);
+            }
+            await shot(page, `native-agent-failed-${python ? 'switched' : 'no-python'}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+
+    test(`a turn that failed on the Python agent gets no gaiacpp notice (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withServerDown);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        await expect(page.locator('.server-down-notice')).toHaveCount(1);
+        await expect(page.locator('.native-agent-notice')).toHaveCount(0);
+    });
+}
+
 /** GAIA answered once that this chat was running, then stopped listening. */
 async function withGaiaStoppedMidAnswer(page: Page): Promise<void> {
     let polls = 0;
@@ -4663,6 +5143,28 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
     });
+
+    test(`a backend that never started: a plain heading, Restart GAIA, and the reason under Details (${locale})`, async ({ page }) => {
+        const missing = "GAIA's backend program is missing, so GAIA can't start: the app's files are incomplete. Reinstall GAIA from https://amd-gaia.ai/#install. Looked for /Applications/GAIA.app/Contents/Resources/core/gaia, /Users/you/.gaia/venv/bin/gaia and for gaia on PATH.";
+        await open(page, '', locale, async (p) => {
+            await withCrashedBackend(p, 'stopped', NOW.getTime());
+            await p.addInitScript((lastError) => {
+                const bridge = (window as unknown as { gaiaAPI: { backend: { getState: () => Promise<Record<string, unknown>> } } }).gaiaAPI.backend;
+                const read = bridge.getState;
+                bridge.getState = async () => ({ ...(await read()), lastExit: null, lastError });
+            }, missing);
+            await p.route('**/api/**', (route) => route.abort('connectionrefused'));
+        });
+        const screen = page.locator('.startup--failed');
+        await expect(screen.getByRole('heading')).toHaveText(locale === 'ar' ? /لم تبدأ خدمة GAIA/ : "GAIA's background service didn't start");
+        await expect(screen.getByRole('button', { name: locale === 'ar' ? /إعادة تشغيل GAIA/ : /Restart GAIA/ })).toBeVisible();
+        await expect(screen.locator('pre')).toBeHidden();
+        await screen.locator('summary').click();
+        await expect(screen.locator('pre')).toContainText('backend program is missing');
+        await shot(page, `backend-never-started-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.startup--failed', 'pre')).toEqual([]);
+    });
 }
 
 /** The reply's text asks the user to press Try again, so the button must be on screen, labelled, without a hover. */
@@ -4670,6 +5172,8 @@ async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> 
     const retry = page.getByRole('button', { name: /Try again/ });
     await expect(retry).toHaveCount(1);
     await expect(retry).toHaveText(locale === 'ar' ? /حاول مجددًا/ : /Try again/);
+    // The answer fades in; judge it once it has arrived.
+    await retry.evaluate((el) => Promise.all(el.closest('.msg')!.getAnimations().map((a) => a.finished)));
     const opacity = await retry.evaluate((el) => {
         let o = 1;
         for (let at: Element | null = el; at; at = at.parentElement) o *= Number(getComputedStyle(at).opacity);
@@ -5037,6 +5541,28 @@ for (const locale of ['ar', 'en']) {
             }).map((b) => b.textContent);
         });
         expect(clipped).toEqual([]);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a chat that failed on gaiacpp names the agent and offers Full-featured, not another model (${locale})`, async ({ page }) => {
+        const s = scene('test-failed-agent-gaiacpp');
+        await open(page, '', locale, (p) => withSetup(p, s.answers));
+        await s.reach(page);
+        const failed = page.locator('.setup-result.is-failed');
+        await expect(failed).toContainText('Fast and light');
+        // The agent's own words are in view, read left to right, inside the row.
+        const said = failed.locator('.setup-result-error-said bdi');
+        await expect(said).toBeVisible();
+        expect(await said.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        const [rowBox, saidBox] = [await failed.boundingBox(), await said.boundingBox()];
+        expect(saidBox!.x).toBeGreaterThanOrEqual(rowBox!.x - 1);
+        expect(saidBox!.x + saidBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width + 1);
+        // Two ways on, Full-featured the main one; the model picker is not one of them.
+        await expect(page.locator('.setup-footer-row button')).toHaveCount(2);
+        await expect(page.locator('.setup-footer-row .btn-primary')).toHaveCount(1);
+        await expect(page.locator('.setup-footer-row .btn-primary')).toContainText('Full-featured');
+        if (locale === 'ar') expect(await leftoverEnglish(page)).toEqual([]);
     });
 }
 
@@ -5664,6 +6190,40 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+// Fast and light, a document it can't read, then a command it can't check: its English risk note and
+// the attach step's English narration both read in Arabic.
+const UNCHECKED_NOTE = "GAIA can't check where this command reads or writes: python3 runs code, which can read and write anywhere you can. It can reach files outside the folders this chat may use.";
+const PDF_CHECK = `python3 -c "import pypdf; print('ok')" 2>&1 || echo "no pdf library"`;
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`Fast and light's unchecked-command card and its attach step read in the UI's language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [
+            { type: 'tool_start', tool: 'index_documents', detail: 'documents: report-q3.pdf', narration: 'Indexing documents' },
+            { type: 'tool_end', success: true },
+            {
+                type: 'permission_request', tool: 'run_shell_command', tool_label: 'Running a shell command', confirm_id: 'c-unchecked',
+                args: { command: PDF_CHECK, working_directory: '/Users/you/.gaia/documents', _risk_note: UNCHECKED_NOTE },
+            },
+        ]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('summarize this report in three points');
+        await page.keyboard.press('Enter');
+        const risk = page.locator('.perm-card-risk');
+        await expect(risk).toBeVisible();
+        const step = page.locator('.flow-tool-label').filter({ hasText: /documents|المستندات/ }).first();
+        if (locale === 'ar') {
+            await expect(risk).toContainText('لا يستطيع GAIA التحقق');
+            await expect(risk).toContainText('يشغّل تعليمات برمجية');
+            await expect(step).toContainText('أضاف المستندات');
+        } else {
+            await expect(risk).toHaveText(UNCHECKED_NOTE);
+            await expect(step).toHaveText('Added documents');
+        }
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-unchecked-native-${locale}`);
+    });
+}
+
 const FOLDER = 'C:\\Users\\you\\Documents\\uxa';
 const STEPS_THEN_PROMPT = [
     ...['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt', 'a.txt', 'b.txt', 'c.txt', 'd.txt'].flatMap((f) => [
@@ -6155,10 +6715,10 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
-/** A measured context two turns from overflowing, so the meter, its popover and the warning all show. */
+/** A measured context past half full and two turns from overflowing, so the meter, its popover and the warning all show. */
 const MEASURED_CONTEXT = {
-    available: true, window: 65536, reply_reserve: 4096, system: 3900, tools: 2600, documents: 4000, history: 11350,
-    query: 0, used: 21850, history_budget: 20000, history_used: 11350, turns_in_view: 4, turns_hidden: 2,
+    available: true, window: 65536, reply_reserve: 4096, system: 3900, tools: 2600, documents: 4000, history: 29500,
+    query: 0, used: 40000, history_budget: 30000, history_used: 29500, turns_in_view: 4, turns_hidden: 2,
     at_risk: ['لخّص تقرير الربع الثالث', 'من تأخر من الموردين؟'], at_risk_tokens: 3000,
     tokenizer: { exact: true, model: 'Gemma-4-E4B-it-GGUF' }, model: 'Gemma-4-E4B-it-GGUF',
 };
@@ -6206,8 +6766,8 @@ for (const locale of ['ar', 'en']) {
 }
 
 for (const locale of ['en', 'ar']) {
-    test(`the context meter explains a fresh chat's fill and shows a dash before it is measured (${locale})`, async ({ page }) => {
-        const fresh = { ...MEASURED_CONTEXT, system: 7700, tools: 16000, documents: 0, history: 300, used: 24000, at_risk: [], at_risk_tokens: 0 };
+    test(`the context meter says when most of its fill is GAIA's own set-up (${locale})`, async ({ page }) => {
+        const fresh = { ...MEASURED_CONTEXT, system: 10000, tools: 25000, documents: 0, history: 300, used: 35300, at_risk: [], at_risk_tokens: 0 };
         await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
             p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: fresh })));
         await page.locator('button.context-meter').click();
@@ -6216,17 +6776,36 @@ for (const locale of ['en', 'ar']) {
         expect(await audit(page)).toEqual([]);
     });
 
-    test(`a reopened chat's context meter shows a dash, not an empty bar (${locale})`, async ({ page }) => {
-        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
-            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
-                json: { available: false, reason: "Measured again with your next message: GAIA restarted or switched models since this chat's last answer." },
-            })));
-        const meter = page.locator('.context-meter.is-empty');
-        await expect(meter).toBeVisible();
-        await expect(meter.locator('.context-meter-bar')).toHaveCount(0);
+    test(`a reopened chat's composer shows no context meter, not a dash (${locale})`, async ({ page }) => {
+        const served = await serveContext(page, locale, {
+            available: false, reason: "Measured again with your next message: GAIA restarted or switched models since this chat's last answer.",
+        });
+        await expect.poll(served).toBeGreaterThan(0);
+        await nextFrames(page);
+        await expect(page.locator('.context-meter:not(.spend-meter)')).toHaveCount(0);
         await shot(page, `context-meter-unmeasured-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+
+    test(`a chat under half full shows no context meter in the composer (${locale})`, async ({ page }) => {
+        const served = await serveContext(page, locale, { ...MEASURED_CONTEXT, history: 3250, used: 13750, history_used: 3250, at_risk: [], at_risk_tokens: 0 });
+        await expect.poll(served).toBeGreaterThan(0);
+        await nextFrames(page);
+        await expect(page.locator('.context-meter:not(.spend-meter)')).toHaveCount(0);
+        await shot(page, `context-meter-under-half-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** Open the answered chat with its context endpoint answering `json`; returns how many times it was asked. */
+async function serveContext(page: Page, locale: string, json: object): Promise<() => number> {
+    let served = 0;
+    await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+        p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => {
+            served += 1;
+            return route.fulfill({ json });
+        }));
+    return () => served;
 }
 
 test('composer chips stay whole at phone width', async ({ page }) => {
@@ -6276,6 +6855,47 @@ for (const locale of ['en', 'ar']) {
         expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
         const icon = label.locator('xpath=preceding-sibling::*[local-name()="svg"][1]');
         expect((await icon.boundingBox())?.width ?? 0, 'the cloud icon was squeezed').toBeGreaterThanOrEqual(12);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`a folder's skipped files are named by reason in the document library (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents/upload-path', (route) => route.fulfill({
+                status: 400,
+                contentType: 'application/json',
+                body: JSON.stringify({ detail: { status: 'is_folder', message: 'This is a folder' } }),
+            }));
+            await p.route('**/api/documents/index-folder', (route) => route.fulfill({ json: {
+                indexed: 1, failed: 0, skipped: 3, skipped_images: 0, skipped_files_truncated: true, errors: [],
+                documents: [{ id: 'd1', filename: 'notes.txt', filepath: '/docs/notes.txt', file_size: 12, chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }],
+                skipped_files: [
+                    { file: 'program.exe', reason: 'unsupported_type' },
+                    { file: 'ملاحظات.exe', reason: 'unsupported_type' },
+                    { file: 'secrets.json', reason: 'credential_file' },
+                    { file: 'song.mp3', reason: 'unsupported_type' },
+                ],
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: locale === 'en' ? /Documents/ : /المستندات/ }).click();
+        await page.locator('.path-input').fill('/home/me/downloads');
+        await page.locator('.path-input-form button[type="submit"]').click();
+
+        const notice = page.locator('.doc-folder-notice[role="status"]');
+        await expect(notice).toBeVisible();
+        const text = stripIsolates(await notice.innerText());
+        const reasonLabels = locale === 'en'
+            ? ["Files GAIA can't add:", "Credential files GAIA won't add:", 'Showing the first 50 skipped files.']
+            : ['الملفات التي لا يستطيع GAIA إضافتها:', 'ملفات بيانات الدخول التي لن يضيفها GAIA:', 'تُعرض أول 50 ملفًا متخطّى فقط.'];
+        const names = locale === 'en'
+            ? ['program.exe', 'ملاحظات.exe', 'song.mp3', 'secrets.json']
+            : ['program.exe', 'song.mp3', 'secrets.json', 'ملاحظات.exe'];
+        for (const label of [...reasonLabels, ...names]) {
+            expect(text, `missing ${label} from: ${text}`).toContain(label);
+        }
+        expect(text.indexOf('program.exe')).toBeLessThan(text.indexOf('secrets.json'));
+        await shot(page, `documents-skipped-files-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -6729,6 +7349,65 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'advanced-errors');
         });
 
+        test('gaiacpp: whose memory this is, and only what its store keeps', async ({ page }) => {
+            const refused: string[] = [];
+            page.on('response', (res) => { if (res.status() === 409) refused.push(new URL(res.url()).pathname); });
+            await openMemory(page, locale, { agent: 'gaiacpp' });
+            const banner = page.locator('.mem-store-banner');
+            await expect(banner).toContainText('Fast and light');
+            await expect(page.getByText('Sister Odalys lives in Trondheim')).toBeVisible();
+            // The line sits under the tabs and above the page, never over either.
+            const [tabs, line, body] = await Promise.all(['.mem-tab-bar', '.mem-store-banner', '.memory-dashboard-body'].map((s) => page.locator(s).boundingBox()));
+            expect(line!.y).toBeGreaterThanOrEqual(tabs!.y + tabs!.height - 1);
+            expect(body!.y).toBeGreaterThanOrEqual(line!.y + line!.height - 1);
+            await expect(page.locator('.mem-about-limits')).toBeVisible();
+            await expect(page.locator('.mem-about-add option')).toHaveCount(3);
+            await expect(page.locator('.mem-about-due')).toHaveCount(0);
+            await checkMemory(page, locale, 'native-about');
+
+            for (const [tab, name] of [[/Goals/, 'goals'], [/Profile setup/, 'profile'], [/Advanced/, 'advanced']] as const) {
+                await memoryTab(page, tab);
+                await expect(page.locator('.mem-store-only')).toBeVisible();
+                await expect(banner).toBeVisible();
+                // The tab's underline fades in; a shot taken mid-fade shows the previous tab lit.
+                await page.waitForFunction(() => [...document.querySelectorAll('.mem-tab-btn')].every((tab) => tab.getAnimations().length === 0));
+                await checkMemory(page, locale, `native-${name}`);
+            }
+            await expect(page.locator('.mem-toggle')).toHaveCount(1);
+            await expect(page.locator('.mem-maintenance-wrap, .mem-knowledge-table, .mem-btn-danger')).toHaveCount(0);
+            expect(refused).toEqual([]);
+        });
+
+        test('Full-featured, once gaiacpp has a memory too', async ({ page }) => {
+            await openMemory(page, locale, { otherAvailable: true });
+            await expect(page.locator('.mem-store-banner')).toContainText('Fast and light');
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await checkMemory(page, locale, 'python-banner');
+        });
+
+        test('no line about agents while there is one memory', async ({ page }) => {
+            await openMemory(page, locale);
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await expect(page.locator('.mem-store-banner')).toHaveCount(0);
+        });
+
+        test('the page cannot tell whose memory this is', async ({ page }) => {
+            await openMemory(page, locale, { storeFailed: true });
+            await expect(page.getByRole('alert')).toContainText('gaiacpp is not running');
+            await expect(page.locator('.mem-about, .mem-store-banner')).toHaveCount(0);
+            await checkMemory(page, locale, 'store-failed');
+        });
+
+        test('gaiacpp at phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await openMemory(page, locale, { agent: 'gaiacpp' });
+            // The closed drawer waits off screen by design; this test is about the dashboard.
+            await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+            await expect(page.locator('.mem-store-banner')).toBeVisible();
+            await expect(page.getByText('Sister Odalys lives in Trondheim')).toBeVisible();
+            await checkMemory(page, locale, 'native-about-phone');
+        });
+
         test('advanced, a row open and the add form', async ({ page }) => {
             await openMemory(page, locale);
             await memoryTab(page, /Advanced/);
@@ -6853,6 +7532,7 @@ async function withAttachedBrief(page: Page): Promise<void> {
 
 for (const locale of ['ar', 'en']) {
     test(`a file attached in the message box is listed for its chat (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await page.addInitScript(streamThenWait, ATTACHED_IN_COMPOSER);
         await open(page, `#${ANSWER_SESSION}`, locale, withAttachedBrief);
         await page.locator('textarea').first().fill(ATTACH_REQUEST);
@@ -7052,6 +7732,39 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `skills-link-result-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
+    });
+}
+
+const QUEUED_CHAT = SESSIONS[1].id;
+
+/** A second chat waits for the GPU and holds two messages typed while it waited. */
+async function withQueuedChatAndUnsent(page: Page): Promise<void> {
+    await page.route('**/api/chat/active', (route) =>
+        route.fulfill({ json: { session_ids: [QUEUED_CHAT], queued: [QUEUED_CHAT], awaiting_user: {} } }));
+    await page.addInitScript((id) => window.localStorage.setItem('gaia-chat-message-queues', JSON.stringify({
+        [id]: [{ id: 1, text: 'one more thing', state: 'queued' }, { id: 2, text: 'and another', state: 'queued' }],
+    })), QUEUED_CHAT);
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a queued chat with unsent messages shows both notes in full at 800x500 (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 500 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withQueuedChatAndUnsent);
+        const notes = page.locator('.sb-row-note');
+        await expect(notes).toHaveCount(2);
+        await expect(notes.first()).toContainText(locale === 'ar' ? 'رقم 1 في الدور' : '1st in line');
+        await expect(notes.last()).toContainText('2');
+        const cut = await notes.evaluateAll((els) => els.flatMap((el) => {
+            const row = el.closest('.sb-row-main')!.getBoundingClientRect();
+            const r = el.getBoundingClientRect();
+            const problems: string[] = [];
+            if (el.scrollWidth > el.clientWidth + 1) problems.push(`${el.textContent} is cut`);
+            if (r.left < row.left - 1 || r.right > row.right + 1) problems.push(`${el.textContent} spills out of its row`);
+            return problems;
+        }));
+        expect(cut).toEqual([]);
+        await shot(page, `queued-chat-notes-${locale}`);
+        expect(await audit(page)).toEqual([]);
     });
 }
 

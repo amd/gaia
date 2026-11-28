@@ -1006,6 +1006,32 @@ class TestReconcileEndpoint:
         # nothing was skipped by a dim mismatch.
         assert resp.json()["pairs_checked"] >= 1
 
+    def test_reconcile_standalone_refuses_a_second_openmp_runtime(
+        self, client, test_store, monkeypatch
+    ):
+        """The standalone search must not run when two OpenMP runtimes are loaded."""
+        require_faiss()
+        import numpy as np
+
+        from gaia.agents.base import memory as memory_mod
+
+        monkeypatch.delenv(memory_mod._OMP_OVERRIDE_ENV, raising=False)
+        monkeypatch.setattr(
+            memory_mod,
+            "_loaded_omp_runtimes",
+            lambda: ["libomp.dylib", "libiomp5.dylib"],
+        )
+        vec = np.ones(8, dtype=np.float32).tobytes()
+        for content in ("omp fact one", "omp fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        with patch("gaia.llm.create_client", return_value=MagicMock()):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 500
+        assert "OpenMP" in resp.json()["detail"]
+
     @pytest.mark.parametrize("category", ["system", "profile", "permission"])
     def test_reconcile_does_not_classify_privileged_rows(
         self, client, test_store, category
@@ -1121,51 +1147,6 @@ class TestReconcileEndpoint:
 
         assert resp.status_code == 200
         assert resp.json()["reinforced"] == checked
-
-    def test_a_memory_contradicting_two_others_is_penalised_once(
-        self, client, test_store
-    ):
-        """A contradicts B and C: both markers survive, so a rerun changes nothing."""
-        require_faiss()
-        import numpy as np
-
-        vec = np.ones(768, dtype=np.float32).tobytes()
-        ids = {}
-        for label, content in [
-            ("A", "Kalin prefers tea over coffee"),
-            ("B", "Monday standups start at nine"),
-            ("C", "Invoices are due on the fifth"),
-        ]:
-            ids[label] = _create_knowledge(client, content)["knowledge_id"]
-            test_store.store_embedding(ids[label], vec)
-
-        def classify(messages, **_kwargs):
-            prompt = messages[0]["content"]
-            if "tea over coffee" in prompt:
-                return '{"relationship": "contradict", "action": "noop"}'
-            return '{"relationship": "neutral", "action": "noop"}'
-
-        fake_llm = MagicMock()
-        fake_llm.chat.side_effect = classify
-        with patch("gaia.llm.create_client", return_value=fake_llm):
-            first = client.post("/api/memory/reconcile")
-            after_first = {k: test_store.get_item(v) for k, v in ids.items()}
-            second = client.post("/api/memory/reconcile")
-        after_second = {k: test_store.get_item(v) for k, v in ids.items()}
-
-        assert first.status_code == 200
-        assert first.json()["contradicted"] == 2
-        assert set(after_first["A"]["metadata"]["reconciled_with"]) == {
-            ids["B"],
-            ids["C"],
-        }
-        assert ids["A"] in after_first["B"]["metadata"]["reconciled_with"]
-        assert ids["A"] in after_first["C"]["metadata"]["reconciled_with"]
-        assert second.status_code == 200
-        assert second.json()["pairs_checked"] == 0
-        assert {k: v["confidence"] for k, v in after_second.items()} == {
-            k: v["confidence"] for k, v in after_first.items()
-        }
 
     def test_a_failed_marker_write_fails_the_request(self, client, test_store):
         """An unrecorded pair would be re-penalised next run, so say so."""

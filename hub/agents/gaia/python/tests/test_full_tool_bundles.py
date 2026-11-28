@@ -19,7 +19,6 @@ the ``doc`` profile is ``tests/unit/test_chat_tool_bundles.py``.
 
 from __future__ import annotations
 
-import contextlib
 import json
 
 import pytest
@@ -30,23 +29,11 @@ from gaiapy.tool_bundles import (
     FULL_OPTIONAL_TOOLS,
     PROFILE_TOOL_CONFIGS,
 )
+from registry_isolation import isolated_registry
 
 from gaia.agents.base.tool_loader import thin_tool_schema
-from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
-
-
-@contextlib.contextmanager
-def _isolated_registry():
-    """@tool writes into a process-global dict shared with every other agent."""
-    saved = dict(_TOOL_REGISTRY)
-    _TOOL_REGISTRY.clear()
-    try:
-        yield
-    finally:
-        _TOOL_REGISTRY.clear()
-        _TOOL_REGISTRY.update(saved)
 
 
 @pytest.fixture(scope="module")
@@ -60,7 +47,7 @@ def flagship_registry():
     pinned open in GAIA desktop's browser pane for the same reason: there the
     browser tools register, Playwright or not.
     """
-    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+    with isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
         mp.setattr(BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True))
         # Opt-in (GAIA_DYNAMIC_TOOLS=1 / the UI toggle), and the bundles must
@@ -189,7 +176,7 @@ def test_run_python_is_core(flagship_registry):
 
 def test_skill_catalogue_renders_for_the_flagship():
     """A skill the model cannot see is a skill it never loads (#3764)."""
-    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+    with isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
         mp.delenv("GAIA_SKILL_DISCOVERY", raising=False)
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))

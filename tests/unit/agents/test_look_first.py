@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
 from gaia.agents.base.look_first import _PATH_TOKEN, named_workspace_paths
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.base.tools import _TOOL_REGISTRY
+from tests.unit.agents.agent_script import LookingAgent as _LookingAgent
+from tests.unit.agents.agent_script import answer as _answer
+from tests.unit.agents.agent_script import script as _script
 
 
 @pytest.fixture
@@ -87,22 +89,6 @@ def test_a_unix_absolute_path_outside_the_workspace_is_still_found(workspace):
     ]
 
 
-class _LookingAgent(Agent):
-    def _get_system_prompt(self) -> str:
-        return "test"
-
-    def _register_tools(self) -> None:
-        @tool
-        def look_first_test_reader(file_path: str) -> dict:
-            """Read a file."""
-            return {"status": "success", "file_path": file_path, "content": "x = 1"}
-
-    def _create_console(self):
-        from gaia.agents.base.console import AgentConsole
-
-        return AgentConsole()
-
-
 @pytest.fixture
 def agent():
     with (
@@ -114,26 +100,6 @@ def agent():
         yield a
     # The registry is process-wide; a leftover test tool breaks the flagship's label check.
     _TOOL_REGISTRY.pop("look_first_test_reader", None)
-
-
-def _script(agent_, *responses):
-    queue = list(responses)
-    sent = []
-
-    def _send(messages, *_, **__):
-        sent.append([dict(m) for m in messages])
-        resp = MagicMock()
-        resp.text = queue.pop(0)
-        resp.stats = {}
-        return resp
-
-    agent_.chat = MagicMock()
-    agent_.chat.send_messages = MagicMock(side_effect=_send)
-    return sent
-
-
-def _answer(text):
-    return json.dumps({"thought": "", "answer": text})
 
 
 def _read(path):
@@ -158,6 +124,20 @@ def test_an_unlooked_answer_is_sent_back_to_look(agent, workspace):
     assert "`toybox/dates.py`" in sent[1][-1]["content"]
     assert "without opening anything" in sent[1][-1]["content"]
     assert REVIEW in result["result"]
+
+
+def test_a_file_in_the_chat_folder_triggers_the_nudge(agent, chat_and_process):
+    chat, _process = chat_and_process
+    agent.working_directory = str(chat)
+    guess = "It contains alpha, 1."
+    sent = _script(agent, _answer(guess), _answer(guess))
+
+    result = agent.process_query("Review notes.csv", max_steps=10)
+
+    assert len(sent) == 2
+    assert "`notes.csv`" in sent[1][-1]["content"]
+    assert "without opening anything" in sent[1][-1]["content"]
+    assert guess in result["result"]
 
 
 def test_it_asks_only_once(agent, workspace):

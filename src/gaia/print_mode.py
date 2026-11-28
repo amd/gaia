@@ -19,6 +19,7 @@ from fnmatch import fnmatchcase
 from typing import Any, Dict, List, Optional, Sequence
 
 from gaia.logger import get_logger
+from gaia.utils.download_tally import DownloadTally
 
 log = get_logger(__name__)
 
@@ -147,7 +148,9 @@ def summarize(
     if result.get("time_limit_reached"):
         record["time_limit_reached"] = True
     if record["is_error"]:
-        record["error"] = _turn_error(result)
+        # The agent words its errors for the TUI; this is a terminal command.
+        record["error"] = _cli(_turn_error(result))
+        record["result"] = _cli(record["result"])
     if verbose:
         record["conversation"] = conversation
     return record
@@ -175,6 +178,18 @@ def configure_console(console: Any, skip_permissions: bool, full_access: bool) -
     console.full_access = full_access
 
 
+def _describe(exc: BaseException) -> str:
+    """An exception as the user reads it.
+
+    A plain ValueError is a bad flag, setting or input, worded for the user.
+    Any other type, its subclasses (a JSON or Unicode decode error) included,
+    is unexpected, and its class name helps a bug report.
+    """
+    if exc.__class__ is ValueError and str(exc):
+        return str(exc)
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _emit_failure(output_format: str, message: str, code: int = 1) -> int:
     """Report a run that never produced a turn, in the shape stdout promises."""
     message = _cli(message)
@@ -190,7 +205,8 @@ def _emit_failure(output_format: str, message: str, code: int = 1) -> int:
                 ensure_ascii=False,
             )
         )
-    print(f"❌ gaia -p: {message}", file=sys.stderr)
+    prefix = "" if message.startswith("gaia -p") else "gaia -p: "
+    print(f"❌ {prefix}{message}", file=sys.stderr)
     return code
 
 
@@ -269,14 +285,16 @@ def run(
         # DEBUG, not INFO: the console handler prints INFO, traceback and all.
         log.debug("gaia -p failed", exc_info=True)
         return _emit_failure(
-            output_format,
-            _explain_routed(settings, route, exc) or f"{type(exc).__name__}: {exc}",
+            output_format, _explain_routed(settings, route, exc) or _describe(exc)
         )
 
     if output_format == "json":
         print(json.dumps(record, ensure_ascii=False))
-    elif record["result"] or not record["is_error"]:
-        # A failed turn with no answer leaves stdout empty, not one blank line.
+    elif not record["is_error"] or (
+        record["result"] and record["result"] != record.get("error")
+    ):
+        # A failed turn leaves stdout empty, not one blank line, when it has no
+        # answer or its answer is the error, which stderr says once below.
         print(record["result"])
     if record["is_error"]:
         ended = f"the turn ended with status '{record['status']}'"
@@ -464,11 +482,8 @@ class _DownloadProgress:
         self.live = bool(getattr(self.stream, "isatty", lambda: False)())
         self.bytes_done = 0
         self.bytes_total = planned_bytes
-        self._planned = planned_bytes
         self._clock = clock or time.monotonic
-        self._finished = 0
-        self._file: Optional[str] = None
-        self._file_total = 0
+        self._tally_bytes = DownloadTally(planned_bytes)
         self._drawn_at: Optional[float] = None
         self._next_log = self.LOG_STEP
         self._line_open = False
@@ -513,22 +528,9 @@ class _DownloadProgress:
             self._write("\n")
 
     def _tally(self, event: Dict[str, Any]) -> None:
-        name = event.get("file") or ""
-        done = int(event.get("bytes_downloaded") or 0)
-        if self._file is not None and name != self._file:
-            self._finished += self._file_total
-            self._file_total = 0
-        self._file = name
-        # Mid-file events can carry bytes_total 0, so keep the largest seen.
-        self._file_total = max(
-            self._file_total, int(event.get("bytes_total") or 0), done
-        )
-        self.bytes_done = self._finished + done
-        total = int(event.get("total_download_size") or 0)
-        self.bytes_total = max(
-            total or self._planned or self._finished + self._file_total,
-            self.bytes_done,
-        )
+        self._tally_bytes.add(event)
+        self.bytes_done = self._tally_bytes.bytes_done
+        self.bytes_total = self._tally_bytes.bytes_total
 
     def _sizes(self) -> str:
         unit, name = (1e9, "GB") if self.bytes_total >= 1e9 else (1e6, "MB")
@@ -650,11 +652,26 @@ def _start_server(
         "chat", quiet=True, base_url=base_url, model=model, preload=preload
     )
     if not success:
-        raise PrintModeError(
-            "The model server could not be started. Run `gaia daemon status` for "
-            "its state and `gaia init` if Lemonade is not installed."
-        )
+        raise PrintModeError(_server_down_message(base_url))
     return detected_base_url
+
+
+def _server_down_message(base_url: Optional[str]) -> str:
+    """Why the model server is unreachable, for GAIA's own or the user's server."""
+    from gaia.llm.lemonade_client import configured_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    chosen = base_url or configured_lemonade_url()
+    if chosen and not gaia_runs_lemonade(base_url):
+        return (
+            f"The model server at {chosen} isn't answering. GAIA doesn't start "
+            "a model server at an address you chose, so start it the way you "
+            "usually do, then try again."
+        )
+    return (
+        "The model server could not be started. Run `gaia daemon status` for "
+        "its state and `gaia init` if Lemonade is not installed."
+    )
 
 
 def _run_turn(
@@ -743,6 +760,9 @@ def _run_turn(
             from gaia.agents.base.memory import drain_memory_extraction
 
             drain_memory_extraction(agent)
+            # Stop MCP servers now: at interpreter exit __del__ can't start the
+            # thread that stops them, and logs a traceback instead.
+            agent.close()
     record = summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )

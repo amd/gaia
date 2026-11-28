@@ -558,8 +558,9 @@ def _require_run_scoped_support(
 ) -> None:
     """Refuse the run before it starts if *agent_id* can't apply its flags.
 
-    An agent that predates them would reject the fields, or (the native
-    harness) ignore them and run the turn unrestricted.
+    An agent applies them when it speaks contract 2.32, or names them in
+    ``capabilities.one_shot_fields`` (gaiacpp, whose contract is older). One
+    that does neither would reject the fields or run the turn unrestricted.
     """
     import requests
 
@@ -571,7 +572,9 @@ def _require_run_scoped_support(
             timeout=_CONNECT_TIMEOUT,
         )
         response.raise_for_status()
-        api = str(response.json().get("apiVersion") or "")
+        body = response.json()
+        api = str(body.get("apiVersion") or "")
+        capabilities = body.get("capabilities")
     except (requests.exceptions.RequestException, ValueError, AttributeError) as e:
         raise DaemonError(
             f"could not read the '{agent_id}' agent's version through the daemon "
@@ -584,14 +587,22 @@ def _require_run_scoped_support(
         have = ()
     if len(have) == 2 and have >= RUN_SCOPED_MIN_API:
         return
+    fields = (
+        capabilities.get("one_shot_fields") if isinstance(capabilities, dict) else None
+    )
+    applied = set(fields) if isinstance(fields, list) else set()
+    missing = {key: True for key in run_scoped if key not in applied}
+    if not missing:
+        return
     need = ".".join(str(n) for n in RUN_SCOPED_MIN_API)
     raise DaemonError(
-        f"{_flag_names(run_scoped)} needs a GAIA agent that speaks contract "
-        f"{need} or newer, and the one GAIA's background service runs speaks "
-        f"{api or 'an unknown version'}, so it would run the turn without them. "
-        "Update GAIA, or, if `flagship_agent` is `gaiacpp` in ~/.gaia/config.json, "
-        "run `gaia config set flagship_agent gaiapy`: the native agent doesn't "
-        "apply these flags yet."
+        f"{_flag_names(missing)} needs a GAIA agent that speaks contract {need} "
+        "or newer or lists the flag, and the one GAIA's background service runs "
+        f"speaks {api or 'an unknown version'} and doesn't, so it would run the "
+        "turn without it. Update GAIA. Or, if `flagship_agent` is `gaiacpp` in "
+        "~/.gaia/config.json, run the turn on the Python agent: `gaia config set "
+        "flagship_agent gaiapy`, then `gaia daemon stop-agent gaia` once nothing "
+        "else is answering, and run gaia -p again."
     )
 
 

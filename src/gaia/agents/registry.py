@@ -75,6 +75,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
         "AudioGenerationToolsMixin",
     ),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "user_input": ("gaia.agents.tools.user_input_tools", "UserInputToolsMixin"),
     "dictation": ("gaia.agents.tools.dictation_tools", "DictationToolsMixin"),
     "reasoning_effort": (
         "gaia.agents.tools.reasoning_tools",
@@ -538,12 +539,12 @@ class AgentRegistration:
     # even though they declare no static ``REQUIRED_CONNECTORS`` for those.
     consumes_mcp_servers: bool = False
     # T-X2 (issue #915, plan amendment A9):
-    # ``namespaced_agent_id`` is the grant-ledger key for this agent. Built-in
-    # agents use ``builtin:<id>``; custom agents under ``~/.gaia/agents/``
-    # use ``custom:<sha256-of-agent.py>:<id>``; installed wheel agents use
-    # ``installed:<id>``. This namespacing prevents a malicious custom or
-    # installed agent from claiming a built-in's AGENT_ID to inherit a
-    # previously-granted scope. Always non-empty.
+    # ``namespaced_agent_id`` is the grant-ledger key for this agent. Installed
+    # agents use ``installed:<id>``; native agents use ``native:<id>``; custom
+    # agents under ``~/.gaia/agents/`` use
+    # ``custom:<sha256-of-agent.py>:<id>``. This namespacing prevents a
+    # malicious custom or installed agent from claiming another agent's
+    # AGENT_ID to inherit a previously-granted scope. Always non-empty.
     namespaced_agent_id: str = ""
     # Display metadata (category, tags, icon) served by /api/agents.
     # Hardcoded for builtins (lazy-import factories must not instantiate agents);

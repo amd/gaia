@@ -20,6 +20,14 @@ interface PopoverProps {
 /** Anchor offset (6px) plus a margin so the panel never touches the window edge. */
 const EDGE_GAP = 14;
 
+/** The box of the nearest ancestor that clips what overflows it, or null when only the window does. */
+function clippingBox(el: HTMLElement): DOMRect | null {
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        if (getComputedStyle(p).overflowY !== 'visible') return p.getBoundingClientRect();
+    }
+    return null;
+}
+
 /** A small anchored panel that closes on Escape or an outside click, and returns focus. */
 export function Popover({ open, onClose, anchor, label, placement = 'above', align = 'start', className, children }: PopoverProps) {
     const ref = useRef<HTMLDivElement>(null);
@@ -34,8 +42,10 @@ export function Popover({ open, onClose, anchor, label, placement = 'above', ali
             const a = anchor.current?.getBoundingClientRect();
             const el = ref.current;
             if (!a || !el) return;
-            const above = a.top - EDGE_GAP;
-            const below = window.innerHeight - a.bottom - EDGE_GAP;
+            // An ancestor that clips (the app's main column does) can end before the window does.
+            const clip = clippingBox(el);
+            const above = a.top - Math.max(0, clip?.top ?? 0) - EDGE_GAP;
+            const below = Math.min(window.innerHeight, clip?.bottom ?? window.innerHeight) - a.bottom - EDGE_GAP;
             const preferred = placement === 'above' ? above : below;
             const other = placement === 'above' ? below : above;
             const flip = el.scrollHeight > preferred && other > preferred;

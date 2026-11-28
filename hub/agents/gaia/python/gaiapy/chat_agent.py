@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import sys
 import threading
+from _thread import LockType
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -29,9 +30,11 @@ from typing import (
     List,
     Optional,
     Set,
+    Tuple,
 )
 
 from gaia.config import gaia_home
+from gaia.llm.claude_defaults import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -70,7 +73,6 @@ from gaiapy.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaiapy.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
-from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk
 from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
 from gaia.agents.base.code_path_screen import (
     python_code_preflight,
@@ -96,6 +98,7 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
     features_for_model,
+    platform_withheld_prompt,
     platform_withheld_tools,
     withheld_tools,
 )
@@ -106,16 +109,13 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 # so the UI settings router shares it without depending on this wheel (#1102).
 from gaia.agents.base.script_preview import changed_script_refusal
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
-from gaia.agents.base.tool_loader import (
-    ToolLoader,
-    format_tool_docs,
-    thin_tool_schema,
-)
+from gaia.agents.base.tool_loader import ToolLoader, thin_tool_schema
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     OUT_OF_TIME,
     TIME_LIMIT_CUT_RUN,
+    TIME_LIMIT_NO_LONGER_RUN,
     time_capped,
 )
 from gaia.agents.install_hints import missing_package_hint
@@ -146,17 +146,23 @@ from gaia.agents.tools.rag_tools import (
     documents_still_indexing,
     not_loaded_note,
 )
+
+# Re-exported: these moved to core with the tool, and callers import them here.
+from gaia.agents.tools.user_input_tools import (  # noqa: F401
+    NO_QUESTION_CHANNEL,
+    USER_INPUT_MAX_WAIT_S,
+    UserInputToolsMixin,
+    _no_answer_result,
+)
 from gaia.agents.tools.workspace_paths import (
     _resolve_target,
     _workspace_default,
     _workspace_target,
 )
 from gaia.env import child_env
-from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.lemonade_client import (
     CONVERSATION_SLOT,
     FULL_TOOLS_SLOT,
-    _endpoint_label,
     configured_lemonade_url,
     resolve_default_chat_model,
     resolve_default_vision_model,
@@ -181,38 +187,6 @@ from gaia.vlm.mixin import VLMToolsMixin
 # Distinct from ``None``. A missing RAG extra caches ``None``; any other RAG
 # startup failure leaves ``rag`` unset so the next access tries again.
 _UNSET = object()
-
-#: Longest request_user_input waits for an answer, in seconds.
-USER_INPUT_MAX_WAIT_S = 600
-
-#: request_user_input's answer where nobody can reply mid-run (a Discord DM, a
-#: one-shot run): no choice was made, so the question goes in the reply.
-NO_QUESTION_CHANNEL = (
-    "__NO_RESPONSE__ The user cannot answer a question mid-run here, so nothing "
-    "was chosen; do not act on a default. End your turn by asking the question "
-    "in your reply, with what they need to decide (such as the list); their "
-    "next message is the answer."
-)
-
-
-def _no_answer_result(timeout_seconds: int, default: Optional[str]) -> str:
-    """What request_user_input returns when nobody answered: never an answer."""
-    text = (
-        f"__NO_RESPONSE__ The user did not answer within {timeout_seconds} "
-        "seconds, so you have no answer from them. "
-    )
-    if default:
-        text += (
-            f'Your default was "{default}". You may go on with it only for steps '
-            "that change nothing, and your reply must say you assumed it because "
-            "they did not answer. "
-        )
-    return text + (
-        "Do not create, change, move or delete anything on that assumption: any "
-        "such step now needs the user's approval, even with Full access on. If "
-        "the work needs their choice, stop and end your reply with the question."
-    )
-
 
 #: ``search_tools``: searches a turn before it must get on with the job, longest
 #: query embedded, tools and skills returned, and tools returned with full docs.
@@ -508,8 +482,10 @@ def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
     room = time_capped(agent, MAX_PYTHON_TIMEOUT)
     if room >= MAX_PYTHON_TIMEOUT:
         return stopped_job_result(job, timeout)
-    if room <= timeout:
+    if room == 0:
         return stopped_job_result(job, timeout, advice=TIME_LIMIT_CUT_RUN)
+    if room <= timeout:
+        return stopped_job_result(job, timeout, advice=TIME_LIMIT_NO_LONGER_RUN)
     return stopped_job_result(
         job,
         timeout,
@@ -727,7 +703,7 @@ class ChatAgentConfig:
 
     # LLM settings
     use_claude: bool = False
-    claude_model: str = "claude-sonnet-5"
+    claude_model: str = DEFAULT_CLAUDE_MODEL
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
     # True: build without starting Lemonade or preloading; the first request loads.
@@ -852,7 +828,7 @@ class ChatAgentConfig:
 
     # Per-agent identity for the connectors activation filter (#1005).
     # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
-    # that's where ``_active_mcp_servers`` consults ``is_agent_active`` to
+    # that's where ``_active_mcp_servers`` consults ``is_mcp_server_active`` to
     # decide which MCP servers' tools to surface. The registry's
     # ``_wrap_factory_with_namespaced_id`` injects this via kwargs, and the
     # UI's direct construction paths in ``_chat_helpers`` pass it explicitly.
@@ -895,9 +871,29 @@ def _where_mcp_servers_are_set_up(names: List[str], config_path: Path) -> str:
     return " ".join(where)
 
 
+def _ensure_restore_failure_state(
+    agent: Any,
+) -> Tuple[LockType, Dict[str, str], Dict[str, str]]:
+    """Create restore failure state for lightweight test and embedding hosts."""
+    lock = getattr(agent, "_restore_failure_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        agent._restore_failure_lock = lock
+    document_failures = getattr(agent, "_document_restore_failures", None)
+    if document_failures is None:
+        document_failures = {}
+        agent._document_restore_failures = document_failures
+    watch_failures = getattr(agent, "_watch_failures", None)
+    if watch_failures is None:
+        watch_failures = {}
+        agent._watch_failures = watch_failures
+    return lock, document_failures, watch_failures
+
+
 class ChatAgent(
     MemoryMixin,
     Agent,
+    UserInputToolsMixin,
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
@@ -953,9 +949,6 @@ class ChatAgent(
     _mcp_unavailable_error: Optional[str] = None
     _mcp_dropped_notice: Optional[str] = None
     _mcp_dropped_notice_shown: Optional[str] = None
-
-    # This turn's last request_user_input question, while it went unanswered.
-    _unanswered_question: Optional[str] = None
 
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
@@ -1075,6 +1068,9 @@ class ChatAgent(
         self.indexed_files = set()
         # Every document attached to the chat, held in the index or not.
         self.attached_documents: List[str] = []
+        self._restore_failure_lock = threading.Lock()
+        self._document_restore_failures: Dict[str, str] = {}
+        self._watch_failures: Dict[str, str] = {}
 
         # Initialize file system index service (optional)
         self._fs_index = None
@@ -1150,7 +1146,6 @@ class ChatAgent(
         # fns are injected so the loader never imports MemoryMixin; they resolve
         # lazily, by which point init_memory() has probed the embedder.
         self._dynamic_tools_validated = False
-        self._tool_docs_sent: Set[str] = set()
         self._tool_searches = 0
         self.tool_loader = self._maybe_build_tool_loader()
 
@@ -1255,29 +1250,45 @@ class ChatAgent(
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:
                 self.current_session = loaded
+                self.attached_documents = list(loaded.indexed_documents)
                 for doc_path in loaded.indexed_documents:
                     if self.rag.is_full():
                         break
-                    if doc_path not in self.indexed_files and os.path.exists(doc_path):
-                        try:
-                            real = os.path.realpath(doc_path)
-                            if not hasattr(
-                                self, "_is_path_allowed"
-                            ) or self._is_path_allowed(real):
-                                result = self.rag.index_document(real)
-                                if result.get("success"):
-                                    _forget_evicted(
-                                        self.indexed_files, result.get("evicted", [])
-                                    )
-                                    self.indexed_files.add(doc_path)
-                                    logger.info(
-                                        "Restored indexed doc from prior turn: %s",
-                                        doc_path,
-                                    )
-                        except Exception as exc:
-                            logger.warning(
-                                "Failed to restore indexed doc %s: %s", doc_path, exc
+                    if doc_path in self.indexed_files:
+                        continue
+                    if not os.path.exists(doc_path):
+                        self._record_document_restore_failure(
+                            doc_path, "file not found"
+                        )
+                        continue
+                    try:
+                        real = os.path.realpath(doc_path)
+                        if hasattr(
+                            self, "_is_path_allowed"
+                        ) and not self._is_path_allowed(real):
+                            self._record_document_restore_failure(
+                                doc_path, "path is not allowed"
                             )
+                            continue
+                        result = self.rag.index_document(real)
+                        if result.get("success"):
+                            _forget_evicted(
+                                self.indexed_files, result.get("evicted", [])
+                            )
+                            self.indexed_files.add(doc_path)
+                            self._clear_document_restore_failure(doc_path)
+                            logger.info(
+                                "Restored indexed doc from prior turn: %s",
+                                doc_path,
+                            )
+                        else:
+                            self._record_document_restore_failure(
+                                doc_path, result.get("error", "Unknown error")
+                            )
+                    except Exception as exc:
+                        self._record_document_restore_failure(
+                            doc_path, f"{type(exc).__name__}: {exc}"
+                        )
             else:
                 # First turn for this UI session — create a persistent agent session
                 self.current_session = self.session_manager.create_session(
@@ -1305,9 +1316,24 @@ class ChatAgent(
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
             return ""
-        if not self.rag:
-            return ""
         lines = []
+        restore_failures_state = getattr(self, "_document_restore_failures", {})
+        restore_failure_lock = getattr(self, "_restore_failure_lock", None)
+        if restore_failure_lock is None:
+            restore_failures = restore_failures_state.copy()
+        else:
+            with restore_failure_lock:
+                restore_failures = restore_failures_state.copy()
+        if restore_failures:
+            reasons = "; ".join(
+                f"{Path(fp).name}: {reason}" for fp, reason in restore_failures.items()
+            )
+            lines.append(
+                "[Document restore failed; tell the user before answering from it: "
+                f"{reasons}]"
+            )
+        if not self.rag:
+            return "\n".join(lines)
         # Copied first: a background index can add to the set during this loop.
         indexed = list(self.rag.indexed_files)
         if indexed:
@@ -1319,7 +1345,12 @@ class ChatAgent(
             lines.append(f"[Indexed documents: {', '.join(entries)}]")
             if any(s and s != ["Latin"] for s in scripts.values()):
                 lines.append(_CROSS_LANGUAGE_NOTE)
-        not_loaded = attached_not_loaded(self, self.rag)
+        failed_paths = {os.path.realpath(path) for path in restore_failures}
+        not_loaded = [
+            path
+            for path in attached_not_loaded(self, self.rag)
+            if os.path.realpath(path) not in failed_paths
+        ]
         if not_loaded:
             shown = ", ".join(Path(fp).name for fp in not_loaded[:_NOT_LOADED_SHOWN])
             more = len(not_loaded) - _NOT_LOADED_SHOWN
@@ -1341,6 +1372,20 @@ class ChatAgent(
             )
         return "\n".join(lines)
 
+    def _watch_failure_line(self) -> str:
+        """Tell the model when a configured watcher could not be started."""
+        watch_failures_state = getattr(self, "_watch_failures", {})
+        restore_failure_lock = getattr(self, "_restore_failure_lock", None)
+        if restore_failure_lock is None:
+            failures = watch_failures_state.copy()
+        else:
+            with restore_failure_lock:
+                failures = watch_failures_state.copy()
+        if not failures:
+            return ""
+        reasons = "; ".join(f"{path}: {reason}" for path, reason in failures.items())
+        return f"[Directory watching failed; tell the user: {reasons}]"
+
     def _scripts(self, file_path: str) -> List[str]:
         """Scripts a document's text is written in, e.g. ``["Arabic", "Latin"]``."""
         return self.rag.document_scripts(file_path)
@@ -1358,6 +1403,7 @@ class ChatAgent(
         parts = (
             super().get_memory_dynamic_context(),
             self._indexed_documents_line(),
+            self._watch_failure_line(),
             self._mcp_dropped_line(),
         )
         return "\n".join(part for part in parts if part)
@@ -1406,6 +1452,47 @@ class ChatAgent(
         if rag is not _UNSET and rag is not None:
             # Its own chat client names the model per call.
             rag.chat.config.model = model
+
+    def _rag_model_holders(self) -> list:
+        """The objects that name the model documents are summarized with."""
+        state = vars(self)
+        holders = [state.get("_rag_config")]
+        holders.append(
+            getattr(getattr(state.get("_rag"), "chat", None), "config", None)
+        )
+        return [h for h in holders if hasattr(h, "model")]
+
+    def _model_switch_config(self) -> Any:
+        return self.config
+
+    def _snapshot_model_followers(self) -> Dict[str, Any]:
+        """Also what ``follow_model_switch`` moves: image reading and documents."""
+        state = super()._snapshot_model_followers()
+        own = vars(self)
+        state.update({n: own[n] for n in ("vlm_model", "vlm_client") if n in own})
+        rag_kwargs = own.get("_rag_config_kwargs")
+        if isinstance(rag_kwargs, dict):
+            state["rag_model"] = rag_kwargs.get("model")
+            state["rag_vlm_models"] = [
+                (h, h.vlm_model)
+                for h in self._rag_model_holders()
+                if hasattr(h, "vlm_model")
+            ]
+        return state
+
+    def _restore_model_followers(self, state: Dict[str, Any]) -> None:
+        state = dict(state)
+        rag_vlm_models = state.pop("rag_vlm_models", [])
+        has_rag = "rag_model" in state
+        rag_model = state.pop("rag_model", None)
+        super()._restore_model_followers(state)
+        if not has_rag:
+            return
+        self._rag_config_kwargs["model"] = rag_model
+        for holder in self._rag_model_holders():
+            holder.model = rag_model
+        for holder, vlm_model in rag_vlm_models:
+            holder.vlm_model = vlm_model
 
     @property
     def rag(self) -> Optional[RAGSDK]:
@@ -1467,6 +1554,13 @@ class ChatAgent(
         else:
             logger.warning("RAG failed to start: %s", exc)
         logger.debug("RAG init traceback:", exc_info=True)
+
+    def _record_document_restore_failure(self, path: str, reason: str) -> None:
+        """Keep a failed session-document restore visible for this turn."""
+        lock, document_failures, _ = _ensure_restore_failure_state(self)
+        with lock:
+            document_failures[path] = reason
+        logger.warning("Failed to restore indexed doc %s: %s", path, reason)
 
     def _build_rag(self) -> Optional[RAGSDK]:
         """Build the ``RAGSDK`` from the ``RAGConfig`` frozen in ``__init__``.
@@ -1617,12 +1711,6 @@ class ChatAgent(
         return (
             getattr(self, "tool_loader", None) is not None and not self._hosted_model()
         )
-
-    def _tool_docs(self, names: List[str]) -> str:
-        """Render *names* as ``[Tool docs: ...]`` blocks and note them as sent."""
-        self._tool_docs_sent.update(names)
-        schemas = self._build_openai_tool_schemas(filter_to=names)
-        return "\n\n".join(format_tool_docs(schema) for schema in schemas)
 
     def _dynamic_tools_active(self) -> bool:
         """True when the tool list is the loader's to decide this turn.
@@ -1892,28 +1980,12 @@ class ChatAgent(
         }
 
     def _on_task_start(self, user_input: str) -> None:
-        """Docs go again each turn: a history trim may have dropped them."""
+        """The tool-search cap resets each turn; a new chat frees its slots."""
         super()._on_task_start(user_input)
-        self._tool_docs_sent.clear()
         self._tool_searches = 0
         if not getattr(self, "conversation_history", None):
             self._released_slots = frozenset()
             self._model_called = False
-
-    def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
-        """Answer a malformed call with the tool's full docs, once a turn.
-
-        The thin list carries parameter names but not how to fill them in.
-        """
-        result = super()._execute_tool(tool_name, tool_args)
-        if (
-            self._thin_tool_schemas()
-            and isinstance(result, dict)
-            and result.get("error_type") == "invalid_arguments"
-            and tool_name not in self._tool_docs_sent
-        ):
-            result = {**result, "tool_docs": self._tool_docs([tool_name])}
-        return result
 
     def _build_tool_selection_query(self, user_input: str) -> str:
         """Build the selection query: previous user message + current, last 4K chars.
@@ -1992,43 +2064,6 @@ class ChatAgent(
         origins = getattr(self, "_mixin_prompt_origins", {})
         return [p for p in prompts if origins.get(p) != "get_sd_system_prompt"]
 
-    def _inference_location(self) -> InferenceLocation:
-        """Where this session's chat turns are actually answered (#3674).
-
-        Reads the live client when there is one. During ``__init__`` the prompt
-        can be composed before ``AgentSDK`` exists (MCP registration rebuilds
-        it), and the same backend choice is already on the agent itself by
-        then; every later rebuild — including the one every model switch runs —
-        sees the client.
-        """
-        chat = getattr(self, "chat", None)
-        if chat is not None:
-            # The live client classifies better than the id prefix can: it
-            # holds the catalog metadata, so a cloud provider discovered at
-            # runtime is recognised too.
-            lookup = getattr(
-                getattr(chat, "llm_client", None), "cloud_model_provider", None
-            )
-            return resolve_inference_location(
-                chat.effective_model,
-                use_claude=bool(chat.config.use_claude),
-                cloud_provider_lookup=lookup if callable(lookup) else None,
-            )
-        # Pre-client: read the config the client is about to be built from —
-        # it carries the same three answers, including the Claude model id,
-        # which ``model_id`` does not.
-        config = getattr(self, "config", None)
-        use_claude = bool(getattr(config, "use_claude", False))
-        model = (
-            getattr(config, "claude_model", None)
-            if use_claude
-            else getattr(config, "model_id", None)
-        )
-        return resolve_inference_location(
-            model or resolve_default_chat_model(),
-            use_claude=use_claude,
-        )
-
     def _no_documents_message(self) -> str:
         # An Agent UI chat searches only its own attachments, not the library.
         if getattr(getattr(self, "config", None), "ui_session_id", None):
@@ -2040,24 +2075,6 @@ class ChatAgent(
                 "icon), or index a file they name by its path."
             )
         return super()._no_documents_message()
-
-    def _model_service_label(self) -> Optional[str]:
-        """Names the provider in a failed turn's message: "Fireworks AI: …"."""
-        location = self._inference_location()
-        if location.provider != "lemonade" or configured_lemonade_url() is None:
-            return location.display
-        # A base URL the user chose may be any OpenAI-compatible server.
-        live = getattr(
-            getattr(getattr(self, "chat", None), "llm_client", None),
-            "current_base_url",
-            None,
-        )
-        label = _endpoint_label(
-            live() if callable(live) else resolve_lemonade_base_url()
-        )
-        if not label:
-            return "The configured model server"
-        return f"The model server at {label}"
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
@@ -2149,7 +2166,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 """
 
         base_prompt = f"""You are GAIA — a personal AI {whereabouts}. Sharp, witty, genuinely fun. Think: the smartest person at the party, who's also nice.
-{platform_block}{inference_block}
+{platform_block}{platform_withheld_prompt()}{inference_block}
 
 **WHO YOU ARE:**
 - You're GAIA. Not "an AI assistant" or "a helpful tool" — just GAIA.
@@ -2825,24 +2842,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def process_query(self, user_input, *args, **kwargs):
         """Run a turn, first telling the user about any dropped MCP servers."""
         self.report_mcp_dropped()
-        self._unanswered_question = None
         return super().process_query(user_input, *args, **kwargs)
-
-    def confirmation_args_for_call(
-        self, tool_name: str, tool_args: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Also mark a gated call after an unanswered question for a person.
-
-        Pre-approval (Full access) must not turn the model's guess at an
-        answer into a change nobody agreed to. Only a call known to be a read
-        is exempt; the marker matters only on a call that already asks.
-        """
-        shown = super().confirmation_args_for_call(tool_name, tool_args)
-        if self._unanswered_question is None or not isinstance(shown, dict):
-            return shown
-        if call_risk(tool_name, tool_args) == READ:
-            return shown
-        return {**shown, NEEDS_PERSON_ARG: True}
 
     def _register_tools(self) -> None:
         """Register chat agent tools from mixins based on prompt_profile."""
@@ -4160,59 +4160,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 msg += f" Next wakeup in {wake_in_seconds}s."
             return msg
 
-        # The tool watchdog must outlast the wait itself, or a slow answer is
-        # dropped and the call abandoned.
-        @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
-        def request_user_input(
-            message: str,
-            choices: List[str] = None,
-            default_if_no_response: str = None,
-            timeout_seconds: int = 300,
-            continue_if_no_response: bool = True,
-        ) -> str:
-            """Ask the user a question and wait for their response.
-
-            Args:
-                message: The question to present to the user.
-                choices: Optional list of choices (renders as buttons in the UI).
-                default_if_no_response: The choice you would pick if nobody
-                    answers. It is never returned as the user's answer: on a
-                    timeout you get "__NO_RESPONSE__" with this default named.
-                timeout_seconds: How long to wait (10 to 600, default 300).
-                continue_if_no_response: If True, continue after timeout.
-                    If False, the loop pauses until user re-engages.
-
-            Returns:
-                The user's response or chosen option, or text starting with
-                "__NO_RESPONSE__" when they did not answer. Silence is not an
-                answer: then change nothing on an assumption, and say in your
-                reply that you are waiting on them or what you assumed.
-            """
-            timeout_seconds = min(int(timeout_seconds), USER_INPUT_MAX_WAIT_S)
-            console = _agent.console
-            if not getattr(console, "answers_questions", True):
-                # The default would read as the user's choice ("cancel").
-                _agent._unanswered_question = message
-                return NO_QUESTION_CHANNEL
-            if hasattr(console, "request_user_input_blocking"):
-                reply = console.request_user_input_blocking(
-                    message=message,
-                    choices=choices,
-                    default_if_no_response=None,
-                    timeout_seconds=timeout_seconds,
-                    continue_if_no_response=continue_if_no_response,
-                )
-            else:
-                # Non-SSE consoles (interactive sessions)
-                try:
-                    reply = input(f"\n[Agent asking]: {message}\n> ").strip()
-                except (EOFError, OSError):
-                    reply = ""
-            if reply and reply != "__NO_RESPONSE__":
-                _agent._unanswered_question = None
-                return reply
-            _agent._unanswered_question = message
-            return _no_answer_result(timeout_seconds, default_if_no_response)
+        self.register_user_input_tools()
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
@@ -4320,6 +4268,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     if result.get("success"):
                         _forget_evicted(self.indexed_files, result.get("evicted", []))
                         self.indexed_files.add(doc)
+                        self._clear_document_restore_failure(doc)
                         logger.info(
                             f"Successfully indexed: {doc} ({result.get('num_chunks', 0)} chunks)"
                         )
@@ -4340,10 +4289,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
     def _start_watching(self) -> None:
         """Start watching directories for changes."""
-        for directory in self.watch_directories:
-            self._watch_directory(directory)
+        for directory in list(self.watch_directories):
+            if not self._watch_directory(directory):
+                self.watch_directories.remove(directory)
 
-    def _watch_directory(self, directory: str) -> None:
+    def _watch_directory(self, directory: str) -> bool:
         """Watch a directory for file changes."""
         if not check_watchdog_available():
             error_msg = (
@@ -4355,8 +4305,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 '  uv pip install "watchdog>=2.1.0,<7"\n'
             )
             logger.error(error_msg)
-            raise ImportError(error_msg)
+            lock, _, failures = _ensure_restore_failure_state(self)
+            with lock:
+                failures[directory] = "watchdog package is not installed"
+            return False
 
+        observer = None
+        started = False
         try:
             # Use generic FileChangeHandler with callbacks
             event_handler = FileChangeHandler(
@@ -4369,11 +4324,24 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer = Observer()
             observer.schedule(event_handler, directory, recursive=True)
             observer.start()
+            started = True
             self.observers.append(observer)
             self.file_handlers.append(event_handler)
+            lock, _, failures = _ensure_restore_failure_state(self)
+            with lock:
+                failures.pop(directory, None)
             logger.info(f"Started watching: {directory}")
+            return True
         except Exception as e:
+            if started and observer is not None:
+                observer.stop()
+                observer.join()
+            reason = f"{type(e).__name__}: {e}"
+            lock, _, failures = _ensure_restore_failure_state(self)
+            with lock:
+                failures[directory] = reason
             logger.error(f"Failed to watch {directory}: {e}")
+            return False
 
     @staticmethod
     def _should_watch_file(file_path: str) -> bool:
@@ -4454,6 +4422,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return
         if result.get("success"):
             self.indexed_files.add(file_path)
+            self._clear_document_restore_failure(real_file_path)
             logger.info(f"Successfully reindexed {real_file_path}")
             return
         error = result.get("error", "Unknown error")
@@ -4508,33 +4477,54 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             if callable(forget_declined):
                 forget_declined()
             self.current_session = session
+            self.attached_documents = list(session.indexed_documents)
+            lock, document_failures, watch_failures = _ensure_restore_failure_state(
+                self
+            )
+            with lock:
+                document_failures.clear()
+                watch_failures.clear()
 
             # Restore indexed documents (only if RAG is available)
             if self.rag:
                 for doc_path in session.indexed_documents:
-                    if os.path.exists(doc_path):
-                        try:
-                            result = self.rag.index_document(doc_path)
-                            if result.get("success"):
-                                self.indexed_files.add(doc_path)
-                            else:
-                                logger.warning(
-                                    f"Failed to reindex {doc_path}: "
-                                    f"{result.get('error', 'Unknown error')}"
-                                )
-                        except Exception as e:
-                            logger.warning(f"Failed to reindex {doc_path}: {e}")
+                    if not os.path.exists(doc_path):
+                        ChatAgent._record_document_restore_failure(
+                            self, doc_path, "file not found"
+                        )
+                        continue
+                    try:
+                        result = self.rag.index_document(doc_path)
+                        if result.get("success"):
+                            self.indexed_files.add(doc_path)
+                            RAGToolsMixin._clear_document_restore_failure(
+                                self, doc_path
+                            )
+                        else:
+                            ChatAgent._record_document_restore_failure(
+                                self, doc_path, result.get("error", "Unknown error")
+                            )
+                    except Exception as e:
+                        ChatAgent._record_document_restore_failure(
+                            self, doc_path, f"{type(e).__name__}: {e}"
+                        )
             elif session.indexed_documents:
-                logger.warning(
-                    f"Cannot restore {len(session.indexed_documents)} indexed documents: "
-                    "RAG dependencies not installed"
-                )
+                for doc_path in session.indexed_documents:
+                    ChatAgent._record_document_restore_failure(
+                        self, doc_path, "RAG dependencies not installed"
+                    )
 
             # Restore watched directories
             for dir_path in session.watched_directories:
-                if os.path.exists(dir_path) and dir_path not in self.watch_directories:
+                if dir_path in self.watch_directories:
+                    continue
+                if not os.path.exists(dir_path):
+                    lock, _, watch_failures = _ensure_restore_failure_state(self)
+                    with lock:
+                        watch_failures[dir_path] = "directory not found"
+                    continue
+                if self._watch_directory(dir_path):
                     self.watch_directories.append(dir_path)
-                    self._watch_directory(dir_path)
 
             # Restore conversation history
             self.conversation_history = list(session.chat_history)
@@ -4571,6 +4561,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.error(f"Error saving session: {e}")
             return False
+
+    def close(self) -> None:
+        """Release watchers, HTTP sessions and SQLite handles now, then the base's."""
+        self.__del__()
+        super().close()
 
     def __del__(self):
         """Cleanup when agent is destroyed.

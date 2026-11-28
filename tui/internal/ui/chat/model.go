@@ -58,7 +58,13 @@ type errMsg struct {
 }
 type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
-type channelReadyMsg struct{ ch <-chan interface{} }
+
+// turnSeq scopes it like errMsg: a channel from an abandoned turn must not
+// replace the live turn's. Always set it from the turn that called Send.
+type channelReadyMsg struct {
+	ch      <-chan interface{}
+	turnSeq int
+}
 
 // cancelRequestFailedMsg carries a failure of the out-of-band Cancel() call
 // (client.AgentCanceler, #2901) — asking the server to stop the run, not the
@@ -421,8 +427,9 @@ type ChatModel struct {
 	ctxMeter contextMeter
 	// starters are the first screen's suggestions (suggestions.go); suggests
 	// says this chat offers them, so the agent's skill report refreshes them.
-	starters []starter
-	suggests bool
+	starters     []starter
+	suggests     bool
+	starterFocus int // One-based starter row; zero means the composer.
 	// readyTail is how the Ready line ended when it was written, so a later
 	// skill report can replace it (refreshReadyLine).
 	readyTail string
@@ -940,6 +947,11 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.startWarmUp()
 
 	case channelReadyMsg:
+		if msg.turnSeq == 0 || msg.turnSeq != m.turnSeq {
+			// Send for an abandoned turn returned late; drain its channel so
+			// the producer can finish, and leave the live turn alone.
+			return m, drainStale(msg.ch)
+		}
 		m.events = msg.ch
 		return m, waitForEvent(m.events)
 
@@ -975,6 +987,9 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case connectorsRevokedMsg:
 		return m.handleConnectorsRevoked(msg)
+
+	case connectorsAllowedMsg:
+		return m.handleConnectorsAllowed(msg)
 
 	case connectorsSignInMsg:
 		return m.handleConnectorsSignIn(msg)
@@ -1291,10 +1306,14 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToggleHelpMsg:
 		// Only ever seen when nothing wrapped this model: root consumes this
 		// message itself and never forwards it.
+		m.clearStarterFocus()
 		m.help.Toggle(components.HelpContextChat, m.availableCommandNames())
 		return m, nil
 
 	case tea.MouseMsg:
+		// A mouse interaction can scroll the ready list off screen or put the
+		// user's attention back in the composer.
+		m.clearStarterFocus()
 		// An open overlay owns clicks and hover while it is up — see
 		// handlePaletteMouse/handleQuestionMouse, both of which still let the
 		// wheel through to the transcript underneath (neither overlay
@@ -1358,6 +1377,11 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Leave starter focus on text, paste, and other shortcuts, without eating
+	// the key. In particular Shift+Tab still belongs to permission mode.
+	if m.starterFocus != 0 && (!starterNavigationKey(msg) || !m.canFocusStarter()) {
+		m.clearStarterFocus()
+	}
 	// An open help panel owns the keyboard: navigation scrolls it, anything
 	// else closes it. Never a trap, whatever the user reaches for.
 	if m.help.HandleKey(msg, m.width, m.height) {
@@ -1458,7 +1482,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.hideWarmUpStage()
 	}
 
-	if next, cmd, ok := m.pickSuggestion(msg); ok {
+	if next, cmd, ok := m.handleStarterKey(msg); ok {
 		return next, cmd
 	}
 
@@ -1813,6 +1837,13 @@ func (m *ChatModel) restoreToComposer(text string) {
 // "/clear" typed mid-turn still clears when it finally lands instead of being
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
+	query = normalizeCommand(query)
+	if why := m.nativeUnavailable(query); why != "" {
+		return m.refuseCommand(why)
+	}
+	if isQuitCommand(query) {
+		return m, tea.Quit
+	}
 	// `/update` takes a free-form version argument, so like /model it is
 	// dispatched before the exact-match switch.
 	if isUpdateCommand(query) {
@@ -2053,6 +2084,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		return m.handleAutomationsCommand(query)
 	}
 
+	if why := m.unrunnableCommand(query); why != "" {
+		return m.refuseCommand(why)
+	}
 	return m.sendQuery(m.withResearch(query))
 }
 
@@ -2102,9 +2136,22 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 			if err != nil {
 				return errMsg{err: err, turnSeq: seq}
 			}
-			return channelReadyMsg{ch: ch}
+			return channelReadyMsg{ch: ch, turnSeq: seq}
 		},
 	)
+}
+
+// drainStale reads a superseded turn's channel until it closes, dropping its
+// events.
+func drainStale(ch <-chan interface{}) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		for range ch {
+		}
+		return nil
+	}
 }
 
 func waitForEvent(ch <-chan interface{}) tea.Cmd {
@@ -2624,6 +2671,9 @@ func (m ChatModel) copyRegion(msg *Message, span msgSpan) msgSpan {
 }
 
 func (m *ChatModel) updateViewport() {
+	if m.starterFocus != 0 && !m.canFocusStarter() {
+		m.starterFocus = 0
+	}
 	m.viewDirty = false
 	m.lastRender = time.Now()
 	m.syncViewportHeight(m.chatChromeRows())
@@ -2967,7 +3017,7 @@ func (m ChatModel) renderMessage(msg *Message) string {
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
 		// line longer than the pane loses its tail — and for the ones that
 		// carry a remedy, the tail IS the remedy.
-		body := msg.Content
+		body := m.renderReadyStarterFocus(msg.Content)
 		if m.width > 0 {
 			body = components.WrapText(body, max(m.cardWidth()-2, 1))
 		}
@@ -3646,7 +3696,7 @@ func (m ChatModel) agentIdentity() string {
 	}
 	if m.nativeAgent() {
 		// Two programs can answer as this agent; say which one is.
-		identity += " (" + catalog.NativeAgentBinary + " · Beta)"
+		identity += " (" + catalog.HarnessLabel(catalog.NativeAgentBinary) + " · Beta)"
 	}
 	return identity
 }

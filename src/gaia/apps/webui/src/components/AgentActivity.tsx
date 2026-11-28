@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
     ChevronRight,
     Wrench,
@@ -41,6 +41,7 @@ import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
 import { CodeBlock } from './PermissionPrompt';
 import { log } from '../utils/logger';
+import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
@@ -137,8 +138,8 @@ for (const name of Object.keys(TOOL_ICON)) {
 /** Rows that mark the agent picking up a skill; use_skill is one GAIA adds itself. */
 const SKILL_USE_TOOLS = new Set(['load_skill', 'use_skill']);
 
-// Memory works in the background: its steps show only when they fail.
-const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
+// Silent memory reads stay in the background unless they fail; memory writes always show.
+const BACKGROUND_TOOLS = new Set(['recall']);
 
 function isBackgroundStep(step: AgentStep): boolean {
     return step.type === 'tool' && step.success !== false && BACKGROUND_TOOLS.has(step.tool ?? '');
@@ -177,6 +178,9 @@ function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
     return words ? named(words, Wrench) : DEFAULT_TOOL_META;
 }
 
+/** Steps GAIA takes itself, not the model: their own label is in the UI's language, unlike a narration. */
+const GAIA_WRITTEN_TOOLS = new Set(['index_documents']);
+
 /** The fallback line for a tool row that arrived without a narration (older saved turns). */
 function toolFallbackLabel(step: AgentStep, t: Translate): string {
     const meta = getToolMeta(step.tool, step);
@@ -198,6 +202,7 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
     // GAIA writes this row itself, so it can say it in the UI's language.
     if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: visibleName(step.detail) });
+    if (GAIA_WRITTEN_TOOLS.has(step.tool ?? '')) return toolFallbackLabel(step, t);
     // A present-tense narration would read as if a call that never ran had run.
     if ((step.declined || step.timedOut || step.refused || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
     return step.narration ? compactNarration(markStrayDirection(step.narration)) : toolFallbackLabel(step, t);
@@ -1228,22 +1233,7 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
 
 function CommandOutputView({ output }: { output: CommandOutput }) {
     const t = useT();
-    const [copied, setCopied] = useState(false);
-    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        return () => {
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        };
-    }, []);
-
-    const handleCopy = useCallback(() => {
-        const text = output.stdout || output.stderr || '';
-        navigator.clipboard.writeText(text).catch(() => {});
-        setCopied(true);
-        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [output]);
+    const [copyState, copy] = useCopyFeedback();
 
     const hasOutput = !!(output.stdout || output.stderr);
     const isError = output.returnCode !== 0 && !output.expectedExit;
@@ -1270,12 +1260,12 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
                     )}
                     {hasOutput && (
                         <button
-                            className={`cmd-copy ${copied ? 'copied' : ''}`}
-                            onClick={handleCopy}
-                            title={copied ? t('msg.copied') : t('activity.copyOutput')}
-                            aria-label={copied ? t('msg.copiedAria') : t('activity.copyOutputAria')}
+                            className={`cmd-copy ${copyState === 'idle' ? '' : copyState}`}
+                            onClick={() => copy(output.stdout || output.stderr || '')}
+                            title={copyState === 'copied' ? t('msg.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('activity.copyOutput')}
+                            aria-label={copyState === 'copied' ? t('msg.copiedAria') : copyState === 'failed' ? t('msg.copyFailed') : t('activity.copyOutputAria')}
                         >
-                            {copied ? <Check size={11} /> : <Copy size={11} />}
+                            {copyState === 'copied' ? <Check size={11} /> : copyState === 'failed' ? <AlertCircle size={11} /> : <Copy size={11} />}
                         </button>
                     )}
                 </div>

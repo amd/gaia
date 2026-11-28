@@ -260,7 +260,9 @@ and `full_access`, on a request with no `session_id`. They apply to that run
 only and are a `422` beside a `session_id`, so no chat inherits them; the two
 permission fields need a caller token. `final` says when the time limit stopped
 the turn (`time_limit_reached`) and which tools were withheld
-(`withheld_tools`). See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+(`withheld_tools`). The native `gaiacpp` takes them too, though it reports an
+older contract: it lists them on `/version` as
+`capabilities.one_shot_fields`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
 2.19) along with `session_id`: the agent copies each file before it writes it,

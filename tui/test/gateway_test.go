@@ -191,9 +191,13 @@ func keySpace() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeySpace} }
 // reached it.
 func readStateFile(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(gateway.StatePath())
+	statePath, err := gateway.StatePath()
 	if err != nil {
-		t.Fatalf("reading %s: %v", gateway.StatePath(), err)
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", statePath, err)
 	}
 	return string(raw)
 }

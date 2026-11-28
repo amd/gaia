@@ -520,6 +520,16 @@
 
 }
 
+/* Under a turn the chosen agent couldn't start. */
+.chat-agent-recovery {
+    margin-block: 4px 12px;
+    max-width: 640px;
+}
+
+.chat-agent-recovery .new-chat-setup-failed {
+    margin-bottom: 0;
+}
+
 /* Under a turn the model server ended by taking no connection. */
 .server-down-notice {
     display: flex;
@@ -543,6 +553,16 @@
 
 .server-down-notice--ok {
     border-color: var(--border-light);
+}
+
+.native-agent-notice {
+    border-color: var(--border-light);
+}
+
+.native-agent-notice__settings {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .server-down-notice__title {

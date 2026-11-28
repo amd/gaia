@@ -186,6 +186,8 @@ async def test_a_failure_answer_with_its_own_headline_is_saved_failed(db):
         llm_client=SimpleNamespace(_backend=SimpleNamespace(model_load_listener=None)),
         send_messages=MagicMock(side_effect=error),
         send_messages_stream=MagicMock(side_effect=error),
+        effective_model="M",
+        config=SimpleNamespace(use_claude=False),
     )
     agent.chat.get_stats.return_value = {}
 

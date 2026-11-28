@@ -103,7 +103,7 @@
     border-radius: var(--radius-full);
     font-size: 10px;
     font-weight: 500;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     letter-spacing: 0;
     font-family: var(--font-sans);
 }
@@ -683,7 +683,7 @@
     border-radius: var(--radius-full);
     border: none;
     background: var(--bg-tertiary);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: all var(--duration) var(--ease);
 }
@@ -1192,14 +1192,14 @@
     font-size: 12px;
     font-family: var(--font-sans);
     color: var(--text-primary);
-    animation: toastIn var(--duration) var(--ease);
+    animation: memToastIn var(--duration) var(--ease);
     pointer-events: auto;
 }
 .mem-toast-success { border-inline-start: 3px solid var(--accent-green); }
 .mem-toast-error { border-inline-start: 3px solid var(--danger); }
 .mem-toast-info { border-inline-start: 3px solid var(--accent-blue); }
 
-@keyframes toastIn {
+@keyframes memToastIn {
     from { opacity: 0; transform: translateY(10px) scale(0.96); }
     to { opacity: 1; transform: none; }
 }
@@ -2000,4 +2000,28 @@ textarea.mem-input { resize: vertical; }
     /* Four tabs don't fit a phone; let the bar scroll instead of clipping. */
     .mem-tab-bar { overflow-x: auto; padding: 0 12px; }
     .mem-tab-btn { flex-shrink: 0; white-space: nowrap; padding: 10px 12px; }
+}
+
+/* Whose memory the page shows: one quiet line under the tabs, on every tab. */
+.mem-store-banner {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 8px 24px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+    border-bottom: 1px solid var(--border);
+}
+.mem-store-banner .link-btn { font-size: inherit; }
+.mem-store-only {
+    margin-block: 0 20px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+.mem-about-limits {
+    margin: -10px 0 18px;
+    font-size: 13px;
+    color: var(--text-muted);
 }

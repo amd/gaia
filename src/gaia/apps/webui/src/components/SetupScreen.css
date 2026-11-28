@@ -262,6 +262,11 @@ button.setup-rail-step:hover {
     font-size: 14px;
 }
 
+.setup-agent-line {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
 .setup-bar-head {
     display: flex;
     justify-content: space-between;
@@ -319,6 +324,18 @@ button.setup-rail-step:hover {
     grid-column: 2 / -1;
     color: var(--danger);
     overflow-wrap: anywhere;
+}
+
+.setup-result-error-said {
+    padding-inline-start: 8px;
+    border-inline-start: 2px solid var(--danger);
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.setup-failure-hint {
+    color: var(--text-secondary);
+    font-size: 13px;
 }
 
 .setup-failure {

@@ -5,6 +5,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -73,7 +74,11 @@ func (m ChatModel) commandSupported(c client.Capability) (supported, known bool)
 // they can never disagree about what an agent supports.
 func (m ChatModel) availableCommandSet() map[string]bool {
 	set := make(map[string]bool, len(paletteCommands))
+	native := m.nativeAgent()
 	for _, c := range paletteCommands {
+		if word, _, _ := strings.Cut(c.Name, " "); native && nativeLacks[word] != "" {
+			continue
+		}
 		switch c.Name {
 		case "/memory":
 			// known && !supported is the only case worth hiding for: a peer

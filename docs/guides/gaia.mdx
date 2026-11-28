@@ -76,6 +76,11 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
     check what's running with `gaia daemon agents` and stop it with `gaia daemon
     stop-agent gaia`.
 
+    Dev mode only changes how the Python agent starts. With gaiacpp chosen as
+    the agent, the daemon runs the same `gaiacpp` binary in either mode, so
+    setting `GAIA_GAIA_AGENT_MODE=dev` changes nothing and never conflicts with
+    a running `gaiacpp`.
+
     Installing the wheel also registers the agent under the id `gaia` in GAIA's agent registry, so anything that enumerates installed agents picks it up.
   </Tab>
 </Tabs>
@@ -130,7 +135,7 @@ How long a command may run depends on what it is — a test run gets 15 minutes,
 
 **Mail is treated as data, never as instructions.** Every message body the email tools return arrives fenced between `<<<UNTRUSTED_EMAIL_BODY_START>>>` and `<<<UNTRUSTED_EMAIL_BODY_END>>>`, and a message showing phishing signals comes back flagged with the reason it was flagged. A flagged message is never reported as something that needs action, however urgent it sounds, and the agent will not repeat its call to action as advice — it says what the message claims, that it looks like a lure, and to leave it alone.
 
-**Reading text aloud works on Windows and Linux.** On macOS GAIA hasn't verified the voice yet, so `text_to_speech`, `dictate_document` and the `dictation` skill aren't offered there ([#8831](https://github.com/amd/gaia/issues/8831)). Speech that comes back far shorter than its text needs is refused as cut off rather than saved.
+**Reading text aloud works on Windows and Linux.** On macOS GAIA hasn't verified the voice yet, so `text_to_speech`, `dictate_document` and the `dictation` skill aren't offered there ([#8831](https://github.com/amd/gaia/issues/8831)); asked for speech in chat, the agent says so instead of building it from shell commands or downloads. Speech that comes back far shorter than its text needs is refused as cut off rather than saved.
 
 **Reading text aloud needs the voice model downloaded first.** `text_to_speech` and `dictate_document` speak through Lemonade's Kokoro model (`kokoro-v1`, ~350 MB) and never download it in the middle of a chat. Run `gaia download --agent talk` once, or press Read aloud on any reply in the Agent UI; until then the tool tells the agent the model is missing.
 

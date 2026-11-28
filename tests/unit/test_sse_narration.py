@@ -10,6 +10,8 @@ fix: ``tool_call.narration`` says what the agent is doing, ``tool_result.preview
 says how it went, and the harness bookkeeping only reaches a debug channel.
 """
 
+import json
+
 import pytest
 
 from gaia.agents.base.agent import Agent
@@ -55,6 +57,89 @@ class TestDeriveNarration:
             ("read_file", {"file_path": "src/app.py"}, "Reading file: src/app.py"),
             ("write_file", {"file_path": "out.md"}, "Writing file: out.md"),
             ("index_document", {"path": "spec.pdf"}, "Indexing document: spec.pdf"),
+            # Memory writes surface non-private facts/content and omit raw UUIDs.
+            (
+                "remember",
+                {"fact": "User prefers concise replies", "category": "preference"},
+                "Saving to memory: User prefers concise replies",
+            ),
+            (
+                "remember",
+                {"fact": "SSN 123-45-6789", "sensitive": "true"},
+                "Saving to memory",
+            ),
+            (
+                "remember",
+                {"fact": "Private health note", "sensitive": True},
+                "Saving to memory",
+            ),
+            (
+                "update_memory",
+                {
+                    "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                    "content": "User's name is Alex",
+                    "sensitive": "false",
+                },
+                "Updating memory: User's name is Alex",
+            ),
+            # An edit that doesn't say "public" may be editing a private entry.
+            (
+                "update_memory",
+                {
+                    "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                    "content": "User's name is Alex",
+                },
+                "Updating memory",
+            ),
+            # A secret the tool refuses never reaches the activity row.
+            (
+                "remember",
+                {"fact": "my github token is ghp_" + "a" * 36},
+                "Saving to memory",
+            ),
+            (
+                "remember",
+                {"fact": "my wifi password is Tr0ub4dor&3"},
+                "Saving to memory",
+            ),
+            (
+                "update_memory",
+                {
+                    "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                    "content": "api key: sk-" + "b" * 40,
+                    "sensitive": "false",
+                },
+                "Updating memory",
+            ),
+            (
+                "remember",
+                {"fact": "Router admin page is 192.168.1.1"},
+                "Saving to memory: Router admin page is 192.168.1.1",
+            ),
+            (
+                "update_memory",
+                {
+                    "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                    "content": "Private diagnosis",
+                    "sensitive": "true",
+                },
+                "Updating memory",
+            ),
+            (
+                "update_memory",
+                {"knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2"},
+                "Updating memory",
+            ),
+            (
+                "forget",
+                {"knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2"},
+                "Deleting from memory",
+            ),
+            (
+                "forget",
+                {"knowledge_id": "allergic to shellfish"},
+                "Deleting from memory: allergic to shellfish",
+            ),
             # No arguments -> the verb phrase alone still reads as an action.
             ("fetch_page", {}, "Fetching page"),
         ],
@@ -760,3 +845,193 @@ def test_audio_narration_drops_a_bogus_duration(bogus):
 def test_audio_narration_clips_a_long_prompt_to_one_line():
     line = derive_narration("generate_music", {"prompt": "piano\n" * 200})
     assert "\n" not in line and len(line) < 120
+
+
+def test_relay_enriches_bare_remember_narration_with_fact():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "remember",
+            "args": {"fact": "User prefers tea", "category": "preference"},
+            "narration": "Saving to memory",
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    assert events[0]["narration"] == "Saving to memory: User prefers tea"
+    assert events[1]["narration"] == "Saving to memory: User prefers tea"
+
+
+def test_relay_keeps_custom_sidecar_narration_verbatim():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "remember",
+            "args": {"fact": "User prefers tea"},
+            "narration": "Custom memory label",
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    assert events[0]["narration"] == "Custom memory label"
+
+
+def test_relay_does_not_rewrite_bare_narration_for_non_memory_tools():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "read_file",
+            "args": {"file_path": "/secret/path.txt"},
+            "narration": "Reading file",
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    assert events[0]["narration"] == "Reading file"
+
+
+def test_relay_strips_uuid_from_sidecar_forget_narration():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    uid = "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2"
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "forget",
+            "args": {"knowledge_id": uid},
+            "narration": f"Deleting from memory: {uid}",
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    assert events[0]["narration"] == "Deleting from memory"
+
+
+def test_relay_masks_sensitive_memory_in_narration_args_and_result():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    secret_text = "My private medical note"
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "remember",
+            "args": {"fact": secret_text, "sensitive": "true"},
+            "narration": f"Saving to memory: {secret_text}",
+        },
+        GAIA_PROFILE,
+    )
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_result",
+            "tool": "remember",
+            "data": {
+                "status": "stored",
+                "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                "message": f"Remembered: {secret_text}",
+            },
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    start, args_ev = events[0], events[1]
+    result_ev = [e for e in events if e["type"] == "tool_result"][0]
+    assert start["narration"] == "Saving to memory"
+    assert args_ev["narration"] == "Saving to memory"
+    assert args_ev["args"]["fact"] == "[private]"
+    assert secret_text not in args_ev["detail"]
+    assert secret_text not in result_ev["summary"]
+    assert secret_text not in str(result_ev["data"])
+
+
+def test_sse_handler_masks_sensitive_memory_in_args_and_result():
+    handler = SSEOutputHandler()
+    secret_text = "My private medical note"
+    handler.print_tool_usage("remember")
+    handler.pretty_print_json(
+        {"fact": secret_text, "sensitive": "true"}, title="Arguments"
+    )
+    handler.pretty_print_json(
+        {
+            "status": "stored",
+            "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+            "message": f"Remembered: {secret_text}",
+        },
+        title="Result",
+    )
+    handler.print_tool_complete()
+    events = _drain(handler)
+    args_ev = [e for e in events if e["type"] == "tool_args"][0]
+    result_ev = [e for e in events if e["type"] == "tool_result"][0]
+    assert args_ev["narration"] == "Saving to memory"
+    assert args_ev["args"]["fact"] == "[private]"
+    assert secret_text not in args_ev["detail"]
+    assert secret_text not in result_ev["summary"]
+
+
+@pytest.mark.parametrize(
+    "secret",
+    ["ghp_" + "c" * 36, "Tr0ub4dor&3"],
+)
+def test_refused_credential_never_reaches_memory_events(secret):
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    fact = f"my password is {secret}"
+    refusal = {"status": "skipped", "message": "Not stored - looks like a credential."}
+
+    handler = SSEOutputHandler()
+    handler.print_tool_usage("remember")
+    handler.pretty_print_json({"fact": fact}, title="Arguments")
+    handler.pretty_print_json(refusal, title="Result")
+    handler.print_tool_complete()
+    in_process = _drain(handler)
+
+    handler = SSEOutputHandler()
+    for event in (
+        {
+            "type": "tool_call",
+            "tool": "remember",
+            "args": {"fact": fact},
+            "narration": f"Saving to memory: {fact}",
+        },
+        {"type": "tool_result", "tool": "remember", "data": refusal},
+    ):
+        relay._dispatch_one(handler, event, GAIA_PROFILE)
+    relayed = _drain(handler)
+
+    for events in (in_process, relayed):
+        assert events and secret not in json.dumps(events, default=str)
+
+
+def test_public_memory_update_still_shows_its_content_in_args():
+    handler = SSEOutputHandler()
+    handler.print_tool_usage("update_memory")
+    handler.pretty_print_json(
+        {"knowledge_id": "k1", "content": "Prefers tea", "sensitive": "false"},
+        title="Arguments",
+    )
+    args_ev = [e for e in _drain(handler) if e["type"] == "tool_args"][0]
+    assert args_ev["args"]["content"] == "Prefers tea"
+    assert args_ev["narration"] == "Updating memory: Prefers tea"

@@ -82,6 +82,9 @@ test('Customize picks another chat model, vision follows it, and the labels say 
     await expect(page.getByText(say('setup.job.nothingMore'))).toBeVisible();
     await shot('models');
 
+    const more = chat.locator('details.mc-more');
+    await expect(more).not.toHaveAttribute('open');
+    await more.locator('summary').click();
     await row(UNTESTED_CHAT_MODEL).locator('label').click();
     await expect(row(UNTESTED_CHAT_MODEL).getByRole('radio')).toBeChecked();
     await expect(page.getByText(say('setup.job.untestedPicked'))).toBeVisible();

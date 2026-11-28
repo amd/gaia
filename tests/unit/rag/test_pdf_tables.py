@@ -124,6 +124,12 @@ def test_prose_is_left_alone():
     assert tables_as_rows(prose, prose, None) == (prose, None)
 
 
+def test_a_table_with_one_row_per_line_is_detected():
+    plain = "\n".join([" ".join(HEADER)] + [" ".join(_row(n)) for n in range(1, 5)])
+
+    assert looks_tabular(plain)
+
+
 def test_a_table_whose_cells_are_not_in_the_plain_text_is_left_alone():
     plain = "\n".join(["Alpha", "Beta", "Gamma"] * 6)
     layout = "\n".join(["a      b      c", "1      2      3", "4      5      6"])

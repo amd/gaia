@@ -132,7 +132,7 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 	f := installPrograms(t, catalog.PythonAgentBinary, catalog.NativeAgentBinary)
 	m, oldClient := programSession(t, f, preflight.FlagshipAgentPython)
 	m.chat.AppendStatus("earlier line")
-	if strings.Contains(header(t, m), "(gaiacpp · Beta)") {
+	if strings.Contains(header(t, m), "(Fast and light · Beta)") {
 		t.Fatal("test setup: the Python session's header already says gaiacpp")
 	}
 
@@ -178,7 +178,7 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 	if !strings.Contains(all, "earlier line") || !strings.Contains(all, want) {
 		t.Fatalf("the transcript or its divider did not survive the switch:\n%s", all)
 	}
-	if !strings.Contains(header(t, m), "(gaiacpp · Beta)") {
+	if !strings.Contains(header(t, m), "(Fast and light · Beta)") {
 		t.Fatalf("the header does not mark gaiacpp after the switch:\n%s", header(t, m))
 	}
 
@@ -190,7 +190,7 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 	if got := f.saved(t); got != preflight.FlagshipAgentPython {
 		t.Fatalf("the saved choice is %q after switching back", got)
 	}
-	if strings.Contains(header(t, m), "(gaiacpp · Beta)") {
+	if strings.Contains(header(t, m), "(Fast and light · Beta)") {
 		t.Fatalf("the header still marks gaiacpp after switching back:\n%s", header(t, m))
 	}
 	texts = nil
@@ -421,7 +421,8 @@ func TestAgentProgramListingNamesBothMarksBetaCurrentAndUnavailable(t *testing.T
 		t.Errorf("the native row is wrong: %q", cpp)
 	}
 	for _, want := range []string{
-		"Mature and well tested", "Heavier", "Fast and light", "Fewer tools",
+		"Full-featured", "Every tool and feature, and well tested", "Heavier",
+		"Fast and light", "Starts quickly", "Fewer tools",
 		"Not on this PC yet: /agent gaiacpp offers to download it.",
 		"No saved choice yet", "/agent gaiapy", "/agent gaiacpp",
 	} {

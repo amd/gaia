@@ -17,6 +17,7 @@ from gaia.agents.base.model_features import (
     TIERS,
     ModelFeatures,
     features_for_model,
+    platform_withheld_prompt,
     platform_withheld_tools,
     withheld_tools,
 )
@@ -120,6 +121,7 @@ def test_a_proven_platform_withholds_no_speech_tool(platform, monkeypatch):
     assert gaia.config.speech_output_unproven_reason(platform) is None
     monkeypatch.setattr(gaia.config, "_current_platform", lambda: platform)
     assert platform_withheld_tools() == {}
+    assert platform_withheld_prompt() == ""
 
 
 def test_a_mac_withholds_the_speech_tools_saying_why(monkeypatch):
@@ -128,6 +130,18 @@ def test_a_mac_withholds_the_speech_tools_saying_why(monkeypatch):
     assert "Windows and Linux" in reason and "issues/8831" in reason
     monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
     assert platform_withheld_tools() == dict.fromkeys(SPEECH_OUTPUT_TOOLS, reason)
+
+
+def test_a_mac_tells_the_model_speech_is_off_and_not_to_improvise_it(monkeypatch):
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    block = platform_withheld_prompt()
+    # The reason the user is to be given, with where to follow the fix.
+    assert gaia.config.speech_output_unproven_reason("darwin") in block
+    assert "read aloud" in block and "dictate" in block
+    assert "reply with that and stop" in block
+    for banned in ("shell commands", "installs", "downloads", "other tools"):
+        assert banned in block
+    assert block.startswith("\n**") and block.endswith("\n")
 
 
 @pytest.mark.speech_platform_gate

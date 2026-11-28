@@ -21,8 +21,9 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+from gaia.eval.bench.git_runner import GIT_TIMEOUT_S
 from gaia.eval.code_retrieval.gold import Symbol, enclosing, innermost, python_symbols
-from gaia.eval.code_retrieval.repos import GIT_TIMEOUT_S, RepoError
+from gaia.eval.code_retrieval.repos import RepoError
 
 #: Words that look like identifiers in prose but carry nothing.
 _STOP = frozenset("""

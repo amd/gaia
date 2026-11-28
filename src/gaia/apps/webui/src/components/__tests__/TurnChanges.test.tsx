@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TurnChanges } from '../TurnChanges';
+import { ChangesReview } from '../ChangesReview';
 import { DiffCard } from '../render/DiffCard';
 import { UndoHistorySettings } from '../settings/UndoHistorySettings';
 import { resetTurnChangesCache } from '../../hooks/useTurnChanges';
@@ -13,6 +14,8 @@ import { stripIsolates } from '../../i18n/registry';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import type { TurnChanges as Turn } from '../../types/changes';
+import type { AgentStep } from '../../types';
+import { ranChangingTool } from '../../hooks/useSessionProgram';
 
 const turn = (over: Partial<Turn> = {}): Turn => ({
     turn_id: 't1',
@@ -237,6 +240,27 @@ describe('TurnChanges', () => {
         expect(screen.getByText(/Too large to show: 9000000 → 9000100 bytes/)).toBeInTheDocument();
         expect(screen.getAllByText('Edited')).toHaveLength(2);
     });
+
+    it('the diff view speaks Arabic', async () => {
+        vi.spyOn(api, 'getTurnDiff').mockResolvedValue({
+            turn_id: 't1',
+            files: [
+                { path: 'img.png', change: 'created', binary: true, too_large: false, truncated: false,
+                    unified: '', before_size: 0, after_size: 120 },
+            ],
+        });
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<ChangesReview sessionId="s1" turn={turn({ restored_at: '2026-10-16T00:01:00+00:00' })} onClose={() => {}} />);
+            const dialog = await screen.findByRole('dialog', { name: /مراجعة التغييرات/ });
+            expect(dialog.querySelector('h3')).toHaveTextContent('التغييرات في هذه الجولة');
+            await waitFor(() => expect(dialog).toHaveTextContent('ملف ثنائي: 0 ← 120 بايت.'));
+            expect(dialog).toHaveTextContent('منشأ');
+            expect(dialog).toHaveTextContent('تم التراجع عن هذه الجولة');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
 });
 
 describe('DiffCard', () => {
@@ -287,6 +311,72 @@ describe('DiffCard', () => {
         expect(screen.getByText('Deleted')).toBeInTheDocument();
         expect(screen.getByText('Binary file')).toBeInTheDocument();
         expect(container.querySelector('.render-diff__body')).toBeNull();
+    });
+});
+
+describe('TurnChanges on gaiacpp', () => {
+    const capabilities = (program: 'gaiapy' | 'gaiacpp' | null) => vi.spyOn(api, 'getCapabilities')
+        .mockResolvedValue({ session_id: 's1', agent_type: 'gaia', tools: [], program });
+    const LINE = "Undo isn't available on Fast and light: it doesn't record file changes yet. Full-featured does.";
+
+    it('says undo is not available where Undo would be, for a turn that wrote a file', async () => {
+        vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [] });
+        capabilities('gaiacpp');
+        render(<TurnChanges sessionId="s1" messageId={7} ranChangingTool />);
+        expect(await screen.findByRole('note')).toHaveTextContent(LINE);
+        expect(screen.queryByRole('button', { name: /Undo this turn/ })).not.toBeInTheDocument();
+    });
+
+    it('says nothing on the Python agent, whose unrecorded turn changed no files', async () => {
+        const list = vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [] });
+        const asked = capabilities('gaiapy');
+        const { container } = render(<TurnChanges sessionId="s1" messageId={7} ranChangingTool />);
+        await waitFor(() => expect(list).toHaveBeenCalled());
+        await waitFor(() => expect(asked).toHaveBeenCalled());
+        await asked.mock.results[0].value;
+        expect(container).toBeEmptyDOMElement();
+    });
+
+    it('says nothing, and asks nothing, under a turn that only read or answered', async () => {
+        const list = vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [] });
+        const asked = capabilities('gaiacpp');
+        const { container } = render(<TurnChanges sessionId="s1" messageId={7} />);
+        await waitFor(() => expect(list).toHaveBeenCalled());
+        expect(container).toBeEmptyDOMElement();
+        expect(asked).not.toHaveBeenCalled();
+    });
+
+    it('claims nothing when the chat cannot say which agent runs it', async () => {
+        const list = vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [] });
+        const asked = vi.spyOn(api, 'getCapabilities').mockRejectedValue(new Error('The agent is not running'));
+        const { container } = render(<TurnChanges sessionId="s1" messageId={7} ranChangingTool />);
+        await waitFor(() => expect(list).toHaveBeenCalled());
+        await waitFor(() => expect(asked).toHaveBeenCalled());
+        await asked.mock.results[0].value.catch(() => undefined);
+        expect(container).toBeEmptyDOMElement();
+    });
+
+    it('keeps Undo for a turn that has a record', async () => {
+        vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [turn()] });
+        const asked = capabilities('gaiacpp');
+        render(<TurnChanges sessionId="s1" messageId={7} ranChangingTool />);
+        expect(await screen.findByRole('button', { name: /Undo this turn/ })).toBeInTheDocument();
+        expect(screen.queryByText(LINE)).not.toBeInTheDocument();
+        expect(asked).not.toHaveBeenCalled();
+    });
+
+    it('counts only write and shell tools that ran', () => {
+        const step = (over: Partial<AgentStep>): AgentStep => ({ id: 1, type: 'tool', label: '', timestamp: 0, ...over } as AgentStep);
+        expect(ranChangingTool([step({ tool: 'write_file', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'edit_file' })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command' })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'read_file' })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', declined: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', refused: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', timedOut: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', success: false })])).toBe(false);
+        expect(ranChangingTool([step({ type: 'status', label: 'write_file' })])).toBe(false);
+        expect(ranChangingTool(undefined)).toBe(false);
     });
 });
 

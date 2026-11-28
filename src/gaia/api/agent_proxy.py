@@ -42,6 +42,7 @@ from gaia.api import local_http
 from gaia.daemon.errors import DaemonError
 from gaia.daemon.timeouts import DEFAULT_AGENT_READ_TIMEOUT, agent_read_timeout
 from gaia.logger import get_logger
+from gaia.utils.background_tasks import spawn_background
 
 logger = get_logger(__name__)
 
@@ -130,27 +131,6 @@ _REQUEST_DROP = _HOP_BY_HOP | {
 # (decoded) body; date/server would duplicate uvicorn's own.
 _RESPONSE_DROP = _HOP_BY_HOP | {"content-length", "content-encoding", "date", "server"}
 
-# Strong refs to fire-and-forget cleanup tasks spawned from a cancelled response
-# generator (asyncio only weak-refs pending tasks).
-_background_tasks: "set[asyncio.Task]" = set()
-
-
-def _spawn_background(coro) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # Loop already gone (server teardown): cleanup cannot run, so the
-        # upstream response/client leak until GC — name it instead of hiding it.
-        logger.warning(
-            "gaia api proxy: no running loop for background cleanup task; "
-            "upstream connection will be reclaimed by GC"
-        )
-        coro.close()
-        return
-    task = loop.create_task(coro)
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-
 
 def daemon_stream_dropped_detail(agent_id: str) -> str:
     """Actionable detail for the proxy's synthetic terminal error frame — used
@@ -201,7 +181,7 @@ async def _acquire_daemon():
     started is a loud 503 — never a silent in-process fallback (#2178)."""
     from gaia.daemon.client import start_or_attach
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(None, start_or_attach)
     except DaemonError as e:
@@ -348,7 +328,7 @@ def build_agent_proxy_router() -> APIRouter:
                     # generator is being torn down and can no longer await
                     # safely, so cleanup moves to a detached task.
                     disconnected = True
-                    _spawn_background(_close())
+                    spawn_background(_close(), log=logger, owner="gaia api proxy")
                     raise
                 except httpx.HTTPError as exc:
                     # The daemon connection broke mid-stream — the daemon relay

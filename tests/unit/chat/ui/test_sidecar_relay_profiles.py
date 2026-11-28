@@ -321,6 +321,31 @@ class TestGaiaDispatch:
         assert "Readiness check reported" in message
         assert "Lemonade is not reachable" in message
 
+    def test_gaiacpps_start_gaia_remedy_is_reworded_inside_the_open_app(
+        self, monkeypatch
+    ):
+        """ "Open GAIA" is no remedy in the app; the hint names its Start button."""
+        from gaia.llm.surface_hints import (
+            AGENT_UI_SERVER_RESTART_HINT,
+            NATIVE_SERVER_START_HINT,
+        )
+
+        hint = (
+            "GAIA's model server isn't running (it last ran at "
+            f"http://localhost:1/api/v1). {NATIVE_SERVER_START_HINT}"
+        )
+        body = self._init_body(reachable=False, hint=hint)
+        self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        message = handler.events[0]["message"]
+        assert "GAIA's model server isn't running" in message
+        assert AGENT_UI_SERVER_RESTART_HINT in message
+        assert "gaia daemon start" not in message and "Open GAIA" not in message
+
     def test_a_missing_model_still_blocks(self, monkeypatch):
         """Not a false negative: the server answered and said the model is not
         there. Proceeding fails deeper with a worse message than the hint."""
@@ -1011,12 +1036,30 @@ class TestGaiaToolMapsMatchTheFlagship:
             agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
             agent._memory_store = object()
             agent._register_tools()
-            return set(agent._tools_registry)
+            # A skill test that imports a tools.py leaves its bare-named tools in
+            # the shared registry; those carry no label by design.
+            return {
+                name
+                for name, entry in agent._tools_registry.items()
+                if not self._defined_in_a_skill(entry)
+            }
         finally:
             if previous is None:
                 os.environ.pop("GAIA_MEMORY_DISABLED", None)
             else:
                 os.environ["GAIA_MEMORY_DISABLED"] = previous
+
+    @staticmethod
+    def _defined_in_a_skill(entry):
+        import inspect
+        from pathlib import Path
+
+        fn = inspect.unwrap(entry.get("function"))
+        code = getattr(fn, "__code__", None)
+        if code is None:
+            return False
+        parts = Path(code.co_filename).parts
+        return any(a == "hub" and b == "skills" for a, b in zip(parts, parts[1:]))
 
     def test_the_registry_was_actually_read(self, flagship_tools):
         assert len(flagship_tools) > 50, "registry looks empty — fixture broke"

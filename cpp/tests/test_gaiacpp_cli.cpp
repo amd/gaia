@@ -550,6 +550,31 @@ TEST_F(GaiacppCli, AHostedModelThroughLemonadeGetsTheProvidersWindowUnlessOneIsG
     }
 }
 
+TEST_F(GaiacppCli, TheReplyLimitFollowsTheLoadedWindowUnlessOneIsGiven) {
+    auto limitIn = [](const bench::MockLlmServer& mock) {
+        return json::parse(mock.receivedBodies().back()).value("max_tokens", 0);
+    };
+    const std::string at128k =
+        R"({"status":"ok","all_models_loaded":[{"model_name":"mock-model","recipe_options":{"ctx_size":131072}}]})";
+    {
+        bench::MockLlmServer mock;
+        mock.setHealth(at128k);
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        const gaia::ProcessResult r = run(mock, "");
+        ASSERT_EQ(r.exitCode, 0);
+        EXPECT_EQ(limitIn(mock), 32768) << "a quarter of the 128K window the model is loaded with";
+        EXPECT_EQ((r.stdout_output + r.stderr_output).find("more than half"), std::string::npos)
+            << "the limit fits the loaded window, so no warning: " << r.stdout_output << r.stderr_output;
+    }
+    {
+        bench::MockLlmServer mock;
+        mock.setHealth(at128k);
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "", " --max-tokens 5000").exitCode, 0);
+        EXPECT_EQ(limitIn(mock), 5000) << "a limit that was asked for is kept";
+    }
+}
+
 TEST_F(GaiacppCli, MaxHelpersMustBeAWholeNumber) {
     bench::MockLlmServer mock;
     const gaia::ProcessResult r = run(mock, "", " --max-helpers many");
@@ -690,3 +715,27 @@ TEST_F(GaiacppCli, MissingModelIsNotDownloadedWithoutAYes) {
 }
 
 }  // namespace
+
+// The terminal modes dropped everything before the last 40 messages, whatever the model's window.
+TEST_F(GaiacppCli, AStdioSessionKeepsItsFirstTurnPastFortyMessages) {
+    bench::MockLlmServer mock;
+    const int turns = 24;  // 48 messages
+    const fs::path script = dir_ / "turns.jsonl";
+    {
+        std::ofstream in(script);
+        for (int i = 1; i <= turns; ++i) {
+            in << json{{"gaia_query", "question-" + std::to_string(100 + i)}}.dump() << "\n";
+            mock.pushResponse(withUsage(finalAnswer("reply"), 100 * i, 0, 5));
+        }
+    }
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const std::string cmd = bin + " --stdio -m mock-model --base-url " + mock.baseUrl() +
+                            " --native-tools always --no-memory --no-skills --no-web < \"" + script.string() + "\"";
+    const auto r = gaia::ProcessRunner::run(cmd, 120000, (dir_ / "work").string(), isolated());
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), static_cast<size_t>(turns)) << r.stdout_output << r.stderr_output;
+    EXPECT_NE(bodies.back().find("question-101"), std::string::npos)
+        << "the first turn was dropped from a conversation of about 2.4K tokens";
+    EXPECT_EQ(r.stdout_output.find("no longer sent to the model"), std::string::npos) << "nothing was dropped";
+}

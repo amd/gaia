@@ -331,7 +331,8 @@ TEST_F(ModelCheck, UnreachableGaiaServerSaysHowToStartGaia) {
     } catch (const std::exception& e) {
         const std::string msg = e.what();
         EXPECT_NE(msg.find("GAIA's model server isn't running"), std::string::npos) << msg;
-        EXPECT_NE(msg.find("gaia daemon start"), std::string::npos) << msg;
+        // The Agent UI swaps this exact sentence for its own (NATIVE_SERVER_START_HINT in surface_hints.py).
+        EXPECT_NE(msg.find("Open GAIA, or run `gaia daemon start`, then try again."), std::string::npos) << msg;
     }
 }
 
@@ -426,6 +427,36 @@ TEST(ServerAnswersWithAnError, AnotherProgramOnGaiasLastPortIsNamed) {
     EXPECT_TRUE(has(e, "another program answered at its last address")) << e;
     EXPECT_TRUE(has(e, "HTTP 404: nope")) << e;
     EXPECT_TRUE(has(e, "gaia daemon start")) << e;
+}
+
+// The sidecar's key, on every platform: nothing local goes to another machine.
+TEST_F(GaiaSetup, ANamedServersKey) {
+    writeState(8123, "gaia-own-key", ownPid());
+    const GaiaServer own = runningGaiaServer();
+    const std::string remote = "http://models.example.com/api/v1";
+    const std::string local = "http://127.0.0.1:9000/api/v1";
+    const std::string gaias = "http://localhost:8123/api/v1";
+    ServerOrigin o;
+
+    EXPECT_EQ(keyForNamedServer(own, remote, "local-key", o), "") << "the local Lemonade key left this PC";
+    EXPECT_EQ(o.keyVar, "");
+    EXPECT_EQ(keyForNamedServer(own, remote, "", o), "") << "GAIA's own key left this PC";
+    EXPECT_FALSE(o.gaiaKey);
+    EXPECT_EQ(keyForNamedServer(own, local, "local-key", o), "local-key");
+    EXPECT_EQ(o.keyVar, "LEMONADE_API_KEY");
+    EXPECT_EQ(keyForNamedServer(own, gaias, "", o), "gaia-own-key");
+    EXPECT_TRUE(o.gaiaKey);
+    EXPECT_EQ(keyForNamedServer(own, local, "", o), "") << "GAIA's key is for GAIA's port only";
+
+    GaiaServer foreign = own;
+    foreign.envKeyForeign = true;
+    EXPECT_EQ(keyForNamedServer(foreign, gaias, "stale-export", o), "gaia-own-key");
+
+    env_.set("GAIA_API_KEY", "for-that-server");
+    EXPECT_EQ(keyForNamedServer(own, remote, "local-key", o), "for-that-server");
+    EXPECT_EQ(o.keyVar, "GAIA_API_KEY");
+    EXPECT_FALSE(o.gaiaKey);
+    EXPECT_EQ(keyForNamedServer(own, local, "local-key", o), "for-that-server") << "the key the user named wins";
 }
 
 TEST_F(GaiaSetup, TheKeySourceIsNamedTheWayTheKeyIsChosen) {

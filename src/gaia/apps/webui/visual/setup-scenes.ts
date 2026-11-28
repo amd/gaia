@@ -13,7 +13,8 @@ const entry = (over: Record<string, unknown> & { id: string }) => ({
     roles: ['chat'], purpose: 'Answers your chats', if_skipped: null, recipe: 'llamacpp', size_gb: 1, full_size_gb: 1,
     partial: false, partial_gb: 0, downloaded: false, in_lemonade: true, recommended: false, planned: false,
     gaia_model: true, selected: false, skipped: false, chat_choice: true, support: 'verified', reads_images: false,
-    feature_tier: 'full', source: 'huggingface.co/amd', fits: true, need_gb: 2, capacity_gb: 16, fit_reason: null, ...over,
+    feature_tier: 'full', source: 'huggingface.co/amd', fits: true, need_gb: 2, capacity_gb: 16, fit_reason: null,
+    setup_offer: over.fits !== false, ...over,
 });
 
 const GEMMA_ID = 'Gemma-4-E4B-it-GGUF';
@@ -99,7 +100,7 @@ const PLAN_NO_VISION = { ...PLAN, chat_model: { id: MINE.id, user_set: true, siz
 const PLAN_TOO_BIG = {
     ...PLAN,
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
-    catalog: CATALOG.map((e) => (e.id === QWEN_ID ? { ...e, planned: true, selected: true } : e)),
+    catalog: CATALOG.map((e) => (e.id === QWEN_ID ? { ...e, planned: true, selected: true, setup_offer: true } : e)),
 };
 // Lemonade sees the NPU, but FastFlowLM can't run on this PC (#6632).
 const NPU_UNUSABLE = { fits: false, fit_code: 'npu', fit_reason: 'needs an AMD Ryzen AI NPU and its driver' };
@@ -108,7 +109,7 @@ const PLAN_LONG = {
     ...PLAN,
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
     catalog: CATALOG.map((e) => (e.id === QWEN_ID
-        ? { ...e, name: LONG_NAME, planned: true, selected: true, fits: true, need_gb: 14.2, purpose: 'Answers your chats, reads your images and works through long documents', source: 'huggingface.co/amd/a-repository-with-a-very-long-name-that-keeps-on-going/resolve/main' }
+        ? { ...e, name: LONG_NAME, planned: true, selected: true, fits: true, setup_offer: true, need_gb: 14.2, purpose: 'Answers your chats, reads your images and works through long documents', source: 'huggingface.co/amd/a-repository-with-a-very-long-name-that-keeps-on-going/resolve/main' }
         : e)),
 };
 const PLAN_DONE = { ...PLAN, catalog: CATALOG.map((e) => (e.gaia_model && !e.support ? e : { ...e, downloaded: true, size_gb: 0 })) };
@@ -205,6 +206,17 @@ const RUN_AGENT_FAILED = {
         test('server', 'passed', { seconds: 1 }),
         test('chat', 'passed', { subject: NPU.id, seconds: 9 }),
         test('agent', 'failed', { subject: NPU.id, kind: 'agent', error: NPU_CHAT_FAILED, seconds: 31 }),
+    ],
+};
+// The model passed; the real chat ran on the chosen gaiacpp, which could not reach the model server.
+const NATIVE_SAID = 'the model server at http://127.0.0.1:13305/api/v1 did not answer (connection refused).';
+const NATIVE_CHAT_FAILED = `The test chat runs on gaiacpp, the beta agent, and it didn't answer: ${NATIVE_SAID.slice(0, -1)}. Qwen3.6 35B A3B passed its own test, so the model isn't the problem. Finish setup on the Python agent, or test again. The setup report has the details.`;
+const RUN_NATIVE_AGENT_FAILED = {
+    ...RUN, state: 'failed', error: NATIVE_CHAT_FAILED, models: DONE_ROWS,
+    tests: [
+        test('server', 'passed', { seconds: 1 }),
+        test('chat', 'passed', { subject: QWEN_ID, seconds: 21 }),
+        test('agent', 'failed', { subject: QWEN_ID, kind: 'agent', agent: 'gaiacpp', agent_error: NATIVE_SAID, error: NATIVE_CHAT_FAILED, seconds: 4 }),
     ],
 };
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
@@ -428,6 +440,7 @@ export const SETUP_SCENES: SetupScene[] = [
             // This PC and the cloud are two cards of the same size, not a card and a link.
             const [local, cloud] = await page.locator('.setup-where-card').evaluateAll((cards) => cards.map((c) => c.getBoundingClientRect().width));
             expect(Math.abs(local - cloud)).toBeLessThan(1);
+            await expect(page.locator('.setup-agent-line')).toBeVisible();
             await page.locator('.setup-disclosure summary').click();
             await expect(page.locator('.setup-contents')).toBeVisible();
         },
@@ -555,9 +568,32 @@ export const SETUP_SCENES: SetupScene[] = [
         name: 'models',
         reach: async (page) => {
             await toModels(page);
-            await expect(page.locator('.mc-chip.is-untested')).toBeVisible();
-            await expect(page.locator('.mc-warn.is-big').first()).toBeVisible();
+            // A model too big for this PC is not offered; untested ones wait behind a closed disclosure.
+            await expect(page.locator('.mc-job .mc-name', { hasText: 'Qwen3.6' })).toHaveCount(0);
+            await expect(page.locator('.mc-job details.mc-more')).not.toHaveAttribute('open');
+            await expect(page.locator('.mc-chip.is-untested')).toBeHidden();
             await expect(page.locator('.mc-row.is-off')).toBeVisible();
+            await expect(page.getByRole('checkbox', { name: /Keep trying if the connection drops|واصل المحاولة/ })).toBeChecked();
+        },
+    },
+    {
+        name: 'models-untested-open',
+        reach: async (page) => {
+            await toModels(page);
+            const more = page.locator('.mc-job details.mc-more');
+            await more.locator('summary').focus();
+            await page.keyboard.press('Enter');
+            await expect(more).toHaveAttribute('open');
+            await expect(more.locator('.mc-chip.is-untested')).toBeVisible();
+        },
+    },
+    {
+        // The user's saved model stays listed, with why it may not run, though it doesn't fit.
+        name: 'models-too-big-kept',
+        answers: { plan: PLAN_TOO_BIG },
+        reach: async (page) => {
+            await toModels(page);
+            await expect(page.locator('.mc-warn.is-big').first()).toBeVisible();
         },
     },
     ...[false, true].flatMap((noGaiacpp) => [false, true].map((expanded): SetupScene => ({
@@ -584,6 +620,28 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     }))),
     {
+        // The plan's agent line opens Customize with the agent picker in view and focused.
+        name: 'models-from-agent-line',
+        reach: async (page) => {
+            await toPlan(page);
+            await page.locator('.setup-agent-line .link-btn').click();
+            const title = page.locator('#setup-agent-title');
+            await expect(title).toBeFocused();
+            await expect(title).toBeInViewport();
+        },
+    },
+    {
+        name: 'plan-agent-unavailable',
+        answers: { agent: { gaiacpp: 'unavailable' } },
+        reach: async (page) => {
+            const listed = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/agent-programs');
+            await toPlan(page);
+            await listed;
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+            await expect(page.locator('.setup-agent-line')).toHaveCount(0);
+        },
+    },
+    {
         name: 'models-agent-download-picked',
         answers: { agent: { gaiacpp: 'downloadable' } },
         reach: async (page) => {
@@ -594,6 +652,19 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(agent.locator('.agent-choice-off.is-quiet')).toBeVisible();
             await agent.locator('.agent-choice-more').click();
             await expectSnugTags(agent);
+            await agent.scrollIntoViewIfNeeded();
+        },
+    },
+    {
+        // An older installer's gaiacpp under a newer app: flagged on Customize, with Update, and still pickable.
+        name: 'models-agent-outdated',
+        answers: { agent: { gaiacpp: 'outdated' } },
+        reach: async (page) => {
+            await toModels(page);
+            const agent = page.locator('.agent-choice');
+            await expect(agent.locator('.agent-choice-why')).toBeVisible();
+            await expect(agent.locator('.agent-choice-download')).toBeVisible();
+            await expect(agent.locator('[role="radio"]').nth(1)).not.toHaveAttribute('aria-disabled', 'true');
             await agent.scrollIntoViewIfNeeded();
         },
     },
@@ -619,6 +690,7 @@ export const SETUP_SCENES: SetupScene[] = [
         answers: { plan: PLAN_NO_VISION },
         reach: async (page) => {
             await toModels(page);
+            await expect(page.locator('.mc-job details.mc-more')).toHaveAttribute('open');
             await expect(page.locator('p.mc-warn')).toBeVisible();
         },
     },
@@ -816,6 +888,12 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.setup-result.is-failed .setup-result-model')).toBeVisible(),
     },
     {
+        // The chat failed on gaiacpp, not on the model: the way on is the Python agent.
+        name: 'test-failed-agent-gaiacpp',
+        answers: { status: RUN_NATIVE_AGENT_FAILED },
+        reach: (page) => expect(page.locator('.setup-result-error-said')).toBeVisible(),
+    },
+    {
         name: 'test-long',
         answers: { status: RUN_TEST_LONG, plan: PLAN_LONG },
         reach: (page) => expect(page.locator('.setup-result-error')).toBeVisible(),
@@ -840,7 +918,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'models-agent-outdated', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-failed-agent-gaiacpp', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

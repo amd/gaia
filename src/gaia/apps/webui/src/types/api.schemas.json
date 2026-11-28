@@ -2515,6 +2515,18 @@
         "title": "Skipped",
         "type": "integer"
       },
+      "skipped_files": {
+        "items": {
+          "$ref": "#/components/schemas/SkippedFile"
+        },
+        "title": "Skipped Files",
+        "type": "array"
+      },
+      "skipped_files_truncated": {
+        "default": false,
+        "title": "Skipped Files Truncated",
+        "type": "boolean"
+      },
       "skipped_images": {
         "default": 0,
         "title": "Skipped Images",
@@ -2696,6 +2708,17 @@
         "default": 0,
         "title": "Tokens Per Second",
         "type": "number"
+      },
+      "waiting_seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Waiting Seconds"
       }
     },
     "title": "InferenceStatsResponse",
@@ -5441,6 +5464,29 @@
       "model_id"
     ],
     "title": "SkipModelRequest",
+    "type": "object"
+  },
+  "SkippedFile": {
+    "description": "One file left out of folder indexing, with the reason it was left out.",
+    "properties": {
+      "file": {
+        "title": "File",
+        "type": "string"
+      },
+      "reason": {
+        "enum": [
+          "unsupported_type",
+          "credential_file"
+        ],
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "file",
+      "reason"
+    ],
+    "title": "SkippedFile",
     "type": "object"
   },
   "SourceInfo": {

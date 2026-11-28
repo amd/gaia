@@ -9,6 +9,8 @@
 // nested drift (an audit field, a new language) fails here, not on the hub.
 
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import Ajv from "ajv";
 import addFormats from "ajv-formats";
@@ -44,8 +46,10 @@ import {
 
 type Env = ReturnType<typeof makeEnv>;
 
+const SCHEMAS = join(dirname(fileURLToPath(import.meta.url)), "..", "schemas");
+
 function loadSchema(name: string): object {
-  return JSON.parse(readFileSync(new URL(`../schemas/${name}`, import.meta.url), "utf8"));
+  return JSON.parse(readFileSync(join(SCHEMAS, name), "utf8"));
 }
 
 const ajv = new Ajv({ allErrors: true, strict: true });

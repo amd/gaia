@@ -6,10 +6,32 @@
 import { describe, expect, it } from 'vitest';
 import { stripIsolates } from '../../i18n/registry';
 import { tEn, translator } from '../../i18n/useT';
-import { localizeLiveStatus } from '../liveStatus';
+import { localizeContextReason, localizeLiveStatus } from '../liveStatus';
 import { SEND_WAITING_NOTICE_TEXT } from '../../services/api';
 
 const ar = (label: string) => stripIsolates(localizeLiveStatus(translator('ar'), label));
+
+describe('localizeContextReason', () => {
+    const NATIVE = "Not available yet: gaiacpp doesn't report what fills its context.";
+
+    it('translates gaiacpp\u2019s reason into the agent\u2019s name, in English and Arabic', () => {
+        expect(localizeContextReason(tEn, NATIVE)).toBe("Not available yet: Fast and light doesn't report what fills its context.");
+        expect(stripIsolates(localizeContextReason(translator('ar'), NATIVE))).toContain('غير متاح بعد: «سريع وخفيف» لا يذكر ما يملأ سياقه.');
+    });
+
+    it('shows a reason it does not know as the backend sent it', () => {
+        const other = 'Measured once GAIA has answered in this chat.';
+        expect(localizeContextReason(translator('ar'), other)).toBe(other);
+    });
+});
+
+describe('gaiacpp\u2019s undo line', () => {
+    it('reads in the chosen language and names the agent that can undo', () => {
+        const sent = "Undo may not work for this turn: gaiacpp doesn't record file changes yet.";
+        expect(localizeLiveStatus(tEn, sent)).toBe("Undo isn't available on Fast and light: it doesn't record file changes yet. Full-featured does.");
+        expect(stripIsolates(localizeLiveStatus(translator('ar'), sent))).toContain('التراجع غير متاح مع «سريع وخفيف»');
+    });
+});
 
 describe('localizeLiveStatus', () => {
     it('leaves every known line unchanged in English', () => {
@@ -26,6 +48,8 @@ describe('localizeLiveStatus', () => {
             'The model server stopped. GAIA is restarting it…',
             'Starting the model server…',
             'Reading page 4 of 12…',
+            'Waiting for the GPU — 3rd in line',
+            'Waiting for the GPU — 11th in line',
         ]) {
             expect(localizeLiveStatus(tEn, label)).toBe(label);
         }
@@ -56,6 +80,10 @@ describe('localizeLiveStatus', () => {
         expect(ar('Reading page 4 of 12…')).toContain('4');
         expect(ar('Reading page 4 of 12…')).toContain('12');
         expect(ar('Reading page 4 of 12…')).not.toBe('Reading page 4 of 12…');
+    });
+
+    it('translates the GPU queue line for Arabic, with a plain number', () => {
+        expect(ar('Waiting for the GPU — 3rd in line')).toBe('بانتظار معالج الرسومات — رقم 3 في الدور (Waiting for the GPU — 3rd in line)');
     });
 
     it('says the speech model download in the chosen language, with its percent and size', () => {

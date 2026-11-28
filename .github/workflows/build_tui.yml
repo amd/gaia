@@ -43,6 +43,8 @@ on:
       - 'src/gaia/apps/webui/**'
       - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
       - 'hub/agents/gaia/python/packaging/check_glibc.py'
+      # installer/core/freeze.py takes its exclusion lists from the agent's freeze.
+      - 'hub/agents/gaia/python/packaging/freeze.py'
       # The installer jobs it calls read the flagship's pins and version.
       - 'hub/agents/gaia/npm/binaries.lock.json'
       - 'hub/agents/gaia/python/gaia-agent.yaml'
@@ -88,6 +90,8 @@ on:
       - 'src/gaia/apps/webui/**'
       - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
       - 'hub/agents/gaia/python/packaging/check_glibc.py'
+      # installer/core/freeze.py takes its exclusion lists from the agent's freeze.
+      - 'hub/agents/gaia/python/packaging/freeze.py'
       # The installer jobs it calls read the flagship's pins and version.
       - 'hub/agents/gaia/npm/binaries.lock.json'
       - 'hub/agents/gaia/python/gaia-agent.yaml'

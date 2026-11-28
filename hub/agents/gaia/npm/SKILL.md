@@ -134,7 +134,7 @@ for the version you have.
 ## 5. Prerequisites — the `gaia` CLI and a local Lemonade server
 
 The terminal UI starts the GAIA daemon from the **Python `gaia` CLI**, which this
-package does not install. It must be on `PATH` and be **0.26.0 or newer**: without
+package does not install. It must be on `PATH` and be **0.27.0 or newer**: without
 it the daemon never comes up, and an older one starts but cannot run this agent
 (see [Gotchas](#gotchas--read-before-debugging)). Install it with
 `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -288,7 +288,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
 | `max_steps` | no | ≥ 1. Defaults to **1000** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
-| `time_limit`, `disallowed_tools`, `no_web`, `no_skills`, `skip_permissions`, `full_access` | no | Contract ≥ 2.32. The `gaia -p` flags, for a run with **no** `session_id` (with one, a **422**), so they never outlive the run. `time_limit` is seconds (≥ 1); `final.time_limit_reached` says it stopped the turn. `disallowed_tools` (globs), `no_web` and `no_skills` withhold tools; a glob that matches nothing is a **400**, and `final.withheld_tools` lists them. `skip_permissions` runs gated tools without asking; `full_access` also lifts the shell guardrails. Both need a caller token (**403** without one). A chat's full access is the bypass route (§8). The native harness ignores these fields, so check `/version` first. |
+| `time_limit`, `disallowed_tools`, `no_web`, `no_skills`, `skip_permissions`, `full_access` | no | Contract ≥ 2.32. The `gaia -p` flags, for a run with **no** `session_id` (with one, a **422**), so they never outlive the run. `time_limit` is seconds (≥ 1); `final.time_limit_reached` says it stopped the turn. `disallowed_tools` (globs), `no_web` and `no_skills` withhold tools; a glob that matches nothing is a **400**, and `final.withheld_tools` lists them. `skip_permissions` runs gated tools without asking; `full_access` also lifts the shell guardrails. Both need a caller token (**403** without one). A chat's full access is the bypass route (§8). The native harness (`gaiacpp`) reports an older contract but applies them, listing them on `/version` as `capabilities.one_shot_fields`; there an unmatched glob ends the stream with an `error` of `status` 400. Check `/version` first: a binary that neither speaks 2.32 nor lists the field would run without it. |
 
 ```ts
 import { randomUUID } from "node:crypto";

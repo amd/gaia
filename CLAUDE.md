@@ -757,6 +757,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `dictation` | `gaia.agents.tools.dictation_tools.DictationToolsMixin` | Turn a document into an MP3 or WAV with the local Kokoro voice |
 | `audio_generation` | `gaia.agents.tools.audio_generation_tools.AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
+| `user_input` | `gaia.agents.tools.user_input_tools.UserInputToolsMixin` | `request_user_input`: ask the user a question mid-turn; silence is never taken as an answer |
 | `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
@@ -802,7 +803,7 @@ stopped existing, and it was found only when a user tried to follow it.
 
 ## CLI Commands
 
-All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -h` for the authoritative list.
+The parser is built in [`src/gaia/cli.py`](src/gaia/cli.py); some command groups register from their own module through `add_subparser` / `handle` (`knowledge_cli.py`, `cache_cli.py`, `connectors/cli.py`, `project_trust_cli.py`, `llm/custom_models_cli.py`) or `add_parser` / `run` (`engineering/cli.py`). Run `gaia -h` for the authoritative list.
 
 **Agents & chat:**
 - `gaia chat` - Interactive chat with RAG
@@ -836,6 +837,8 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia trust {list|add|decline|forget}` (also `gaia project trust`) - Saved folder trust decisions
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
+- `gaia model {check|add|remove|list}` - Add a chat model from a Hugging Face link
+- `gaia engineering {setup|connect|share|status|revoke|approve-code|open|append}` - Developer-only bridge to a coding app
 - `gaia kill` - Kill stray GAIA / Lemonade processes
 - `gaia test` - Smoke tests
 - `gaia youtube --download-transcript <url>` - YouTube utilities (transcript download)

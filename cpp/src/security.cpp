@@ -151,7 +151,7 @@ ToolConfirmCallback makeStdinConfirmCallback() {
                   << "  Choice: " << std::flush;
 
         std::string input;
-        if (!std::getline(std::cin, input)) return ToolConfirmResult::DENY;
+        if (!std::getline(std::cin, input)) return ToolConfirmResult::UNATTENDED;
         if (input == "1" || input == "o" || input == "O") return ToolConfirmResult::ALLOW_ONCE;
         if (input == "2" || input == "a" || input == "A") return ToolConfirmResult::ALWAYS_ALLOW;
         return ToolConfirmResult::DENY;  // 3, d, D, or anything else
@@ -386,10 +386,47 @@ bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
 
 // internetRefusal and webFetchRefusal are in internet_refusal.cpp.
 
+namespace {
+std::string oneCommandScope(const std::string& cmd);
+
+std::string trimmed(const std::string& s) {
+    const size_t start = s.find_first_not_of(" \t\r\n");
+    return start == std::string::npos ? "" : s.substr(start, s.find_last_not_of(" \t\r\n") - start + 1);
+}
+}  // namespace
+
 std::string shellCommandScope(const std::string& command) {
-    const size_t start = command.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) return "exact:";
-    const std::string cmd = command.substr(start, command.find_last_not_of(" \t\r\n") - start + 1);
+    const std::string cmd = trimmed(command);
+    if (cmd.empty()) return "exact:";
+    // `2>&1` as a word of its own only joins the two outputs; it writes nothing.
+    std::string plain;
+    {
+        std::istringstream words(cmd);
+        bool merged = false;
+        for (std::string w; words >> w;) {
+            if (w == "2>&1") merged = true;
+            else plain += (plain.empty() ? "" : " ") + w;
+        }
+        if (!merged) plain = cmd;  // spacing as written
+    }
+    // `cd folder && one command`: cd alone needs no approval, so the grant is the command's.
+    std::string scope;
+    const size_t join = plain.find("&&");
+    if (plain.rfind("cd ", 0) == 0 && join != std::string::npos) {
+        if (oneCommandScope(trimmed(plain.substr(0, join))) == "cmd:cd") {
+            scope = oneCommandScope(trimmed(plain.substr(join + 2)));
+        }
+    } else {
+        scope = oneCommandScope(plain);
+    }
+    // Approved only as written: as the user saw it, `2>&1` and all.
+    return scope.rfind("cmd:", 0) == 0 ? scope : "exact:" + cmd;
+}
+
+namespace {
+// The grant one command with no `cd` before it falls under.
+std::string oneCommandScope(const std::string& cmd) {
+    if (cmd.empty()) return "exact:";
     // Anything that runs a second thing or hides a word is approved only as written.
     // cmd.exe expands %VAR% and !VAR! and drops ^ before the program sees its words.
     for (const char* op : {";", "&", "|", "`", "$", ">", "<", "\n", "(", "\\", "\"", "'", "%", "^", "!"}) {
@@ -410,7 +447,13 @@ std::string shellCommandScope(const std::string& command) {
     static const std::set<std::string> plain = {
         "ls", "dir", "cat", "type", "head", "tail", "wc", "grep", "rg", "pwd", "echo", "cd", "which",
         "stat", "du", "df", "tree", "diff", "sort", "uniq", "mkdir", "md", "touch", "cp", "copy",
-        "mv", "move", "ren", "rm", "del", "rmdir", "chmod", "pytest", "ctest", "cmake", "ninja", "tsc"};
+        "mv", "move", "ren", "rm", "del", "rmdir", "chmod", "pytest", "ctest", "cmake", "ninja", "tsc",
+        "gcc", "g++", "cc", "c++", "clang", "clang++"};
+    // They build what they are given; these flags make them run or load something else.
+    static const std::set<std::string> compilers = {"gcc", "g++", "cc", "c++", "clang", "clang++"};
+    static const std::vector<std::string> compilerRuns = {
+        "-wrapper", "-fplugin", "-specs", "--specs", "-B", "-Wl,", "-Wa,", "-Wp,", "-Xlinker", "-Xclang",
+        "-Xassembler", "-Xpreprocessor", "-fuse-ld", "--config", "-load", "-fpass-plugin", "--ld-path"};
     if (withSubcommand.count(program)) {
         // A flag before the subcommand (git -C elsewhere ...) changes what runs.
         if (!(words >> sub) || sub[0] == '-') return "exact:" + cmd;
@@ -431,6 +474,8 @@ std::string shellCommandScope(const std::string& command) {
                 const size_t next = dots + 2;
                 if (starts && (next == w.size() || w[next] == '/' || w[next] == '\\')) return "exact:" + cmd;
             }
+            // A response file holds more flags; -o../x climbs without a path of its own.
+            if (compilers.count(program) && (w[0] == '@' || w.find("..") != std::string::npos)) return "exact:" + cmd;
             if (w.size() < 2) continue;
 #ifdef _WIN32
             if (program == "sort" && w[0] == '/' && (w[1] == 'o' || w[1] == 'O')) return "exact:" + cmd;
@@ -452,6 +497,9 @@ std::string shellCommandScope(const std::string& command) {
                 risky = (!longOpt && w.find('o') != std::string::npos) || abbreviates("--output");
             } else if (program == "cmake") {
                 risky = !longOpt && (w[1] == 'P' || w[1] == 'E' || w[1] == 'C');
+            } else if (compilers.count(program)) {
+                risky = std::any_of(compilerRuns.begin(), compilerRuns.end(),
+                                    [&](const std::string& flag) { return w.rfind(flag, 0) == 0; });
             }
             if (risky) return "exact:" + cmd;
         }
@@ -460,5 +508,6 @@ std::string shellCommandScope(const std::string& command) {
     // Interpreters, wrappers (env, xargs, sudo), a path to a program, VAR=x cmd.
     return "exact:" + cmd;
 }
+}  // namespace
 
 } // namespace gaia

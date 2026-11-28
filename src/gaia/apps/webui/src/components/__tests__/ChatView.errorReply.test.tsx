@@ -47,10 +47,12 @@ beforeEach(() => {
     server = [];
     nextId = 100;
     persists = true;
+    useChatStore.setState({ backendStalled: false });
     mockedApi.getMessages.mockImplementation(async () => ({ messages: [...server], total: server.length }));
     mockedApi.getMessageCount.mockImplementation(async () => server.length);
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
     mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
+    mockedApi.getStartScreen.mockResolvedValue({ agent_problem: null } as never);
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     mockedApi.cancelStream.mockResolvedValue(undefined as never);
@@ -268,6 +270,11 @@ describe('Try again on a failed turn', () => {
         expect(last()?.failed).toBe(false);
         // The failed-turn button; the answer's own retry icon shares its name.
         expect(document.querySelector('.msg-try-again')).toBeNull();
+        // Still an error, not an answer with an answer time, and GAIA is flagged as stuck (#9015).
+        expect(last()?.stalled).toBe(true);
+        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+        expect(document.body).not.toHaveTextContent(/Answered in/);
+        expect(useChatStore.getState().backendStalled).toBe(true);
     });
 
     it('sends once when Try again is clicked twice', async () => {

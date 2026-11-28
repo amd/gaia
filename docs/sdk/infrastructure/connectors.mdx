@@ -9,12 +9,13 @@ description: "OAuth + MCP server integrations for GAIA agents — per-agent gran
 kinds of connectors:
 
 - **OAuth (type `oauth_pkce`)** — user-authorized flows (Google, etc.).
-  Stores refresh tokens in the OS keyring.
+  Stores refresh tokens in `~/.gaia/connectors/vault.enc`, encrypted under one
+  master key in the OS keyring.
 - **MCP server (type `mcp_server`)** — API-key-based connections to
-  third-party MCP servers (GitHub, Brave Search, etc.). Stores keys in
+  third-party MCP servers (GitHub, Brave Search, etc.). Stores keys directly in
   the OS keyring as `$keyring` references.
 
-Three caller surfaces share the same keyring and grants file:
+Three caller surfaces share the same vault, keyring, and grants file:
 **SDK** (direct Python import), **CLI** (`gaia connectors …`), and
 **Agent UI** (Settings → Connectors page).
 
@@ -326,10 +327,10 @@ gaia connectors grants revoke google installed:gaia
 # Per-agent activations — gate which agents see this MCP server's tools.
 # Activations apply to mcp_server connectors only; OAuth connectors are
 # rejected with exit 3 (use per-scope grants above instead).
-gaia connectors activations activate mcp-github builtin:chat \
+gaia connectors activations activate mcp-github installed:gaia \
     --scopes use   # --scopes is only consulted when no prior grant exists
 gaia connectors activations list mcp-github
-gaia connectors activations deactivate mcp-github builtin:chat
+gaia connectors activations deactivate mcp-github installed:gaia
 
 # Disconnect
 gaia connectors disconnect google
@@ -478,7 +479,37 @@ grant exists for (connector_id, agent_id)  AND  is_agent_active(...)
 
 Activations default to **inactive** when absent — least-privilege opt-in.
 The ledger stores explicit `true`/`false` entries; an unknown pair returns
-`is_agent_active == False`.
+`is_agent_active == False`. Deactivating stores `false` rather than removing
+the entry.
+
+### Servers you added yourself
+
+An MCP server you wrote into `mcp_servers.json` yourself, whose name is not a
+catalog connector id, is **on for the flagship (`installed:gaia`) until you
+turn it off**. Writing the entry was your opt-in, so a server set up before
+an upgrade keeps working, and a project-local `./mcp_servers.json` works
+without a second step. Other agents still need an explicit activation.
+
+| | Catalog connector (`mcp-github`, …) | Server you added |
+|---|---|---|
+| Flagship sees its tools | After you activate it | Until you deactivate it |
+| Other agents see its tools | After you activate it | After you activate it |
+| Grant needed | Yes (auto-created on activate) | No — GAIA holds no credential for it |
+| Setup form and Disconnect | Settings → Connectors | Edit `mcp_servers.json` |
+
+A server in the global `mcp_servers.json` is listed beside the catalog in
+Settings → Connectors, `gaia connectors list` (its row has `"custom": true`)
+and the TUI's `/connectors`, and is switched with the same calls:
+
+```bash
+gaia connectors activations deactivate my-server installed:gaia
+gaia connectors activations activate my-server installed:gaia
+```
+
+`is_mcp_server_active(server_id, agent_id)` in `gaia.connectors.activations`
+is the check agents use; it applies this default on top of the ledger.
+A server only in a project-local file has no off switch here: set
+`"disabled": true` on its entry instead.
 
 The flagship checks activation as `installed:gaia` in every app: the Agent
 UI, the terminal UI and `gaia -p`. Turning a connector on or off, or
@@ -511,16 +542,16 @@ from gaia.connectors import activate, deactivate
 # Activate (auto-grants if no prior grant exists). mcp-github is the
 # catalog id for the GitHub MCP server; activations only accept
 # mcp_server connectors.
-activate("mcp-github", "builtin:chat", scopes_for_grant=["use"])
+activate("mcp-github", "installed:gaia", scopes_for_grant=["use"])
 
 # Deactivate (preserves grant — re-activate is one click)
-deactivate("mcp-github", "builtin:chat")
+deactivate("mcp-github", "installed:gaia")
 ```
 
 ```bash
-gaia connectors activations activate mcp-github builtin:chat --scopes use
+gaia connectors activations activate mcp-github installed:gaia --scopes use
 gaia connectors activations list mcp-github
-gaia connectors activations deactivate mcp-github builtin:chat
+gaia connectors activations deactivate mcp-github installed:gaia
 ```
 
 ### Which agents appear in the "Active for" panel
@@ -531,7 +562,7 @@ For an `mcp_server` connector the panel lists agents from **two** sources:
 2. Agents that set `CONSUMES_MCP_SERVERS = True` — they load MCP servers
    dynamically at runtime (from `~/.gaia/mcp_servers.json`) and gate the
    tools through this same activation ledger, so they can use **any** MCP
-   connector once activated. `builtin:chat` is the canonical example.
+   connector once activated. `installed:gaia` is the canonical example.
 
 Category (2) agents declare no scopes of their own, so one-click activation
 auto-grants the canonical `use` scope. The registry surfaces the flag on

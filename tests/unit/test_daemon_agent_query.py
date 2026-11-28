@@ -144,3 +144,66 @@ def test_run_scoped_flags_are_refused_with_a_session(monkeypatch):
     with pytest.raises(ValueError, match="one run only"):
         agent_query.run_query("gaia", "q", session_id="chat-1", full_access=True)
     assert sent == []
+
+
+def _stub_version_body(monkeypatch, body):
+    sent = _stub_daemon(monkeypatch, "2.27")
+
+    class _Body(_Version):
+        def json(self):
+            return body
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Body(""))
+    return sent
+
+
+def test_gaiacpp_listing_the_fields_gets_them(monkeypatch):
+    # gaiacpp's /version: an older contract, the one-shot fields by capability.
+    sent = _stub_version_body(
+        monkeypatch,
+        {
+            "apiVersion": "2.27",
+            "capabilities": {"one_shot_fields": list(agent_query.RUN_SCOPED_FLAGS)},
+        },
+    )
+    agent_query.run_query(
+        "gaia",
+        "q",
+        time_limit=60,
+        skip_permissions=True,
+        disallowed_tools=["bash_*"],
+        no_web=True,
+    )
+    [payload] = sent
+    assert payload["time_limit"] == 60
+    assert payload["skip_permissions"] is True
+    assert payload["disallowed_tools"] == ["bash_*"]
+    assert payload["no_web"] is True
+
+
+def test_gaiacpp_missing_a_field_is_refused_naming_only_that_flag(monkeypatch):
+    sent = _stub_version_body(
+        monkeypatch,
+        {"apiVersion": "2.27", "capabilities": {"one_shot_fields": ["time_limit"]}},
+    )
+    with pytest.raises(DaemonError) as caught:
+        agent_query.run_query("gaia", "q", time_limit=60, full_access=True)
+    message = str(caught.value)
+    assert "--full-access" in message
+    assert "--time-limit" not in message
+    # A switch that takes effect for the next run: the saved choice alone
+    # leaves the running agent where it is.
+    assert "gaia daemon stop-agent gaia" in message
+    assert sent == []
+
+
+@pytest.mark.parametrize(
+    "capabilities", [None, [], "time_limit", {"one_shot_fields": "time_limit"}]
+)
+def test_a_malformed_capability_list_is_not_read_as_support(monkeypatch, capabilities):
+    sent = _stub_version_body(
+        monkeypatch, {"apiVersion": "2.27", "capabilities": capabilities}
+    )
+    with pytest.raises(DaemonError, match="--time-limit"):
+        agent_query.run_query("gaia", "q", time_limit=60)
+    assert sent == []

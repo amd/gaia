@@ -32,6 +32,7 @@ import {
 } from "./evalstats";
 import { activity, isExternal, downloadPeriods, downloadWindows, growthPeriods, growthWindow, newcomerRetention, per30, RETURN_DAYS, type DownloadDay } from "./growth";
 import { pendingContributors } from "./pending";
+import { contributorFunnel, firstResponses, outsideConcentration, responsePeriods, responseWindow, type NumberedItem, type ResponseRow } from "./community";
 import { ciStats, dailyDeltas, releaseDownloads, type AssetRow, type ReleaseRow, type RunRow } from "./stats";
 
 const json = (body: unknown, status = 200): Response =>
@@ -152,7 +153,8 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     const alias = new Map(groups.flatMap((g) => g.map((l) => [l, g[0]!] as [string, string])));
     const stars = await all<DailyRow>("SELECT day, n FROM star_daily ORDER BY day");
     const forks = await all<DailyRow>("SELECT day, n FROM fork_daily ORDER BY day");
-    const items = await all<ItemRow>("SELECT kind, created_at, closed_at, merged_at, assoc, author FROM items WHERE kind = 'pr'");
+    const allItems = await all<NumberedItem>("SELECT number, kind, created_at, closed_at, merged_at, assoc, author FROM items");
+    const items = allItems.filter((i) => i.kind === "pr");
     const commits = await all<CommitRow>("SELECT day, at, author FROM commits");
     const shift = (day: string, n: number) => new Date(Date.parse(day) + n * 86_400_000).toISOString().slice(0, 10);
     // Whole days through the last one fully collected: a collection on day D covers the days before it.
@@ -187,6 +189,10 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     for (const p of dailyDeltas(hist).points) at(p.day).installs = p.install;
     for (const r of pkgs) if (r.source === "pypi" || r.source === "npm") at(r.day)[r.source] = (at(r.day)[r.source] ?? 0) + r.downloads;
     const dlDays = [...dl.values()].sort((a, b) => a.day.localeCompare(b.day));
+    // Comments arrive from their own source; until it has run once, nobody would look answered except by a close.
+    const commented = (await collectedAt("comments")) != null;
+    const until = new Date((commented ? await collectedAt("comments", "issues") : asOf) ?? Date.now()).toISOString();
+    const answered = commented ? firstResponses(allItems, await all<ResponseRow>("SELECT number, login, assoc, at FROM item_responses"), maintainers, alias) : null;
     return json({
       from,
       days: span,
@@ -198,6 +204,13 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
       periods: growthPeriods(stars, forks, items, commits, maintainers, gran, today, allTime ? from : baseFrom, alias),
       downloads: allTime ? null : downloadWindows(dlDays, span, end, firsts),
       downloadPeriods: downloadPeriods(dlDays, gran, allTime ? from : baseFrom, today),
+      responses: answered && {
+        current: responseWindow(allItems, answered, maintainers, from, end, until),
+        previous: allTime ? null : responseWindow(allItems, answered, maintainers, prevFrom, from, until),
+        periods: responsePeriods(allItems, answered, maintainers, gran, allTime ? from : baseFrom, today, until),
+      },
+      funnel: contributorFunnel(allItems, maintainers, alias, from, end, until),
+      concentration: outsideConcentration(allItems, maintainers, alias, from, end, until),
     });
   }
 

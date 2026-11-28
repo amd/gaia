@@ -94,6 +94,21 @@ describe('motion system', () => {
         expect(block).toMatch(/\.thinking-indicator\.is-live \.thinking-indicator-text\s*\{[^}]*mask-image:\s*none/);
     });
 
+    // Keyframe names are global: two definitions of one name and the stylesheet
+    // that loads last wins everywhere, so a toast started sliding the way the
+    // Memory page's did once that page had been opened.
+    it('gives every keyframe one definition, and uses each one', () => {
+        const css = Object.fromEntries(Object.entries(CSS_SOURCES).map(([file, raw]) => [file, stripComments(raw)]));
+        const defined = new Map<string, string[]>();
+        for (const [file, text] of Object.entries(css))
+            for (const m of text.matchAll(/@keyframes\s+([\w-]+)/g)) defined.set(m[1], [...(defined.get(m[1]) ?? []), file]);
+        expect(defined.size).toBeGreaterThan(30);
+        const all = Object.values(css).join('\n');
+        const twice = [...defined].filter(([, files]) => files.length > 1).map(([name, files]) => `${name}: ${files.join(', ')}`);
+        const unused = [...defined.keys()].filter((name) => !new RegExp(`animation(?:-name)?\\s*:[^;{}]*\\b${name}\\b`).test(all));
+        expect({ twice, unused }).toEqual({ twice: [], unused: [] });
+    });
+
     it('loops only on live state, never on an idle view', () => {
         const css = Object.values(CSS_SOURCES).map(stripComments).join('\n');
         const loops = [...css.matchAll(/([^{}]+)\{[^{}]*animation(?:-iteration-count)?:[^;}]*\binfinite\b[^}]*\}/g)]

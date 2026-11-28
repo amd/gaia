@@ -116,11 +116,14 @@ def test_backoff_waits_for_the_reset_within_its_cap(
     steps, tmp_path, remaining, reset_in, max_wait, expected
 ):
     backoff = next(s for s in steps if "sleep" in s.get("run", ""))
-    fake = _fake_bin(tmp_path, remaining, int(time.time()) + reset_in)
+    started = time.time()
+    fake = _fake_bin(tmp_path, remaining, int(started) + reset_in)
     proc = _run(backoff["run"], fake["env"], MAX_WAIT=str(max_wait))
     assert proc.returncode == 0, proc.stderr
     slept = int(fake["log"].read_text().strip())
-    assert abs(slept - expected) <= 2, (slept, expected)
+    # A slow bash start eats into a wait measured to the reset, never adds to it.
+    late = time.time() - started
+    assert expected - late - 2 <= slept <= expected + 2, (slept, expected, late)
 
 
 @needs_bash

@@ -333,7 +333,7 @@ def _agent_turn_problem(model_id: str) -> Optional[str]:
     The turn goes through the assistant's own program, the way chat reaches it.
     """
     from gaia.hub import installer as hub_installer
-    from gaia.ui._chat_helpers import relay_one_prompt
+    from gaia.ui._chat_helpers import ModelServerDownError, relay_one_prompt
     from gaia.ui.sse_handler import SSEOutputHandler
 
     if hub_installer.read_sentinel(_AGENT_ID) is None:
@@ -348,9 +348,15 @@ def _agent_turn_problem(model_id: str) -> Optional[str]:
             max_steps=1,
         )
         why = None if (answer or "").strip() else "it ended without an answer"
+    except ModelServerDownError as e:
+        why = ModelServerDown(str(e))
     except RuntimeError as e:
         why = str(e)
     return why
+
+
+class ModelServerDown(str):
+    """A failed test chat's reason when the model server, not the agent, failed."""
 
 
 def _agent_turn_failure(model_id: str) -> str:
@@ -380,6 +386,27 @@ def _agent_turn_failure(model_id: str) -> str:
     return (
         f"{what} Test again, or choose another chat model. The setup report "
         "has the details."
+    )
+
+
+def _test_chat_program() -> Optional[str]:
+    """``gaiacpp`` when setup's test chat runs on the native agent, else None."""
+    from gaia.daemon.sidecars import fetch
+
+    if fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
+        return fetch.NATIVE_FLAGSHIP
+    return None
+
+
+def _native_agent_failure(model_id: str, why: str) -> str:
+    """The Test step's sentence when the chosen gaiacpp, not the model, failed the chat."""
+    from gaia.ui.routers.providers import display_name
+
+    return (
+        "The test chat runs on gaiacpp, the beta agent, and it didn't answer: "
+        f"{why.rstrip('.')}. {display_name(model_id)} passed its own test, so "
+        "the model isn't the problem. Finish setup on the Python agent, or "
+        "test again. The setup report has the details."
     )
 
 
@@ -1532,6 +1559,10 @@ class SetupRunner:
             k: event.get(k)
             for k in ("job", "subject", "state", "error", "kind", "seconds")
         }
+        # Only a chat test that failed on gaiacpp names its agent.
+        for k in ("agent", "agent_error"):
+            if event.get(k):
+                row[k] = event[k]
         run.tests[(row["job"], row["subject"])] = row
         if row["state"] != "running":
             took = f" in {row['seconds']} s" if row.get("seconds") is not None else ""
@@ -1886,13 +1917,22 @@ class SetupRunner:
             )
             if problem is None:
                 run.note(f"Testing a chat on {model}")
+        program = agent_error = None
         if problem is None:
             why = _agent_turn_problem(model)
             if why == AGENT_MISSING:
                 problem = why
             elif why is not None:
                 logger.warning("Setup's test chat on %s failed: %s", model, why)
-                problem = _agent_turn_failure(model)
+                # The model passed its test, so gaiacpp failed unless the server did.
+                program = (
+                    None if isinstance(why, ModelServerDown) else _test_chat_program()
+                )
+                if program is not None:
+                    agent_error = why
+                    problem = _native_agent_failure(model, why)
+                else:
+                    problem = _agent_turn_failure(model)
                 with self._lock:
                     run.note(f"Test chat on {model} failed: {why}")
         with self._lock:
@@ -1908,6 +1948,8 @@ class SetupRunner:
                         if not problem
                         else "missing" if problem == AGENT_MISSING else "agent"
                     ),
+                    "agent": program,
+                    "agent_error": agent_error,
                     "seconds": round(time.monotonic() - started, 1),
                 },
             )

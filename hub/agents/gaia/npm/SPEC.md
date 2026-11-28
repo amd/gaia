@@ -452,8 +452,14 @@ the shell guardrails still on and out-of-scope paths still refused;
 `full_access` also lifts the guardrails and grants out-of-scope paths. Both need
 an authenticated caller (§5.4, a `403` otherwise), apply to this run's handler
 only, and are logged. A chat's full access is the session bypass route.
-Pre-2.32 binaries `422` the fields; the native harness ignores them, so check
-`/version` and refuse the run on an older one rather than run it unrestricted.
+Pre-2.32 binaries `422` the fields. The native harness (`gaiacpp`) reports an
+older contract but applies them all, and says so on `/version` as
+`capabilities.one_shot_fields`; there `time_limit` stops the turn at the limit
+without warning the model first, and a `disallowed_tools` glob that matches no
+tool ends the stream with an `error` event of `status` 400, because its tools
+are known only once the run starts. So check `/version`, and refuse the run on
+a binary that neither speaks 2.32 nor lists the field rather than run it
+unrestricted.
 
 `turns` (contract ≥ 2.25) is the conversation so far as the model saw it,
 oldest first. Each entry is one earlier turn's `final.model_messages`, which
@@ -580,6 +586,14 @@ half-written tail.
 A session on the `hybrid` model id gets `final.route` (contract ≥ 2.29): the
 turn's routing decision, with `model` naming the concrete model it ran on. Bill
 and label the turn by `route.model`, not by `hybrid`.
+
+`final` and `error` carry `session_created: true` (contract ≥ 2.31) when the
+sidecar built a fresh agent for this turn instead of finding a live one: the
+session's first turn, a session evicted from the retention table (§5.2), or a
+sidecar restart. Whatever the client kept for the old agent, such as files
+approved at a prompt, belonged to an agent that no longer exists. Drop only the
+client state from before this turn started, never what this turn's own prompts
+just granted. The field is absent otherwise, and older binaries never send it.
 
 `final` carries `context` (contract ≥ 2.21): what the next model call holds
 if the caller pushes this turn back as history — the same payload the Agent
@@ -723,7 +737,8 @@ never timed out mid-flight. A `/query` that lands on an
 evicted id gets a fresh agent (the conversation is not blocked) but the
 response stream's first event is a `{"type":"status","status":"warning",...}`
 telling the caller that per-turn state — most visibly any loaded skill — did
-not survive and should be reloaded.
+not survive and should be reloaded. That turn's `final` or `error` also carries
+`session_created: true` (§5.1).
 
 A second `/query` reusing a `run_id` that is still in flight gets `409` —
 `run_id` is caller-minted, so mint a fresh UUID per request; reusing one would

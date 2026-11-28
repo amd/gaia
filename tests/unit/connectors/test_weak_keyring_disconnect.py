@@ -151,8 +151,41 @@ def refused(request, monkeypatch):
     return install
 
 
+def _vault_entries(items) -> dict:
+    """Decrypt ``vault.enc`` using the master key in ``items`` (or return {})."""
+    from gaia.connectors import vault
+
+    raw_key = items.get((SERVICE, vault.MASTER_KEY_USERNAME))
+    path = vault.vault_path()
+    if not raw_key or not path.exists():
+        return {}
+    return vault.decrypt_envelope(bytes.fromhex(raw_key), path.read_bytes())
+
+
 def _connection_keys(provider):
-    return lambda items: [user for _, user in items if user.startswith(f"{provider}:")]
+    return lambda items: [
+        user for user in _vault_entries(items) if user.startswith(f"{provider}:")
+    ]
+
+
+def _drop_vault_slot(items, slot_name: str) -> None:
+    """Remove one slot from ``vault.enc`` and its mirrored legacy keyring item."""
+    from gaia.connectors import vault
+
+    items.pop((SERVICE, slot_name), None)
+
+    raw_key = items.get((SERVICE, vault.MASTER_KEY_USERNAME))
+    path = vault.vault_path()
+    if not raw_key or not path.exists():
+        return
+    key = bytes.fromhex(raw_key)
+    entries = vault.decrypt_envelope(key, path.read_bytes())
+    entries.pop(slot_name, None)
+    if entries:
+        path.write_bytes(vault.encrypt_envelope(key, entries))
+    else:
+        path.unlink()
+        items.pop((SERVICE, vault.MASTER_KEY_USERNAME), None)
 
 
 def _writes(recorder):
@@ -261,7 +294,7 @@ def test_one_account_goes_and_the_other_stays(
 
     left = _connection_keys("google")(recorder.items)
     assert left == ["google:default"]
-    assert ALICE[2] in recorder.items[(SERVICE, "google:default")]
+    assert ALICE[2] in _vault_entries(recorder.items)["google:default"]
     assert result["remaining_accounts"] == 1
     assert result["account_email"] == BOB[1]
     assert BOB[1] not in json.dumps(_index_section("google"))
@@ -347,7 +380,7 @@ def test_an_indexed_account_whose_token_is_gone_asks_for_no_revoke(
     provider, refused, monkeypatch, no_provider_call
 ):
     items = _seed(monkeypatch, provider, ALICE)
-    items.pop((SERVICE, f"{provider}:default"))
+    _drop_vault_slot(items, f"{provider}:default")
     recorder = refused(items)
 
     result = asyncio.run(api.revoke_connection_async(provider, all_accounts=True))
@@ -361,7 +394,7 @@ def test_only_the_account_with_a_token_asks_for_a_revoke(
     refused, monkeypatch, no_provider_call
 ):
     items = _seed(monkeypatch, "google", ALICE, BOB)
-    items.pop((SERVICE, f"google:{accounts.slot_for(BOB[0])}"))
+    _drop_vault_slot(items, f"google:{accounts.slot_for(BOB[0])}")
     refused(items)
 
     result = asyncio.run(api.revoke_connection_async("google", all_accounts=True))
@@ -475,7 +508,7 @@ def test_a_pre_index_account_is_named_by_its_slot(
 def test_a_strong_keyring_still_revokes_at_the_provider(monkeypatch):
     calls = []
 
-    async def _revoke(provider_id, *, slot=store.DEFAULT_ACCOUNT):
+    async def _revoke(provider_id, *, slot=store.DEFAULT_ACCOUNT, account_type=None):
         calls.append((provider_id, slot))
         return {
             "revoke_supported": True,
@@ -519,7 +552,7 @@ def test_reads_stay_refused_after_a_disconnect(refused, monkeypatch, no_provider
         store.peek_connection("google")
     with pytest.raises(store.WeakKeyringError):
         accounts.list_accounts("google")
-    assert ALICE[2] in recorder.items[(SERVICE, "google:default")]
+    assert ALICE[2] in _vault_entries(recorder.items)["google:default"]
 
 
 def test_the_cli_tells_the_user_where_to_revoke(
@@ -716,17 +749,80 @@ def test_the_ui_route_says_nothing_stored_without_an_oauth_client(
     assert payload["revoke_error"] is None
 
 
-def test_an_unreadable_sign_in_without_an_oauth_client_is_not_nothing_stored(
-    unconfigured, monkeypatch
-):
-    items = _seed(monkeypatch, "google", ALICE)
-    _activate(monkeypatch, unconfigured)
-    unconfigured.items.update(items)
-    (acct,) = accounts.list_accounts("google")
-    store._kr_set(store._connection_username("google", acct.slot), "{not json")
+# Every OAuth provider's connected-apps page, where a user revokes by hand.
+PAGES = [
+    ("google", "https://myaccount.google.com/permissions"),
+    ("microsoft", "https://account.live.com/consent/Manage"),
+    ("microsoft_work", "https://myapps.microsoft.com"),
+]
 
-    result = asyncio.run(api.revoke_connection_async("google"))
+
+def _corrupt_sign_in(monkeypatch, provider, backend):
+    """Store one account, then replace its blob with an unreadable value."""
+    items = _seed(monkeypatch, provider, ALICE)
+    _activate(monkeypatch, backend)
+    backend.items.update(items)
+    (acct,) = accounts.list_accounts(provider)
+    store._kr_set(store._connection_username(provider, acct.slot), "{not json")
+    return acct
+
+
+@pytest.mark.parametrize("provider,page", PAGES)
+def test_an_unreadable_sign_in_without_an_oauth_client_is_not_nothing_stored(
+    provider, page, unconfigured, monkeypatch
+):
+    _corrupt_sign_in(monkeypatch, provider, unconfigured)
+
+    result = asyncio.run(api.revoke_connection_async(provider, all_accounts=True))
 
     assert result["nothing_stored"] is False
     assert result["revoked_remotely"] is False
-    assert result["revoke_error"]
+    assert "could not read" in result["revoke_error"]
+    assert page in result["revoke_error"]
+
+
+@pytest.mark.parametrize("provider,page", PAGES)
+def test_the_cli_says_an_unreadable_sign_in_could_not_be_read(
+    provider, page, unconfigured, monkeypatch, capsys
+):
+    from gaia.connectors.cli import _handle_disconnect
+
+    _corrupt_sign_in(monkeypatch, provider, unconfigured)
+    args = argparse.Namespace(connector_id=provider, account=None, all_accounts=True)
+
+    assert _handle_disconnect(args) == 0
+
+    out = capsys.readouterr().out
+    assert "could not read" in out
+    assert page in out
+    assert "Nothing stored" not in out
+
+
+@pytest.mark.parametrize("provider,page", PAGES)
+def test_the_ui_route_says_an_unreadable_sign_in_could_not_be_read(
+    provider, page, unconfigured, monkeypatch
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.routers import connectors as router_mod
+
+    events = []
+
+    async def _emit(name, payload):
+        events.append((name, payload))
+
+    monkeypatch.setattr(router_mod._emitter, "emit", _emit)
+    _corrupt_sign_in(monkeypatch, provider, unconfigured)
+    app = FastAPI()
+    app.include_router(router_mod.router)
+
+    resp = TestClient(app).delete(f"{router_mod.router.prefix}/{provider}?all=true")
+
+    assert resp.status_code == 204, resp.text
+    (name, payload), *_ = events
+    assert name == "connector.disconnected"
+    assert payload["nothing_stored"] is False
+    assert payload["revoked_remotely"] is False
+    assert "could not read" in payload["revoke_error"]
+    assert page in payload["revoke_error"]

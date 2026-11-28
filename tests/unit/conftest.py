@@ -22,6 +22,14 @@ from pathlib import Path
 
 import pytest
 
+# Session guard: compares the real ~/.gaia before and after the run.
+from tests.unit.real_home_guard import (  # noqa: F401  pylint: disable=unused-import
+    _guard_real_gaia_home_session,
+    is_temporary_home,
+    is_within,
+    protected_gaia_home,
+)
+
 
 @pytest.fixture(scope="session")
 def python_with_pip(tmp_path_factory):
@@ -106,6 +114,8 @@ def mock_home(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(os.path, "expanduser", fake_expanduser)
+    monkeypatch.delenv("GAIA_HOME", raising=False)
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
     return tmp_path
 
 
@@ -216,11 +226,20 @@ def _forget_agent_registry():
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 
-#: The real ``~/.gaia``, which no unit test may create or write into.
-_REAL_GAIA_HOME = _RUN_HOME / ".gaia"
-_REAL_GAIA_PREFIXES = tuple({str(_REAL_GAIA_HOME), os.path.realpath(_REAL_GAIA_HOME)})
+#: A run started with a temporary ``HOME`` has no developer install to protect;
+#: ``<that HOME>/.gaia`` is a test folder, not the person's own.
+_RUN_HOME_IS_TEMPORARY = is_temporary_home(_RUN_HOME)
+
+#: The real ``~/.gaia``, which no unit test may create or write into. Under a
+#: temporary ``HOME`` it is the account's own ``.gaia``; ``None`` if unknown.
+_REAL_GAIA_HOME = protected_gaia_home()
+_REAL_GAIA_PREFIXES = (
+    tuple({str(_REAL_GAIA_HOME), os.path.realpath(_REAL_GAIA_HOME)})
+    if _REAL_GAIA_HOME is not None
+    else ()
+)
 #: Whether it existed, updated once a test is failed for creating it.
-_real_gaia_home_existed = [os.path.exists(_REAL_GAIA_HOME)]
+_real_gaia_home_existed = [_REAL_GAIA_HOME is None or os.path.exists(_REAL_GAIA_HOME)]
 #: Bound now: a test may still have ``os.stat`` patched when the guard runs.
 _STAT = os.stat
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND
@@ -238,10 +257,23 @@ def _exists(path) -> bool:
 
 def _in_real_gaia_home(path) -> bool:
     try:
-        path = os.fsdecode(path)
+        candidate = os.fsdecode(path)
     except TypeError:  # a file descriptor
         return False
-    return any(path == p or path.startswith(p + os.sep) for p in _REAL_GAIA_PREFIXES)
+    if _RUN_HOME_IS_TEMPORARY:
+        # The run's own home is a test folder, but the person's real GAIA state
+        # is still their own, and stays protected however the test reached it.
+        if _REAL_GAIA_HOME is None:
+            return True
+        try:
+            return is_within(candidate, _REAL_GAIA_HOME)
+        except (OSError, ValueError):
+            # Cannot verify the path (e.g. realpath broken): refuse rather than
+            # allow a write into the protected home.
+            return True
+    return any(
+        candidate == p or candidate.startswith(p + os.sep) for p in _REAL_GAIA_PREFIXES
+    )
 
 
 def _audit_real_gaia_home(event, args):
@@ -309,8 +341,11 @@ def _session_gaia_home(tmp_path_factory):
     """Keep ``gaia_home()`` -- edit backups, the audit log, databases -- off the
     developer's real ``~/.gaia``.
 
-    Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win,
-    and a test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
+    Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win
+    unless they point into the real ``~/.gaia``, which is dropped for the session.
+    A run started with a temporary ``HOME`` carries no developer install, so a
+    GAIA_HOME it points at there is kept, not dropped.
+    A test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
     ``<that home>/.gaia``: setting GAIA_HOME here would override both.
     """
     isolated = tmp_path_factory.mktemp("home") / ".gaia"
@@ -321,6 +356,12 @@ def _session_gaia_home(tmp_path_factory):
 
     with pytest.MonkeyPatch.context() as mp:
         _patch_default_gaia_home(mp, default_gaia_home)
+        for env_var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+            raw = os.environ.get(env_var, "").strip()
+            if raw:
+                resolved = os.path.expandvars(os.path.expanduser(raw))
+                if _in_real_gaia_home(resolved):
+                    mp.delenv(env_var, raising=False)
         yield default_gaia_home
 
 

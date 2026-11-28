@@ -201,6 +201,9 @@ public:
     /// Current working directory of the session.
     std::string cwd() const;
 
+    /// The directory the session started in, which reset() returns to.
+    std::string startCwd() const;
+
     /// Set the working directory. Returns false when the path is not an
     /// existing directory (and leaves the session unchanged).
     bool setCwd(const std::string& dir);

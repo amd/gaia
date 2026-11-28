@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The dialog shown when the backend exits on its own
+ * The dialog shown when the backend cannot recover after an exit or outage
  * (src/gaia/apps/webui/services/backend-crash-dialog.cjs): every choice ends
  * in a restart or a quit, and the log tail reads without colour codes.
  */
@@ -108,6 +108,21 @@ test("the log tail has no colour codes and the detail says what to do", () => {
   expect(detail).toMatch(/exit code 1/);
   expect(detail).toMatch(/Restart GAIA/);
   expect(crashDetail(null, "SIGKILL", [])).toMatch(/signal SIGKILL[\s\S]*nothing was logged/);
+});
+
+test("a health failure shows its reason instead of a null exit code", async () => {
+  const { dialog, app, shown } = fakes([2]);
+  await showBackendCrashDialog({
+    ...base,
+    dialog,
+    app,
+    code: null,
+    signal: null,
+    reason: "health endpoint refused the connection",
+    writeDiagnostics: jest.fn(),
+  });
+  expect(shown[0].detail).toContain("last error: health endpoint refused the connection");
+  expect(shown[0].detail).not.toContain("exit code null");
 });
 
 test("an AppImage restarts from the AppImage file, not its temporary mount", async () => {

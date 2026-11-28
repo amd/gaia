@@ -5,9 +5,13 @@
 // program that calls internetRefusal or webFetchRefusal (gaiacpp), not for every user of validatePath.
 
 #include "gaia/security.h"
+#include "gaia/shell_guard.h"
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <functional>
 #include <map>
 #include <regex>
 #include <set>
@@ -1233,9 +1237,160 @@ bool commandLineGoesOnline(const std::string& line, CodeScan& scan, int depth, b
     }
     return clonesRemoteRepository(line, depth);
 }
+std::string loweredCode(const std::string& code) {
+    std::string lower;
+    for (const char c : code) lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    return lower;
+}
+
+bool holdsAny(const std::string& lower, std::initializer_list<const char*> words) {
+    return std::any_of(words.begin(), words.end(), [&](const char* w) { return lower.find(w) != std::string::npos; });
+}
+
+// True when code decodes text and then runs it: what it connects to is not in its own text.
+bool decodesAndRuns(const std::string& code) {
+    const std::string lower = loweredCode(code);
+    return holdsAny(lower, {"exec(", "eval(", "__import__(", "compile(", "new function(", "instance_eval"}) &&
+           holdsAny(lower, {"b64decode", "base64", "fromhex", "codecs.", "atob(", "unhexlify", "marshal.", "rot13"});
+}
+
+// True when a script starts a program that reaches another computer, named as a quoted word or a
+// word of a command line of its own: subprocess.run(['curl', ...]), os.system("wget ...").
+bool spawnsNetworkProgram(const std::string& code) {
+    const std::string lower = loweredCode(code);
+    if (!holdsAny(lower, {"subprocess", "os.system", "os.popen", "child_process", "system(", "popen(", "spawn(",
+                          "exec(", "`", "shell_exec", "passthru("})) {
+        return false;
+    }
+    for (const char* program : {"curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "ftp", "telnet", "socat"}) {
+        const std::string name = program;
+        for (size_t at = lower.find(name); at != std::string::npos; at = lower.find(name, at + 1)) {
+            const char before = at == 0 ? '"' : lower[at - 1];
+            const size_t end = at + name.size();
+            const char after = end >= lower.size() ? '"' : lower[end];
+            if ((before == '"' || before == '\'' || before == '`' || before == '(') &&
+                (after == '"' || after == '\'' || after == ' ' || after == '`')) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// The text of a script a command runs, at most 256 KB of it. False when there is no such file to read.
+bool readScript(const std::string& path, std::string& text) {
+    std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
+    if (!in) return false;
+    text.assign(256 * 1024, '\0');
+    in.read(text.data(), static_cast<std::streamsize>(text.size()));
+    text.resize(static_cast<size_t>(in.gcount()));
+    return true;
+}
+
+// Why a command can't be shown to stay offline by what the shell guard found in it: a program that
+// reaches another computer, a fetch hidden in a wrapper, a script that connects, or a command whose
+// program is decided while it runs. "" when none was found.
+std::string guardedRouteOnline(const std::string& asked, const std::map<std::string, std::string>& env,
+                               const std::string& cwd, const std::function<bool(const std::string&)>& lineGoesOnline,
+                               int depth = 0) {
+    const ShellJudgement judged = judgeShellCommand(asked, cwd, env, nullptr);
+    if (!judged.network.empty()) return "which reaches another computer (" + judged.network + ")";
+    for (const auto& line : judged.resolvedLines) {
+        if (decodesAndRuns(line)) return "which decodes text and runs it, so GAIA can't tell whether it goes online";
+        // Code that starts another program and holds a web address.
+        if (holdsAny(loweredCode(line), {"subprocess", "os.system", "os.popen", "child_process", "system(", "popen(",
+                                         "spawn(", "exec(", "shell_exec", "passthru(", "execsync("}) &&
+            mentionsRemoteUrl(line)) {
+            return "which starts another program with a web address in hand";
+        }
+        if (line == asked || !tooLongToCheck(line).empty()) continue;
+        if (lineGoesOnline(line)) return "which goes online once the shell has read it";
+    }
+    for (const auto& [language, path] : judged.scripts) {
+        // Written and run by one line: what will run is not there to read yet.
+        if (std::find(judged.written.begin(), judged.written.end(), path) != judged.written.end()) {
+            return "which writes " + path + " and then runs it, so GAIA can't read what will run";
+        }
+        std::string text;
+        if (!readScript(path, text)) continue;
+        if (text.find('\0') != std::string::npos) continue;  // a compiled program
+        std::string kind = language;
+        if (kind == "file") {
+            const std::string first = text.substr(0, text.find('\n'));
+            kind = first.rfind("#!", 0) != 0 ? "" : first.find("python") != std::string::npos ? "python"
+                   : first.find("node") != std::string::npos ? "node" : first.find("perl") != std::string::npos ? "perl"
+                   : first.find("ruby") != std::string::npos ? "ruby" : first.find("php") != std::string::npos ? "php" : "sh";
+        }
+        bool online = decodesAndRuns(text) || spawnsNetworkProgram(text);
+        if (kind == "sh") {
+            online = online || !tooLongToCheck(text).empty() || lineGoesOnline(text) ||
+                     (depth < 2 && !guardedRouteOnline(text, env, cwd, lineGoesOnline, depth + 1).empty());
+        } else if (!kind.empty()) {
+            online = online || codeGoesOnline(kind, text, false);
+        }
+        if (online) return "which runs " + path + ", a script that goes online or hides what it runs";
+    }
+    if (!judged.hidden.empty()) return "because " + judged.hidden + ", so GAIA can't tell whether it goes online";
+    return "";
+}
+
+// True when a command line goes online with the internet off: a remote, a package index, an API,
+// a socket, or a fetch aimed off this PC.
+bool offlineLineGoesOnline(const std::string& asked) {
+    // An explicit offline mode (mvn -o, npm ci --offline) needs no network; the rest of the line is still checked.
+    const std::string command = withoutOfflineSegments(asked);
+    // Commands that go online with no URL in sight: a remote, a package index, an API.
+    // Kept in step with _ONLINE_COMMAND_RE in src/gaia/agents/base/offline.py.
+    static const std::regex online(
+        R"(\b(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b)"
+        R"(|git\b.*\bremote\s+update\b)"
+        R"(|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+(?:install|download|wheel|index|search)\b)"
+        R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|upgrade|up|publish|dlx|exec|create|x|audit)"
+        R"(|outdated|view|info|search|login)\b|(?:npm|pnpm|yarn|bun)\s+init\s+[^-\s])"
+        R"(|(?:npx|uvx|pipx|bunx|pnpx)\s)"
+        R"(|uv\s+(?:add|sync|lock|tool\s+(?:install|upgrade)|python\s+install|run\s+--with|self\s+update)\b)"
+        R"(|(?:poetry|pdm)\s+(?:install|add|update|lock|sync|publish|self\s+update)\b)"
+        R"(|(?:conda|mamba|micromamba)\s+(?:install|create|update|upgrade|search|env\s+(?:create|update))\b)"
+        R"(|cargo\s+(?:install|fetch|update|publish|search|add|login)\b|go\s+(?:get|install|mod\s+(?:download|tidy))\b)"
+        R"(|gem\s+(?:install|update|fetch|push|search|sources)\b|bundler?\s+(?:install|update|add|outdated|lock)\b)"
+        R"(|composer\s+(?:install|update|require|create-project)\b)"
+        R"(|dotnet\s+(?:restore|add|new\s+install|tool\s+(?:install|update|restore)|workload|nuget)\b)"
+        R"(|nuget\s+(?:install|restore|update|push)\b|(?:docker|podman)\s+(?:pull|push|login|search)\b)"
+        R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum|zypper|apk|snap|flatpak)\s+)"
+        R"((?:install|reinstall|upgrade|update|download|search|add|fetch|tap|source|dist-upgrade|full-upgrade)\b)"
+        R"(|pacman\s+-S|(?:install|update|find|save)-(?:module|package|script)\b|start-bitstransfer\b|bitsadmin\b)"
+        R"(|certutil\b.*-urlcache|aria2c\b|(?:huggingface-cli|hf)\s+(?:download|upload|login)\b|ollama\s+(?:pull|push)\b)"
+        R"(|gh\s|ssh\b|scp\b|sftp\b|ftp\b|rsync\b|nc\b|ncat\b|telnet\b|socat\b)"
+        R"(|nslookup\b|dig\b|ping\b|traceroute\b|tracert\b|/dev/(?:tcp|udp)/)"
+        R"(|(?:https?|all|ftp)_proxy=)"
+        R"(|(?:python3?|py|node|deno|bun|perl|ruby|php|pwsh|powershell)\b.*(?:socket|urllib|requests|httpx|aiohttp)"
+        R"(|http\.client|https?\.(?:get|request)|fetch\(|net\.connect|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket)))",
+        std::regex::icase);
+    // Build tools that resolve dependencies from a remote repository on nearly every run.
+    static const std::regex buildTool(R"((?:^|[\s;&|(`])(?:mvn|mvnw|gradle|gradlew)(?=[\s;&|)`]|$))",
+                                      std::regex::icase);
+    // bash opens a socket for a redirect to these names.
+    const bool socketFile = asked.find("/dev/tcp/") != std::string::npos ||
+                            asked.find("/dev/udp/") != std::string::npos;
+    // bash drops quotes and backslashes, and cmd.exe drops ^, before a program is looked up: cu''rl and
+    // cu^rl run curl.
+    std::string bare;
+    for (const char c : command) {
+        if (c != '\'' && c != '"' && c != '\\' && c != '^') bare.push_back(c);
+    }
+    // A full path, a quoted name or a Windows suffix still runs the program: C:\Tools\conda.exe is conda.
+    const std::string programs = programWords(command);
+    if (socketFile || std::regex_search(command, online) || std::regex_search(bare, online) ||
+        std::regex_search(programs, online) || std::regex_search(programs, buildTool) ||
+        mentionsRemoteUrl(command)) {
+        return true;
+    }
+    return fetchLeavesThisPc(command, bare);
+}
 }  // namespace
 
-std::string webFetchRefusal(const ToolInfo& tool, const json& args) {
+std::string webFetchRefusal(const ToolInfo& tool, const json& args, const std::map<std::string, std::string>& shellEnv,
+                            const std::string& shellCwd) {
     if (tool.name != "bash_execute" || !args.is_object() || !args.contains("command") ||
         !args["command"].is_string()) {
         return "";
@@ -1249,10 +1404,19 @@ std::string webFetchRefusal(const ToolInfo& tool, const json& args) {
         return why + "`" + asked.substr(0, 80) + "`, which fetches from the web. Don't fetch it another way: "
                "answer from what is on this PC, or say what you could not read.";
     }
+    const std::string route = guardedRouteOnline(asked, shellEnv, shellCwd, [](const std::string& line) {
+        CodeScan inner(line);
+        return commandLineGoesOnline(line, inner, 1);
+    });
+    if (!route.empty()) {
+        return "Web access is off for this run (--no-web), so GAIA didn't run `" + asked.substr(0, 80) + "`, " + route +
+               ". Don't reach the network another way: answer from what is on this PC, or say what you could not read.";
+    }
     return "";
 }
 
-std::string internetRefusal(const ToolInfo& tool, const json& args) {
+std::string internetRefusal(const ToolInfo& tool, const json& args, const std::map<std::string, std::string>& shellEnv,
+                            const std::string& shellCwd) {
     const std::string& name = tool.name;
     const std::string why = "The internet is off for this chat, so GAIA didn't run ";
     if (tool.mcpServer) return why + "the " + *tool.mcpServer + " connector. Turn the internet on to use it.";
@@ -1265,55 +1429,11 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
         const std::string asked = args.value("command", "");
         const std::string unchecked = tooLongToCheck(asked);
         if (!unchecked.empty()) return why + unchecked;
-        // An explicit offline mode (mvn -o, npm ci --offline) needs no network; the rest of the line is still checked.
-        const std::string command = withoutOfflineSegments(asked);
-        // Commands that go online with no URL in sight: a remote, a package index, an API.
-        // Kept in step with _ONLINE_COMMAND_RE in src/gaia/agents/base/offline.py.
-        static const std::regex online(
-            R"(\b(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b)"
-            R"(|git\b.*\bremote\s+update\b)"
-            R"(|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+(?:install|download|wheel|index|search)\b)"
-            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|upgrade|up|publish|dlx|exec|create|x|audit)"
-            R"(|outdated|view|info|search|login)\b|(?:npm|pnpm|yarn|bun)\s+init\s+[^-\s])"
-            R"(|(?:npx|uvx|pipx|bunx|pnpx)\s)"
-            R"(|uv\s+(?:add|sync|lock|tool\s+(?:install|upgrade)|python\s+install|run\s+--with|self\s+update)\b)"
-            R"(|(?:poetry|pdm)\s+(?:install|add|update|lock|sync|publish|self\s+update)\b)"
-            R"(|(?:conda|mamba|micromamba)\s+(?:install|create|update|upgrade|search|env\s+(?:create|update))\b)"
-            R"(|cargo\s+(?:install|fetch|update|publish|search|add|login)\b|go\s+(?:get|install|mod\s+(?:download|tidy))\b)"
-            R"(|gem\s+(?:install|update|fetch|push|search|sources)\b|bundler?\s+(?:install|update|add|outdated|lock)\b)"
-            R"(|composer\s+(?:install|update|require|create-project)\b)"
-            R"(|dotnet\s+(?:restore|add|new\s+install|tool\s+(?:install|update|restore)|workload|nuget)\b)"
-            R"(|nuget\s+(?:install|restore|update|push)\b|(?:docker|podman)\s+(?:pull|push|login|search)\b)"
-            R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum|zypper|apk|snap|flatpak)\s+)"
-            R"((?:install|reinstall|upgrade|update|download|search|add|fetch|tap|source|dist-upgrade|full-upgrade)\b)"
-            R"(|pacman\s+-S|(?:install|update|find|save)-(?:module|package|script)\b|start-bitstransfer\b|bitsadmin\b)"
-            R"(|certutil\b.*-urlcache|aria2c\b|(?:huggingface-cli|hf)\s+(?:download|upload|login)\b|ollama\s+(?:pull|push)\b)"
-            R"(|gh\s|ssh\b|scp\b|sftp\b|ftp\b|rsync\b|nc\b|ncat\b|telnet\b|socat\b)"
-            R"(|nslookup\b|dig\b|ping\b|traceroute\b|tracert\b|/dev/(?:tcp|udp)/)"
-            R"(|(?:https?|all|ftp)_proxy=)"
-            R"(|(?:python3?|py|node|deno|bun|perl|ruby|php|pwsh|powershell)\b.*(?:socket|urllib|requests|httpx|aiohttp)"
-            R"(|http\.client|https?\.(?:get|request)|fetch\(|net\.connect|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket)))",
-            std::regex::icase);
-        // Build tools that resolve dependencies from a remote repository on nearly every run.
-        static const std::regex buildTool(R"((?:^|[\s;&|(`])(?:mvn|mvnw|gradle|gradlew)(?=[\s;&|)`]|$))",
-                                          std::regex::icase);
-        // bash opens a socket for a redirect to these names.
-        const bool socketFile = asked.find("/dev/tcp/") != std::string::npos ||
-                                asked.find("/dev/udp/") != std::string::npos;
-        // bash drops quotes and backslashes, and cmd.exe drops ^, before a program is looked up: cu''rl and
-        // cu^rl run curl.
-        std::string bare;
-        for (const char c : command) {
-            if (c != '\'' && c != '"' && c != '\\' && c != '^') bare.push_back(c);
-        }
-        // A full path, a quoted name or a Windows suffix still runs the program: C:\Tools\conda.exe is conda.
-        const std::string programs = programWords(command);
-        if (socketFile || std::regex_search(command, online) || std::regex_search(bare, online) ||
-            std::regex_search(programs, online) || std::regex_search(programs, buildTool) ||
-            mentionsRemoteUrl(command)) {
-            return why + "`" + asked.substr(0, 80) + "`, which goes online.";
-        }
-        if (fetchLeavesThisPc(command, bare)) return why + "`" + asked.substr(0, 80) + "`, which goes online.";
+        if (offlineLineGoesOnline(asked)) return why + "`" + asked.substr(0, 80) + "`, which goes online.";
+        const std::string route = guardedRouteOnline(asked, shellEnv, shellCwd, [](const std::string& line) {
+            return !tooLongToCheck(line).empty() || offlineLineGoesOnline(line);
+        });
+        if (!route.empty()) return why + "`" + asked.substr(0, 80) + "`, " + route + ".";
         return "";
     }
     // Tools that fetch whatever URL they're handed.

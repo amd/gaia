@@ -48,6 +48,7 @@ on:
       - 'cpp/agents/gaiacpp/main.cpp'
       - 'cpp/agents/gaiacpp/stdio_server.cpp'
       - 'cpp/src/model_registry.cpp'
+      - 'cpp/tests/fixtures/thinking_probes.json'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
@@ -134,6 +135,7 @@ on:
       - 'cpp/agents/gaiacpp/main.cpp'
       - 'cpp/agents/gaiacpp/stdio_server.cpp'
       - 'cpp/src/model_registry.cpp'
+      - 'cpp/tests/fixtures/thinking_probes.json'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
@@ -358,7 +360,7 @@ jobs:
           # which uses the `fs` fixture to build a fake filesystem for testing
           # tiered uninstall logic cross-platform without touching the real FS.
           # pytest-mock is required by the browser/filesystem tool tests.
-          # keyring + httpx + respx are required by tests/unit/connections/
+          # keyring + httpx + respx are required by tests/unit/connectors/
           # (issue #915). The in-memory keyring backend in tests/conftest.py
           # avoids the SecretService daemon prerequisite on Linux runners.
           # matplotlib is required by tests/unit/test_perf_analysis.py, which

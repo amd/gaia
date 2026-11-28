@@ -36,12 +36,38 @@ import { SessionInfoSection } from './SessionInfoSection';
 import { CommandsSection, DocumentsSection, FocusBar, PlanSection, ScheduleSection } from './FocusSections';
 import { useSessionFocus } from './sessionFocus';
 import { PanelSettled, useSettled } from './appear';
-import type { ContextUsage, Message } from '../../types';
+import { useTurnEnd } from '../../hooks/useTurnEnd';
+import { useBrowserPaneOpen } from '../../stores/browserPaneStore';
+import type { ContextUsage, Message, TurnSummary } from '../../types';
 import { useT } from '../../i18n/useT';
 import './SessionPanel.css';
 
 /** Below this window width the panel opens over the chat instead of beside it. */
 export const PANEL_OVERLAY_QUERY = '(max-width: 1099px)';
+
+/** A turn created or changed a file: what Outputs and Changes are there to show. */
+export function madeFiles(summary: TurnSummary | undefined): boolean {
+    if (!summary) return false;
+    return (summary.files?.length ?? 0) > 0
+        || (summary.outputs ?? []).some((o) => (o.kind === 'image' || o.kind === 'audio') && !!o.path);
+}
+
+/**
+ * Open the docked panel when a reply that just ended in view is the chat's
+ * first to make a file. Never as an overlay, never past the user's close, and
+ * never over the browser pane, which shares the right side.
+ */
+function useOpenOnFirstFile(messages: Message[], busy: boolean, overlay: boolean): void {
+    const autoOpen = useSessionPanelStore((s) => s.autoOpen);
+    const browserOpen = useBrowserPaneOpen();
+    useTurnEnd(busy, () => {
+        if (overlay || browserOpen) return;
+        const last = messages[messages.length - 1];
+        if (last?.role !== 'assistant' || !madeFiles(last.turnSummary)) return;
+        if (messages.slice(0, -1).some((m) => madeFiles(m.turnSummary))) return;
+        autoOpen();
+    });
+}
 
 interface SessionPanelProps {
     sessionId: string;
@@ -79,6 +105,7 @@ export function SessionPanel({ sessionId, messages, busy, usage, onUsage, onJump
         else setOpen(false);
     }, [overlay, setOpen, setOverlayOpen]);
 
+    useOpenOnFirstFile(messages, busy, overlay);
     useEscapeToClose(open && overlay, close);
     const panelRef = useRef<HTMLElement>(null);
     useFocusTrap(panelRef, open && overlay);

@@ -3,10 +3,10 @@
 
 """Memory Dashboard REST API for GAIA Agent UI."""
 
+import importlib
 import json
 import logging
 import os
-import re
 import sqlite3
 import threading
 import uuid
@@ -34,7 +34,6 @@ from gaia.agents.base.memory_store import (
     check_memory_content,
     is_about_user,
 )
-from gaia.llm.reasoning import strip_reasoning
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -282,6 +281,385 @@ def close_store() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Which agent's memory the page serves
+# ---------------------------------------------------------------------------
+#
+# gaiacpp keeps its own store (memory-cpp.db) and serves it from its sidecar.
+# While it is the agent, the page reads and changes that store, never this one.
+
+_GAIACPP = "gaiacpp"
+_GAIAPY = "gaiapy"
+_GAIACPP_CATEGORIES = ("fact", "preference", "error", "skill", "note", "reminder")
+# The most rows one GET /memory returns.
+_GAIACPP_ROW_LIMIT = 1000
+_GAIACPP_SUPPORT_KEYS = (
+    "due_dates",
+    "sources",
+    "sensitive_toggle",
+    "recategorize",
+    "goals",
+    "profile",
+    "advanced",
+)
+_GAIACPP_TOO_OLD = (
+    "This gaiacpp is too old to change its memory from the app. Update gaiacpp "
+    "under Settings › Agent & model, then try again."
+)
+
+
+def _memory_agent() -> str:
+    """``gaiacpp`` when it is the saved agent, else ``gaiapy``."""
+    from gaia.daemon.sidecars import fetch
+
+    if fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
+        return _GAIACPP
+    return _GAIAPY
+
+
+def _gaiacpp_memory():
+    """A proxy onto gaiacpp's memory while it is the agent, else ``None``.
+
+    ``None`` means the Python store. A gaiacpp that can't be started is a 503,
+    never a quiet switch to the Python store.
+    """
+    if _memory_agent() != _GAIACPP:
+        return None
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    try:
+        return daemon_client.acquire_handle(GAIA_PROFILE.agent_id).proxy()
+    except SidecarError as exc:
+        logger.warning("[memory router] gaiacpp could not be started: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "gaiacpp, the agent this PC is set to use, could not be started, "
+                "so its memory can't be shown or changed. "
+                "Open Memory again in a moment. If it still fails, restart GAIA, "
+                "or switch agent under Settings › Agent & model."
+            ),
+        ) from exc
+
+
+def _python_memory_only(thing: str):
+    """Route dependency: 409 while gaiacpp is the agent, whose store has no *thing*."""
+
+    def _guard() -> None:
+        if _memory_agent() == _GAIACPP:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This works on the Python agent's memory. gaiacpp, the agent "
+                    "this PC is set to use, keeps its own memory, which has no "
+                    f"{thing}. Switch agent under Settings › Agent & model to "
+                    "use it."
+                ),
+            )
+
+    return Depends(_guard)
+
+
+def _gaiacpp_call(doing: str, call: Callable[[], Dict]) -> Dict:
+    """Run one sidecar call; its own 404/422 reason passes through unchanged."""
+    from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
+
+    try:
+        return call()
+    except SidecarHTTPError as exc:
+        if exc.status_code in (404, 422):
+            raise HTTPException(exc.status_code, exc.detail) from exc
+        raise HTTPException(502, f"gaiacpp could not {doing}: {exc}") from exc
+    except SidecarError as exc:
+        raise HTTPException(502, f"gaiacpp could not {doing}: {exc}") from exc
+
+
+def _gaiacpp_capabilities(reply: Dict) -> List[str]:
+    """What this gaiacpp's memory routes can do; empty from one that only lists."""
+    store = reply.get("store")
+    caps = store.get("capabilities") if isinstance(store, dict) else None
+    return [c for c in caps if isinstance(c, str)] if isinstance(caps, list) else []
+
+
+def _gaiacpp_require(proxy, capability: str) -> None:
+    reply = _gaiacpp_call("list its memory", lambda: proxy.memory(limit=1))
+    if capability not in _gaiacpp_capabilities(reply):
+        raise HTTPException(status_code=409, detail=_GAIACPP_TOO_OLD)
+
+
+def _gaiacpp_row(item: Dict) -> Dict:
+    """One gaiacpp memory in the Python store's row shape; what it lacks is None."""
+    return {
+        "id": item["id"],
+        "category": item["category"],
+        "content": item["content"],
+        "domain": None,
+        "source": None,
+        "confidence": None,
+        "metadata": None,
+        "use_count": None,
+        "context": item.get("context") or "global",
+        "sensitive": bool(item.get("sensitive")),
+        "entity": item.get("entity"),
+        "created_at": item.get("created_at"),
+        "updated_at": item.get("updated_at"),
+        "last_used": None,
+        "due_at": None,
+        "reminded_at": None,
+        "superseded_by": None,
+    }
+
+
+def _gaiacpp_listing(
+    proxy, *, search: Optional[str] = None, category: Optional[str] = None
+) -> Dict:
+    """gaiacpp's memories as rows, plus how many it holds and whether some are missing."""
+    reply = _gaiacpp_call(
+        "list its memory",
+        lambda: proxy.memory(q=search, category=category, limit=_GAIACPP_ROW_LIMIT),
+    )
+    if reply.get("available") is False:
+        return {"rows": [], "store_total": 0, "truncated": False}
+    items = reply.get("items")
+    total = reply.get("total")
+    if not isinstance(items, list) or not isinstance(total, int):
+        raise HTTPException(
+            502,
+            "gaiacpp could not list its memory: its reply has no 'items' list "
+            "and 'total' count.",
+        )
+    try:
+        rows = [_gaiacpp_row(item) for item in items]
+    except (KeyError, TypeError) as exc:
+        raise HTTPException(
+            502,
+            f"gaiacpp could not list its memory: a memory in its reply is "
+            f"missing {exc}.",
+        ) from exc
+    searched_there = "search" in _gaiacpp_capabilities(reply)
+    if searched_there and (search or category):
+        truncated = len(items) >= _GAIACPP_ROW_LIMIT
+    else:
+        truncated = total > len(items)
+    if search and not searched_there:
+        # An older gaiacpp ignores q, so match the keywords here.
+        words = search.lower().split()
+        rows = [r for r in rows if all(w in r["content"].lower() for w in words)]
+    if category:
+        rows = [r for r in rows if r["category"] == category]
+    return {"rows": rows, "store_total": total, "truncated": truncated}
+
+
+def _gaiacpp_time(field: str, value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            502, f"gaiacpp returned a {field} that is not a date: {value!r}"
+        ) from exc
+    # A time without a zone is this PC's local time.
+    return parsed.astimezone()
+
+
+def _gaiacpp_knowledge(
+    proxy,
+    *,
+    category: Optional[List[str]],
+    context: Optional[str],
+    entity: Optional[str],
+    sensitive: Optional[bool],
+    search: Optional[str],
+    sort_by: str,
+    order: str,
+    offset: int,
+    limit: int,
+    time_from: Optional[str],
+    time_to: Optional[str],
+    about_user: bool,
+) -> Dict:
+    """The knowledge list from gaiacpp's store; filtered, sorted and paged here."""
+    listing = _gaiacpp_listing(
+        proxy,
+        search=search,
+        category=category[0] if category and len(category) == 1 else None,
+    )
+    rows = listing["rows"]
+    if category:
+        rows = [r for r in rows if r["category"] in category]
+    if about_user:
+        # `error` rows are the agent's own lessons; the rest is about the user.
+        rows = [r for r in rows if r["category"] != "error"]
+    if context is not None:
+        rows = [r for r in rows if r["context"] == context]
+    if entity is not None:
+        rows = [r for r in rows if r["entity"] == entity]
+    if sensitive is not None:
+        rows = [r for r in rows if r["sensitive"] == sensitive]
+    if time_from is not None or time_to is not None:
+        low = _gaiacpp_time("time_from", time_from) if time_from else None
+        high = _gaiacpp_time("time_to", time_to) if time_to else None
+        kept = []
+        for row in rows:
+            created = _gaiacpp_time("created_at", str(row["created_at"]))
+            if (low is None or created >= low) and (high is None or created <= high):
+                kept.append(row)
+        rows = kept
+    # Newest first breaks ties, and orders a column gaiacpp doesn't have.
+    rows.sort(key=lambda r: r["updated_at"] or "", reverse=True)
+    rows.sort(
+        key=lambda r: (r[sort_by] is not None, r[sort_by]), reverse=order == "desc"
+    )
+    return {
+        "items": rows[offset : offset + limit],
+        "total": len(rows),
+        "offset": offset,
+        "limit": limit,
+        "truncated": listing["truncated"],
+        "store_total": listing["store_total"],
+    }
+
+
+def _gaiacpp_stats(proxy) -> Dict:
+    """``get_stats``'s shape for gaiacpp's store; what it doesn't track is None."""
+    listing = _gaiacpp_listing(proxy)
+    rows, truncated = listing["rows"], listing["truncated"]
+    by_category: Dict[str, int] = {}
+    by_context: Dict[str, int] = {}
+    for row in rows:
+        by_category[row["category"]] = by_category.get(row["category"], 0) + 1
+        by_context[row["context"]] = by_context.get(row["context"], 0) + 1
+    created = [r["created_at"] for r in rows if r["created_at"]]
+    return {
+        "agent": _GAIACPP,
+        # Counts below `total` cover the rows listed: all of them unless truncated.
+        "truncated": truncated,
+        "knowledge": {
+            "total": listing["store_total"],
+            "total_retrievals": None,
+            "by_category": by_category,
+            "by_context": by_context,
+            "sensitive_count": sum(1 for r in rows if r["sensitive"]),
+            "entity_count": (
+                None if truncated else len({r["entity"] for r in rows if r["entity"]})
+            ),
+            "avg_confidence": None,
+            "oldest": None if truncated or not created else min(created),
+            "newest": max(created) if created else None,
+        },
+        "conversations": {
+            "total_turns": None,
+            "total_sessions": None,
+            "first_session": None,
+            "last_session": None,
+        },
+        "tools": {
+            "total_calls": None,
+            "unique_tools": None,
+            "overall_success_rate": None,
+            "total_errors": None,
+            "denied_calls": None,
+        },
+        "temporal": {"upcoming_count": None, "overdue_count": None},
+        "procedures": {"total": None, "active": None, "last_recalled": None},
+        "embedding": None,
+        "db_size_bytes": None,
+    }
+
+
+def _gaiacpp_create(proxy, body: "KnowledgeCreate") -> Dict:
+    if body.due_at is not None:
+        raise HTTPException(
+            422,
+            "gaiacpp, the agent this PC is set to use, can't keep a due date on "
+            "a memory. Save it without one, or switch agent under Settings › "
+            "Agent & model.",
+        )
+    if body.category not in _GAIACPP_CATEGORIES:
+        raise HTTPException(
+            422,
+            f"gaiacpp, the agent this PC is set to use, has no '{body.category}' "
+            f"memories. Save it as one of: {', '.join(_GAIACPP_CATEGORIES)}.",
+        )
+    if body.domain is not None:
+        raise HTTPException(
+            422,
+            "gaiacpp, the agent this PC is set to use, can't keep a domain on a "
+            "memory. Save it without one.",
+        )
+    _gaiacpp_require(proxy, "create")
+    reply = _gaiacpp_call(
+        "save the memory",
+        lambda: proxy.create_memory(
+            body.content,
+            category=body.category,
+            sensitive=body.sensitive,
+            entity=body.entity,
+            context=body.context if body.context != "global" else None,
+        ),
+    )
+    return {"status": "created", "knowledge_id": reply.get("id")}
+
+
+def _gaiacpp_edit(proxy, knowledge_id: str, changes: Dict[str, Any]) -> Dict:
+    other = sorted(k for k in changes if k != "content")
+    if other:
+        raise HTTPException(
+            422,
+            "gaiacpp, the agent this PC is set to use, can only change a "
+            f"memory's text. It can't change: {', '.join(other)}.",
+        )
+    _gaiacpp_require(proxy, "edit")
+    _gaiacpp_call(
+        "change the memory",
+        lambda: proxy.update_memory(knowledge_id, changes["content"]),
+    )
+    return {"status": "updated", "knowledge_id": knowledge_id}
+
+
+def _gaiacpp_delete(proxy, knowledge_id: str) -> Dict:
+    _gaiacpp_require(proxy, "delete")
+    _gaiacpp_call("delete the memory", lambda: proxy.delete_memory(knowledge_id))
+    return {"status": "deleted", "knowledge_id": knowledge_id}
+
+
+def _gaiacpp_item(proxy, knowledge_id: str) -> Dict:
+    listing = _gaiacpp_listing(proxy)
+    for row in listing["rows"]:
+        if row["id"] == knowledge_id:
+            return row
+    if listing["truncated"]:
+        raise HTTPException(
+            404,
+            f"Knowledge entry {knowledge_id} is not among the newest "
+            f"{_GAIACPP_ROW_LIMIT} memories gaiacpp lists (it holds "
+            f"{listing['store_total']}); older ones can't be fetched by id.",
+        )
+    raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
+
+
+@router.get("/api/memory/store")
+def memory_store_info() -> Dict:
+    """Which agent's memory the page shows and what that store can do.
+
+    Reads the saved choice only; it never starts or asks an agent.
+    """
+    from gaia.daemon.sidecars import fetch
+
+    if _memory_agent() == _GAIACPP:
+        return {
+            "agent": _GAIACPP,
+            "other_available": True,
+            "supports": {key: False for key in _GAIACPP_SUPPORT_KEYS},
+        }
+    return {
+        "agent": _GAIAPY,
+        "other_available": fetch.native_flagship() is not None,
+        "supports": {key: True for key in _GAIACPP_SUPPORT_KEYS},
+    }
+
+
+# ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
 
@@ -293,6 +671,9 @@ def memory_stats() -> Dict:
     Includes embedding coverage, or ``embedding: null`` and an
     ``embedding_error`` when it could not be read.
     """
+    gaiacpp = _gaiacpp_memory()
+    if gaiacpp is not None:
+        return _gaiacpp_stats(gaiacpp)
     store = _get_store()
     stats = store.get_stats()
 
@@ -309,7 +690,9 @@ def memory_stats() -> Dict:
     return stats
 
 
-@router.get("/api/memory/activity")
+@router.get(
+    "/api/memory/activity", dependencies=[_python_memory_only("activity timeline")]
+)
 def memory_activity(days: int = Query(30, ge=1, le=365)) -> List[Dict]:
     """Daily activity timeline for the activity chart."""
     return _get_store().get_activity_timeline(days=days)
@@ -387,6 +770,23 @@ def list_knowledge(
     if sensitive is None and not include_sensitive:
         effective_sensitive = False
 
+    gaiacpp = _gaiacpp_memory()
+    if gaiacpp is not None:
+        return _gaiacpp_knowledge(
+            gaiacpp,
+            category=category,
+            context=context,
+            entity=entity,
+            sensitive=effective_sensitive,
+            search=search,
+            sort_by=sort_by,
+            order=order,
+            offset=offset,
+            limit=limit,
+            time_from=time_from,
+            time_to=time_to,
+            about_user=about_user,
+        )
     return _get_store().get_all_knowledge(
         category=category,
         context=context,
@@ -457,7 +857,13 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
 
 @router.post("/api/memory/knowledge")
 def create_knowledge(body: KnowledgeCreate) -> Dict:
-    """Create a knowledge entry from the dashboard and embed it."""
+    """Create a knowledge entry from the dashboard and embed it.
+
+    gaiacpp's store has no embeddings, so its reply carries no ``embedded``.
+    """
+    gaiacpp = _gaiacpp_memory()
+    if gaiacpp is not None:
+        return _gaiacpp_create(gaiacpp, body)
     store = _get_store()
     try:
         knowledge_id = store.store(
@@ -487,6 +893,9 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
     kwargs = {k: v for k, v in body.model_dump().items() if v is not None}
     if not kwargs:
         raise HTTPException(400, "No fields to update")
+    gaiacpp = _gaiacpp_memory()
+    if gaiacpp is not None:
+        return _gaiacpp_edit(gaiacpp, knowledge_id, kwargs)
     store = _get_store()
     # Category capped by KnowledgeUpdate.
     try:
@@ -508,7 +917,11 @@ def delete_knowledge(knowledge_id: str) -> Dict:
 
     Forgotten, it is not learned again from old chats. A tool lesson or
     session summary is the agent's own record, so deleting it forgets nothing.
+    gaiacpp's store keeps no forgotten record: the one entry is deleted.
     """
+    gaiacpp = _gaiacpp_memory()
+    if gaiacpp is not None:
+        return _gaiacpp_delete(gaiacpp, knowledge_id)
     store = _get_store()
     item = store.get_item(knowledge_id)
     if item is None:
@@ -536,6 +949,9 @@ def get_knowledge_item(knowledge_id: str) -> Dict:
     intentionally does not, so eval and the dashboard can verify the
     supersession chain (``superseded_by`` field) for adversarial scenarios.
     """
+    gaiacpp = _gaiacpp_memory()
+    if gaiacpp is not None:
+        return _gaiacpp_item(gaiacpp, knowledge_id)
     item = _get_store().get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
@@ -576,7 +992,9 @@ def _require_memory_admin() -> None:
         )
 
 
-@router.post("/api/memory/admin/clear")
+@router.post(
+    "/api/memory/admin/clear", dependencies=[_python_memory_only("eval reset tools")]
+)
 def admin_clear(body: AdminClearRequest) -> Dict:
     """Wipe memory for an eval scenario reset.  Eval-only.
 
@@ -601,7 +1019,9 @@ def admin_clear(body: AdminClearRequest) -> Dict:
     return {"scope": body.scope, "cleared": cleared}
 
 
-@router.post("/api/memory/admin/seed")
+@router.post(
+    "/api/memory/admin/seed", dependencies=[_python_memory_only("eval reset tools")]
+)
 def admin_seed(body: AdminSeedRequest) -> Dict:
     """Bulk-insert knowledge items, bypassing dedup.  Eval-only.
 
@@ -634,13 +1054,19 @@ def admin_seed(body: AdminSeedRequest) -> Dict:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/entities")
+@router.get(
+    "/api/memory/entities",
+    dependencies=[_python_memory_only("list of the people and things it knows")],
+)
 def list_entities(limit: int = Query(100, ge=1, le=500)) -> List[Dict]:
     """List all unique entities with their knowledge counts."""
     return _get_store().get_entities(limit=limit)
 
 
-@router.get("/api/memory/entities/{entity}")
+@router.get(
+    "/api/memory/entities/{entity}",
+    dependencies=[_python_memory_only("list of the people and things it knows")],
+)
 def get_entity(entity: str, limit: int = Query(20, ge=1, le=200)) -> List[Dict]:
     """Get all knowledge linked to a specific entity."""
     return _get_store().get_by_entity(entity, limit=limit)
@@ -651,7 +1077,7 @@ def get_entity(entity: str, limit: int = Query(20, ge=1, le=200)) -> List[Dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/tools")
+@router.get("/api/memory/tools", dependencies=[_python_memory_only("tool history")])
 def tool_summary() -> List[Dict]:
     """Per-tool performance stats."""
     return _get_store().get_tool_summary()
@@ -662,13 +1088,18 @@ def tool_summary() -> List[Dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/conversations")
+@router.get(
+    "/api/memory/conversations", dependencies=[_python_memory_only("conversation log")]
+)
 def list_sessions(limit: int = Query(20, ge=1, le=100)) -> List[Dict]:
     """List conversation sessions with timestamps and turn counts."""
     return _get_store().get_sessions(limit=limit)
 
 
-@router.get("/api/memory/conversations/search")
+@router.get(
+    "/api/memory/conversations/search",
+    dependencies=[_python_memory_only("conversation log")],
+)
 def search_conversations(
     query: str = Query(..., min_length=1, max_length=500),
     limit: int = Query(20, ge=1, le=100),
@@ -677,7 +1108,10 @@ def search_conversations(
     return _get_store().search_conversations(query, limit=limit)
 
 
-@router.get("/api/memory/conversations/{session_id}")
+@router.get(
+    "/api/memory/conversations/{session_id}",
+    dependencies=[_python_memory_only("conversation log")],
+)
 def get_session(
     session_id: str,
     limit: int = Query(200, ge=1, le=500),
@@ -691,7 +1125,7 @@ def get_session(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/upcoming")
+@router.get("/api/memory/upcoming", dependencies=[_python_memory_only("due dates")])
 def upcoming_items(
     days: int = Query(7, ge=1, le=90),
     include_sensitive: bool = Query(
@@ -713,7 +1147,10 @@ def upcoming_items(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/memory/consolidate")
+@router.post(
+    "/api/memory/consolidate",
+    dependencies=[_python_memory_only("conversation log to consolidate")],
+)
 def trigger_consolidation(
     max_sessions: int = Query(5, ge=1, le=50),
 ) -> Dict:
@@ -738,7 +1175,9 @@ def trigger_consolidation(
         raise HTTPException(500, f"Consolidation failed: {type(exc).__name__}")
 
 
-@router.post("/api/memory/rebuild-embeddings")
+@router.post(
+    "/api/memory/rebuild-embeddings", dependencies=[_python_memory_only("embeddings")]
+)
 def rebuild_embeddings() -> Dict:
     """Trigger embedding backfill for items missing embeddings.
 
@@ -761,34 +1200,20 @@ def rebuild_embeddings() -> Dict:
         )
 
 
-_RECONCILIATION_PROMPT = """\
-Given these two memory items from the same user, classify their relationship.
-Return JSON: {{"relationship": "reinforce|contradict|weaken|neutral", "action": "description"}}
-
-Item A (stored {date_a}): {content_a}
-Item B (stored {date_b}): {content_b}"""
-
-_RECONCILE_SIMILARITY_THRESHOLD = 0.85
-
-
-@router.post("/api/memory/reconcile")
+@router.post(
+    "/api/memory/reconcile",
+    dependencies=[_python_memory_only("embeddings to compare memories with")],
+)
 def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
     """Manually trigger background memory reconciliation.
 
     Compares knowledge entries for contradictions and reinforcements using
     FAISS similarity search + LLM classification.  Works standalone — no
-    active ChatAgent session required.
+    active ChatAgent session required. Both paths run
+    ``gaia.agents.base.memory.reconcile_memories``, so they agree.
 
     Returns ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
     """
-    result = {
-        "pairs_checked": 0,
-        "reinforced": 0,
-        "contradicted": 0,
-        "weakened": 0,
-        "neutral": 0,
-    }
-
     # If an active agent session is available, prefer it (uses cached FAISS index)
     if _reconcile_fn is not None:
         try:
@@ -801,183 +1226,47 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                 "Check the GAIA server log for the traceback.",
             ) from exc
 
-    # Standalone path — build a temporary FAISS index from stored embeddings
     try:
-        import numpy as np
+        importlib.import_module("faiss")
+    except ImportError:
+        raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
 
-        try:
-            import faiss
-        except ImportError:
-            raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
-
-        from gaia.agents.base.memory import _blob_to_embedding
+    try:
+        from gaia.agents.base.memory import (
+            RECONCILIATION_SYSTEM_PROMPT,
+            reconcile_memories,
+            reconciliation_max_tokens,
+        )
         from gaia.llm import create_client
+        from gaia.llm.lemonade_client import (
+            no_thinking_kwargs,
+            resolve_local_chat_model,
+        )
 
         store = _get_store()
-        items = store.get_items_for_reconciliation(limit=200)
+        llm: Dict[str, Any] = {}
 
-        if len(items) < 2:
-            return result  # Not enough items with embeddings
-
-        # Dimension is derived from the stored vectors, not a hardcoded constant
-        # — the active embedder (e.g. the NPU FLM embedder) may differ from the
-        # GGUF default (#1744). The first valid vector sets the expected dim;
-        # any vector of a different dim (a stale pre-switch embedding) is skipped.
-        ids: List[str] = []
-        vectors: List[np.ndarray] = []
-        item_map: Dict[str, Any] = {}
-        expected_dim: Optional[int] = None
-        undecodable = 0
-
-        for item in items:
-            try:
-                vec = _blob_to_embedding(item["embedding"])
-                if expected_dim is None:
-                    expected_dim = int(vec.shape[0])
-                if vec.shape[0] != expected_dim:
-                    continue
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                ids.append(item["id"])
-                vectors.append(vec)
-                item_map[item["id"]] = item
-            except (ValueError, TypeError, KeyError) as exc:
-                undecodable += 1
-                logger.debug(
-                    "[memory router] skipping item %s: %s", item.get("id"), exc
-                )
-
-        if undecodable:
-            logger.warning(
-                "[memory router] reconcile skipped %d item(s) with an unreadable "
-                "embedding; POST /api/memory/rebuild-embeddings to include them",
-                undecodable,
-            )
-
-        if len(vectors) < 2 or expected_dim is None:
-            return result
-
-        mat = np.stack(vectors).astype(np.float32)
-        index = faiss.IndexFlatIP(expected_dim)
-        index.add(mat)
-
-        n_neighbors = min(5, len(vectors))
-        scores_all, indices_all = index.search(mat, n_neighbors)
-
-        # Collect high-similarity pairs
-        pairs: List[tuple] = []
-        seen: set = set()
-        for i in range(len(vectors)):
-            for j_pos in range(n_neighbors):
-                j = int(indices_all[i][j_pos])
-                if j == i:
-                    continue
-                sim = float(scores_all[i][j_pos])
-                if sim >= _RECONCILE_SIMILARITY_THRESHOLD:
-                    key = tuple(sorted((ids[i], ids[j])))
-                    if key not in seen:
-                        seen.add(key)
-                        pairs.append((ids[i], ids[j], sim))
-
-        pairs.sort(key=lambda x: x[2], reverse=True)
-        pairs = pairs[:max_pairs]
-
-        if not pairs:
-            return result
-
-        llm = create_client()
-        # One metadata dict per id for the whole run: a memory in several
-        # pairs must keep every marker, not just the last pair's.
-        metas: Dict[str, Dict[str, Any]] = {}
-
-        def _meta(knowledge_id: str) -> Dict[str, Any]:
-            if knowledge_id not in metas:
-                raw_meta = item_map[knowledge_id].get("metadata") or {}
-                if isinstance(raw_meta, str):
-                    try:
-                        raw_meta = json.loads(raw_meta) if raw_meta else {}
-                    except json.JSONDecodeError as exc:
-                        raise ValueError(
-                            f"memory {knowledge_id} has unreadable metadata "
-                            f"({exc}); fix or delete that entry, then retry"
-                        ) from exc
-                meta = dict(raw_meta)
-                meta["reconciled_with"] = list(meta.get("reconciled_with") or [])
-                metas[knowledge_id] = meta
-            return metas[knowledge_id]
-
-        for id_a, id_b, _sim in pairs:
-            item_a = item_map.get(id_a)
-            item_b = item_map.get(id_b)
-            if not item_a or not item_b:
-                continue
-
-            # Skip already-reconciled pairs
-            meta_a = _meta(id_a)
-            meta_b = _meta(id_b)
-            if id_b in meta_a["reconciled_with"] or id_a in meta_b["reconciled_with"]:
-                continue
-
-            prompt = _RECONCILIATION_PROMPT.format(
-                date_a=str(item_a.get("created_at", "unknown"))[:10],
-                content_a=str(item_a.get("content", ""))[:500],
-                date_b=str(item_b.get("created_at", "unknown"))[:10],
-                content_b=str(item_b.get("content", ""))[:500],
-            )
-            # An LLM that is down fails the run; only an unparseable reply skips a pair.
-            raw = llm.chat(
-                [{"role": "user", "content": prompt}],
+        def classify(prompt: str) -> str:
+            # Created on first use: a run with no new pairs needs no LLM.
+            if not llm:
+                llm["model"] = resolve_local_chat_model()
+                llm["client"] = create_client()
+            model = llm["model"]
+            raw = llm["client"].chat(
+                [
+                    {"role": "system", "content": RECONCILIATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                model=model,
                 temperature=0.1,
-                max_new_tokens=128,
+                max_tokens=reconciliation_max_tokens(model),
+                **no_thinking_kwargs(model),
             )
             if hasattr(raw, "__iter__") and not isinstance(raw, str):
                 raw = "".join(raw)
-            raw = strip_reasoning(raw)
-            if raw.startswith("```"):
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-            try:
-                classification = json.loads(raw)
-                relationship = classification.get("relationship", "neutral")
-            except (json.JSONDecodeError, AttributeError) as exc:
-                logger.warning(
-                    "[memory router] skipping pair %s/%s: unparseable reply (%s)",
-                    id_a,
-                    id_b,
-                    exc,
-                )
-                continue
+            return raw
 
-            result["pairs_checked"] += 1
-
-            if relationship == "reinforce":
-                store.update_confidence(id_a, 0.05)
-                store.update_confidence(id_b, 0.05)
-                result["reinforced"] += 1
-            elif relationship == "contradict":
-                # Weaken both slightly; log in metadata
-                store.update_confidence(id_a, -0.1)
-                store.update_confidence(id_b, -0.1)
-                result["contradicted"] += 1
-            elif relationship == "weaken":
-                store.update_confidence(id_b, -0.05)
-                result["weakened"] += 1
-            else:
-                result["neutral"] += 1
-
-            # An unrecorded pair is re-classified, and re-penalised, next run.
-            meta_a["reconciled_with"].append(id_b)
-            meta_b["reconciled_with"].append(id_a)
-            for knowledge_id, meta in ((id_a, meta_a), (id_b, meta_b)):
-                if not store.update(knowledge_id, metadata=meta):
-                    raise RuntimeError(
-                        f"could not mark memory {knowledge_id} as reconciled: "
-                        "the entry no longer exists"
-                    )
-
-        logger.info("[memory router] standalone reconcile: %s", result)
-        return result
+        return reconcile_memories(store, classify, max_pairs=max_pairs)
 
     except HTTPException:
         raise
@@ -986,7 +1275,9 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         raise HTTPException(500, f"Reconciliation failed: {type(exc).__name__}: {exc}")
 
 
-@router.get("/api/memory/embedding-coverage")
+@router.get(
+    "/api/memory/embedding-coverage", dependencies=[_python_memory_only("embeddings")]
+)
 def embedding_coverage() -> Dict:
     """Return embedding status for all knowledge items.
 
@@ -1003,7 +1294,10 @@ def embedding_coverage() -> Dict:
         )
 
 
-@router.post("/api/memory/rebuild-fts")
+@router.post(
+    "/api/memory/rebuild-fts",
+    dependencies=[_python_memory_only("search index to rebuild")],
+)
 def rebuild_fts() -> Dict:
     """Rebuild all FTS5 indexes from source tables.
 
@@ -1017,7 +1311,10 @@ def rebuild_fts() -> Dict:
         raise HTTPException(500, f"FTS rebuild failed: {type(exc).__name__}")
 
 
-@router.post("/api/memory/prune")
+@router.post(
+    "/api/memory/prune",
+    dependencies=[_python_memory_only("tool history or conversation log to prune")],
+)
 def prune_memory(days: int = Query(90, ge=7, le=365)) -> Dict:
     """Prune old tool history, conversations, and low-confidence knowledge.
 
@@ -1030,7 +1327,13 @@ def prune_memory(days: int = Query(90, ge=7, le=365)) -> Dict:
         raise HTTPException(500, f"Prune failed: {type(exc).__name__}")
 
 
-@router.delete("/api/memory/all", dependencies=[Depends(_require_ui_header)])
+@router.delete(
+    "/api/memory/all",
+    dependencies=[
+        Depends(_require_ui_header),
+        _python_memory_only("erase-everything action"),
+    ],
+)
 def clear_all_memory() -> Dict:
     """Permanently delete all knowledge, tool history, and conversation data.
 
@@ -1047,7 +1350,13 @@ def clear_all_memory() -> Dict:
         raise HTTPException(500, f"Clear failed: {type(exc).__name__}")
 
 
-@router.post("/api/memory/reinitialize", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/api/memory/reinitialize",
+    dependencies=[
+        Depends(_require_ui_header),
+        _python_memory_only("start-over action"),
+    ],
+)
 def reinitialize_memory() -> Dict:
     """Wipe all memory and re-run initialization from scratch.
 
@@ -1136,7 +1445,10 @@ def _do_system_context_refresh() -> Dict:
     return {"stored": stored, "skipped": False}
 
 
-@router.post("/api/memory/refresh-system-context")
+@router.post(
+    "/api/memory/refresh-system-context",
+    dependencies=[_python_memory_only("facts about this PC")],
+)
 def refresh_system_context() -> Dict:
     """Re-collect OS, hardware, installed apps, and version facts.
 
@@ -1276,7 +1588,10 @@ def _downloaded_on_this_pc(model_id: str) -> bool:
     )
 
 
-@router.get("/api/memory/stream-discovery")
+@router.get(
+    "/api/memory/stream-discovery",
+    dependencies=[_python_memory_only("profile discovery")],
+)
 def stream_discovery():
     """Stream system discovery findings as SSE.
 
@@ -1385,7 +1700,10 @@ def stream_discovery():
     )
 
 
-@router.get("/api/memory/stream-inference")
+@router.get(
+    "/api/memory/stream-inference",
+    dependencies=[_python_memory_only("profile discovery")],
+)
 def stream_inference(include_browser: bool = Query(False)):
     """Stream LLM-assisted profile inference as SSE.
 
@@ -1741,7 +2059,10 @@ class InferenceCommit(BaseModel):
     insights: List[InferenceCommitItem]
 
 
-@router.post("/api/memory/commit-discovery")
+@router.post(
+    "/api/memory/commit-discovery",
+    dependencies=[_python_memory_only("profile discovery")],
+)
 def commit_discovery(body: DiscoveryCommit) -> Dict:
     """Store approved discovery findings. Returns ``{stored: int}``.
 
@@ -1781,7 +2102,10 @@ def commit_discovery(body: DiscoveryCommit) -> Dict:
     return {"stored": stored}
 
 
-@router.post("/api/memory/commit-inference")
+@router.post(
+    "/api/memory/commit-inference",
+    dependencies=[_python_memory_only("profile discovery")],
+)
 def commit_inference(body: InferenceCommit) -> Dict:
     """Store approved inference insights, replacing old inferred entries.
 

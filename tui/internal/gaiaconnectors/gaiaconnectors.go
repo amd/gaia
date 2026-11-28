@@ -379,7 +379,7 @@ func Render(rows []Connector) string {
 	var b strings.Builder
 	b.WriteString("Connectors\n\n")
 	anyConnected := false
-	var withAccess, withAccounts, withSeveral []string
+	var withAccess, withoutAccess, withAccounts, withSeveral []string
 	for _, c := range rows {
 		status := "not connected"
 		switch {
@@ -399,6 +399,10 @@ func Render(rows []Connector) string {
 		if c.Usable() && c.FlagshipCanUse() {
 			status += " · GAIA can use it"
 			withAccess = append(withAccess, c.ID)
+		} else if c.Usable() && c.Type == "mcp_server" && c.Activations != nil {
+			// An older CLI reports no activations, so nothing is known to be off.
+			status += " · off for GAIA"
+			withoutAccess = append(withoutAccess, c.ID)
 		}
 		fmt.Fprintf(&b, "  %-24s %s\n", c.DisplayName+" ("+c.ID+")", status)
 		if c.Type == "oauth_pkce" && len(c.Accounts) > 0 {
@@ -432,6 +436,10 @@ func Render(rows []Connector) string {
 	if len(withAccess) > 0 {
 		b.WriteString("\nTo turn off GAIA's access: /connectors revoke <id> (" +
 			strings.Join(withAccess, ", ") + ").")
+	}
+	if len(withoutAccess) > 0 {
+		b.WriteString("\nTo let GAIA use one that is off: /connectors allow <id> (" +
+			strings.Join(withoutAccess, ", ") + ").")
 	}
 	return b.String()
 }

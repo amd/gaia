@@ -3,8 +3,10 @@
 
 """Model-facing conversation history, budgeted without splitting tool groups."""
 
+import functools
 import json
 import re
+import threading
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
@@ -957,6 +959,17 @@ def context_usage(
     return usage
 
 
+def _locked(method):
+    """Run *method* under the history's lock: a host may run turns on any thread."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class SessionHistory(list):
     """A bounded model view backed by a complete, optionally durable transcript.
 
@@ -975,26 +988,34 @@ class SessionHistory(list):
             # Transcripts contain local file contents; keep new archives private.
             import os
 
-            fd = (
-                os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                if not path.exists()
-                else None
-            )
-            if fd is not None:
-                os.close(fd)
-        self._db = sqlite3.connect(str(path) if path is not None else ":memory:")
+            try:
+                os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+            except FileExistsError:
+                pass  # existing transcript, or another process just created it
+        self._lock = threading.RLock()
+        # Turns may run on a thread other than the one that opened the history.
+        self._db = sqlite3.connect(
+            str(path) if path is not None else ":memory:", check_same_thread=False
+        )
+        # owner: the process running a stand-in turn (gaia.utils.process_owner);
+        # NULL once the turn is recorded.
         self._db.execute(
-            "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS turns "
+            "(id INTEGER PRIMARY KEY, messages TEXT NOT NULL, owner TEXT)"
         )
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(turns)")}
         if "owner" not in columns:
-            # The process running a stand-in turn (gaia.utils.process_owner);
-            # NULL once the turn is recorded.
-            self._db.execute("ALTER TABLE turns ADD COLUMN owner TEXT")
+            try:
+                self._db.execute("ALTER TABLE turns ADD COLUMN owner TEXT")
+            except sqlite3.OperationalError as exc:
+                # Another process migrated the same archive first.
+                if "duplicate column" not in str(exc):
+                    raise
         self._db.commit()
         self._cuts = CutReporter()
         self._pending: Optional[int] = None
 
+    @_locked
     def begin(self, messages: list[dict]) -> None:
         """Save a stand-in for the turn now starting, so the transcript has it
         even if the process is killed before the turn ends.
@@ -1012,6 +1033,7 @@ class SessionHistory(list):
             )
         self._pending = cursor.lastrowid
 
+    @_locked
     def keep_pending(self) -> None:
         """Leave the stand-in as the turn's entry: it never finished."""
         if self._pending is not None:
@@ -1021,6 +1043,7 @@ class SessionHistory(list):
                 )
         self._pending = None
 
+    @_locked
     def discard_pending(self) -> None:
         """Drop the stand-in of a turn that ended without being recorded."""
         if self._pending is None:
@@ -1029,6 +1052,7 @@ class SessionHistory(list):
             self._db.execute("DELETE FROM turns WHERE id = ?", (self._pending,))
         self._pending = None
 
+    @_locked
     def record(self, messages: list[dict]) -> None:
         """Persist a complete turn without modifying its native tool IDs."""
         payload = json.dumps(messages, ensure_ascii=False)
@@ -1044,6 +1068,7 @@ class SessionHistory(list):
                 self._db.execute("INSERT INTO turns(messages) VALUES (?)", (payload,))
         self._pending = None
 
+    @_locked
     def prepare(
         self,
         agent: Any,
@@ -1060,6 +1085,7 @@ class SessionHistory(list):
             self._cuts if on_cut is not None else None,
         )
 
+    @_locked
     def turns(self, agent: Any) -> list[list[dict]]:
         """Every finished turn, in the form the model view is chosen from."""
         from gaia.utils.process_owner import owner_is_gone
@@ -1080,6 +1106,7 @@ class SessionHistory(list):
             turns = text_tool_history(turns)
         return turns
 
+    @_locked
     def clear(self) -> None:
         with self._db:
             self._db.execute("DELETE FROM turns")
@@ -1087,5 +1114,6 @@ class SessionHistory(list):
         self._cuts = CutReporter()
         self._pending = None
 
+    @_locked
     def close(self) -> None:
         self._db.close()

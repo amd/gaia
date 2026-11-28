@@ -560,21 +560,141 @@ class TestConnectGrantAgent:
         assert captured["scopes"] == []
 
 
+NEVER_CONFIGURED = "never configured"
+NOT_CONNECTED = "configured, not connected"
+CONNECTED = "connected"
+
+
+class _RevokeEndpoint:
+    """Stands in for the provider's revoke endpoint and records each request."""
+
+    def __init__(self):
+        self.posts = []
+
+    def client(self, **_kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def post(self, url, data=None):
+        from types import SimpleNamespace
+
+        self.posts.append((url, data))
+        return SimpleNamespace(status_code=200)
+
+
+class TestStartingStates:
+    """Each command that reads connector state, from each state a user can be in.
+
+    #8792: ``disconnect`` was only ever run with an OAuth client configured,
+    so a fresh install got the client-setup walkthrough instead of "nothing
+    stored".
+    """
+
+    @pytest.fixture(params=[NEVER_CONFIGURED, NOT_CONNECTED, CONNECTED])
+    def state(self, request, monkeypatch):
+        if request.param == NEVER_CONFIGURED:
+            monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID")
+            monkeypatch.delenv("GAIA_GOOGLE_CLIENT_SECRET", raising=False)
+        elif request.param == CONNECTED:
+            _seed_google("alice@example.com")
+        return request.param
+
+    @pytest.fixture
+    def revoke_endpoint(self, monkeypatch):
+        from gaia.connectors import flow
+
+        endpoint = _RevokeEndpoint()
+        monkeypatch.setattr(flow.httpx, "AsyncClient", endpoint.client)
+        return endpoint
+
+    @staticmethod
+    def _google_row(listing: str) -> str:
+        (row,) = [line for line in listing.splitlines() if line.startswith("google ")]
+        return row.split("]", 1)[1].strip()
+
+    @pytest.mark.parametrize("command", ["list", "status"])
+    def test_the_listing_says_whether_google_is_connected(self, state, command):
+        rc, out, err = _run("connectors", command)
+
+        assert (rc, err) == (0, "")
+        expected = (
+            "configured (alice@example.com)" if state == CONNECTED else "not configured"
+        )
+        assert self._google_row(out) == expected
+
+    def test_the_json_listing_matches_and_holds_no_token(self, state):
+        rc, out, _err = _run("connectors", "list", "--json")
+
+        assert rc == 0
+        (google,) = [row for row in json.loads(out) if row["id"] == "google"]
+        assert google["configured"] is (state == CONNECTED)
+        assert [account["email"] for account in google["accounts"]] == (
+            ["alice@example.com"] if state == CONNECTED else []
+        )
+        assert "seed" not in out
+
+    def test_disconnect_says_what_it_did(self, state, revoke_endpoint):
+        from gaia.connectors.providers import get as get_provider
+
+        revoke_url = get_provider("google").revoke_url if state == CONNECTED else None
+
+        rc, out, err = _run("connectors", "disconnect", "google")
+
+        assert (rc, err) == (0, "")
+        nothing = (
+            "Nothing stored for google; there was nothing to disconnect or revoke.\n"
+        )
+        if state == CONNECTED:
+            assert out == "Disconnected google (provider access revoked).\n"
+            assert revoke_endpoint.posts == [(revoke_url, {"token": "seed"})]
+        else:
+            assert out == nothing
+            assert revoke_endpoint.posts == []
+
+        _rc, listing, _err = _run("connectors", "list")
+        assert self._google_row(listing) == "not configured"
+        # A second disconnect has nothing left to remove, whatever came first.
+        assert _run("connectors", "disconnect", "google") == (0, nothing, "")
+        assert len(revoke_endpoint.posts) == (state == CONNECTED)
+
+    # The connected check asks the provider for a token, so it is not run here.
+    @pytest.mark.parametrize(
+        "state, reason, next_step",
+        [
+            (
+                NEVER_CONFIGURED,
+                "Google OAuth client is not configured",
+                "gaia connectors configure google --client-id",
+            ),
+            (NOT_CONNECTED, "No google connection.", "gaia connectors connect google"),
+        ],
+        indirect=["state"],
+    )
+    def test_the_health_check_fails_with_the_step_that_state_needs(
+        self, state, reason, next_step
+    ):
+        rc, out, _err = _run("connectors", "test", "google")
+
+        assert rc == 1
+        assert out.startswith(f"google: FAIL  {reason}")
+        assert next_step in out
+        if state == NOT_CONNECTED:
+            assert "OAuth client is not configured" not in out
+
+    def test_grants_are_empty_until_one_is_given(self, state):
+        assert _run("connectors", "grants", "list", "google") == (
+            0,
+            "No grants for google.\n",
+            "",
+        )
+
+
 class TestStatus:
-    def test_status_empty(self):
-        # list/status shows catalog entries; google is always in the catalog
-        rc, out, _err = _run("connectors", "status")
-        assert rc == 0
-        assert "google" in out
-        assert "not configured" in out
-
-    def test_status_seeded(self):
-        _seed_google("alice@example.com")
-        rc, out, _err = _run("connectors", "status")
-        assert rc == 0
-        assert "alice@example.com" in out
-        assert "google" in out
-
     def test_status_json(self):
         sentinel_token = "TOKEN-MUST-NOT-LEAK-12345"
         rc, out, _err = _run("connectors", "status", "--json")
@@ -625,6 +745,13 @@ class TestGrants:
         rc, out, _err = _run("connectors", "grants", "list")
         assert rc == 0
         assert "No grants" in out
+
+    def test_grants_help_names_the_live_agent_id(self):
+        rc, out, _err = _run("connectors", "grants", "grant", "--help")
+
+        assert rc == 0
+        assert "installed:gaia" in out
+        assert "builtin:chat" not in out
 
 
 class TestConfigure:
@@ -915,11 +1042,6 @@ class TestConfigureSecretlessPublicClient:
 
 
 class TestDisconnect:
-    def test_disconnect_idempotent(self):
-        rc, _out, _err = _run("connectors", "disconnect", "google")
-        # Idempotent — works even when nothing to disconnect.
-        assert rc == 0
-
     def test_disconnect_forwarded_connection_reports_no_remote_revoke(self):
         # #2591 review: a forwarded connection's stored token belongs to the
         # host app, not GAIA — the CLI must say plainly that no remote
@@ -1234,3 +1356,66 @@ class TestConnectCallbackPort:
         assert rc == 0, err
         assert "Remote session detected (SSH)" in out
         assert "ssh -L 8085:127.0.0.1:8085 <user>@<host>" in out
+
+
+class TestUserAddedMcpServer:
+    """A server the user added to mcp_servers.json is listed and can be turned
+    off and on for GAIA with the same commands as a catalog server (#8668)."""
+
+    FLAGSHIP = "installed:gaia"
+
+    @pytest.fixture(autouse=True)
+    def toy_entry(self, tmp_path, monkeypatch):
+        gaia_dir = tmp_path / ".gaia"
+        gaia_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("GAIA_HOME", str(gaia_dir))
+        (gaia_dir / "mcp_servers.json").write_text(
+            json.dumps({"mcpServers": {"toy": {"command": "python", "args": []}}}),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _row(connector_id):
+        rc, out, err = _run("connectors", "list", "--json")
+        assert rc == 0, err
+        return next(r for r in json.loads(out) if r["id"] == connector_id)
+
+    def test_it_is_listed_on_for_gaia(self):
+        row = self._row("toy")
+        assert row["type"] == "mcp_server"
+        assert row["custom"] is True and row["configured"] is True
+        assert row["activations"] == {self.FLAGSHIP: True}
+        assert self._row("mcp-github")["custom"] is False
+
+    def test_deactivate_then_activate(self):
+        rc, out, err = _run(
+            "connectors", "activations", "deactivate", "toy", self.FLAGSHIP
+        )
+        assert rc == 0, err
+        assert self._row("toy")["activations"] == {self.FLAGSHIP: False}
+
+        rc, out, err = _run(
+            "connectors",
+            "activations",
+            "activate",
+            "toy",
+            self.FLAGSHIP,
+            "--scopes",
+            "use",
+        )
+        assert rc == 0, err
+        assert out == f"Activated toy for {self.FLAGSHIP}.\n"
+        assert self._row("toy")["activations"] == {self.FLAGSHIP: True}
+
+    def test_activations_list_shows_the_default(self):
+        rc, out, _err = _run("connectors", "activations", "list")
+        assert rc == 0
+        assert f"toy {self.FLAGSHIP}: active" in out
+
+    def test_a_name_that_is_nowhere_says_where_it_looked(self):
+        rc, _out, err = _run(
+            "connectors", "activations", "activate", "nope", self.FLAGSHIP
+        )
+        assert rc != 0
+        assert "Unknown connector 'nope'" in err
+        assert "mcp_servers.json" in err

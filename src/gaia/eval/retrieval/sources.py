@@ -9,7 +9,6 @@ every read re-checks the checksum recorded in ``eval/retrieval/sources.json``.
 from __future__ import annotations
 
 import concurrent.futures
-import hashlib
 import json
 import os
 import urllib.error
@@ -19,6 +18,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 from gaia.config import gaia_home
+from gaia.utils.hashing import sha256_file as _sha256
 
 CACHE_ENV = "GAIA_RETRIEVAL_CACHE"
 _MANIFEST = Path("eval") / "retrieval" / "sources.json"
@@ -93,14 +93,6 @@ def cache_dir() -> Path:
 
 def user_agent_for(url: str) -> str:
     return _HOST_USER_AGENTS.get(urlparse(url).hostname or "", _USER_AGENT)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _entry(manifest: Dict[str, dict], source: str, rel: str) -> dict:

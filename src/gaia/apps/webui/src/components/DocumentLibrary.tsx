@@ -19,7 +19,9 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
+import { describeSkippedFiles } from './folderIndexResult';
 import { needsRetry, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
+import { setVisibleInterval } from '../utils/visibleInterval';
 import './DocumentLibrary.css';
 import { visibleName } from './CalendarApproval';
 
@@ -43,6 +45,7 @@ function describeFolderResult(t: Translate, folderName: string, result: IndexFol
         if (skipped > 0) {
             parts.push(say(pluralKey('docs.folder.skipped', skipped), { n: skipped }));
         }
+        parts.push(...describeSkippedFiles(say, result));
         const images = result.skipped_images ?? 0;
         if (images > 0) {
             parts.push(say(pluralKey('docs.folder.images', images), { n: images }));
@@ -247,7 +250,7 @@ export function DocumentLibrary() {
         }
 
         let isPolling = false;
-        const interval = setInterval(async () => {
+        const stop = setVisibleInterval(async () => {
             // Tick to update elapsed time display
             setTick((n) => n + 1);
 
@@ -281,7 +284,7 @@ export function DocumentLibrary() {
             }
         }, INDEX_POLL_MS);
 
-        return () => clearInterval(interval);
+        return stop;
     }, [hasIndexingDocs, setDocuments]);
 
     // Clean up start times for docs that are no longer indexing
@@ -301,7 +304,7 @@ export function DocumentLibrary() {
 
     // Periodic refresh to pick up server-side re-indexing and update timestamps
     useEffect(() => {
-        const refreshInterval = setInterval(async () => {
+        return setVisibleInterval(async () => {
             try {
                 const data = await api.listDocuments();
                 const freshDocs = data.documents || [];
@@ -325,8 +328,6 @@ export function DocumentLibrary() {
                 log.doc.warn('Document list refresh failed', err);
             }
         }, 15000); // Refresh every 15 seconds
-
-        return () => clearInterval(refreshInterval);
     }, [setDocuments]);
 
     // The row waiting on Undo is already gone from the list, so from the count too.

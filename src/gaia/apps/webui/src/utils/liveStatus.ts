@@ -4,6 +4,7 @@
 import { enMessages } from '../i18n/locales/en';
 import { ref, type MessageKey, type Param } from '../i18n/registry';
 import type { Translate } from '../i18n/useT';
+import { placeInLine } from './chatAlerts';
 
 let toolActions: Map<string, MessageKey> | null = null;
 
@@ -48,6 +49,13 @@ const SKILL_RELOAD_REASONS = new Map<string, Parameters<Translate>[0]>([
     ['it failed to load with the current settings', 'live.skillReloadFailed'],
 ]);
 
+/** Why a chat has no context measurement, in the chosen language; an unknown reason stays as sent. */
+export function localizeContextReason(t: Translate, reason: string): string {
+    return reason === "Not available yet: gaiacpp doesn't report what fills its context."
+        ? t('ctx.nativeUnavailable')
+        : reason;
+}
+
 /**
  * `label` in the chosen language when it is a status line GAIA knows; any other
  * line (a tool's progress, a retry notice) is shown as the backend wrote it.
@@ -71,6 +79,9 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (m) return t('live.loadingModel', { model: m[1] });
     m = /^Reading page (\d+) of (\d+)…$/.exec(label);
     if (m) return t('live.readingPage', { page: m[1], total: m[2] });
+    // `_queued_status_event` in _chat_helpers.py.
+    m = /^Waiting for the GPU — (\d+)(?:st|nd|rd|th) in line$/.exec(label);
+    if (m) return placeInLine(t, 'live.queued', Number(m[1]));
     m = /^Downloading the speech model, one time \(([\d.]+) GB\)$/.exec(label);
     if (m) return t('live.speechModelStart', { size: m[1] });
     m = /^Downloading the speech model, one time — (\d+)% of ([\d.]+) GB$/.exec(label);
@@ -90,5 +101,7 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (label === 'Downloaded the speech model') return t('live.speechModelDoneNoSize');
     m = /^Downloading (\S+)$/.exec(label);
     if (m) return t('live.downloadingModel', { model: m[1] });
+    m = /^Undo may not work for this turn: (\S+) doesn't record file changes yet\.$/.exec(label);
+    if (m) return t('turnChanges.nativeNoUndo', { name: m[1] });
     return label;
 }

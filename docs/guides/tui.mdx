@@ -566,7 +566,7 @@ GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 Welcome to GAIA
 Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
 
-Try one — press its number:
+Try one: Tab to select, Enter to run
   1  Today's tech news in brief
   2  Research a topic, with sources
   3  What fills up this folder
@@ -580,11 +580,12 @@ Ask a question, or type /help for what else this can do.
 
 The first screen suggests up to four things to try, one per skill the agent
 has that works without further setup (no file, link or connected account needed
-first). Press a suggestion's number on an empty composer to send it; once you
-start typing, digits are just text. On a local model the list moves into the
-line that says the model is ready, and the numbers keep working until your
-first message. The list comes from the skills the agent reports when it
-starts, built-in ones included, so it costs no model call.
+first). With an empty composer, press Tab to select a suggestion, then Enter
+to send it. Tab cycles through the list; Esc or typing returns to the composer.
+Digits are always text. On a local model the list moves into the line that says
+the model is ready and remains selectable until your first message. The list
+comes from the skills the agent reports when it starts, built-in ones included,
+so it costs no model call.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.
@@ -781,7 +782,8 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/automations` | List the reminders, summaries, alerts and triggers GAIA runs on its own, numbered. `/automations pause 2`, `resume 2` or `remove 2` changes one; a name works too. See [Automations](/guides/automations) |
 | `/connectors` | List your connected apps (Gmail, Slack, GitHub…). A connector with several accounts lists each one, marking the default and any whose sign-in expired. Also a clickable entry in the status bar. See [Connectors](/connectors) |
 | `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Told only to read; creates no schedules. GAIA keeps access to the app afterwards |
-| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on. Google and Microsoft access comes with signing in, so use `/connectors remove` for those |
+| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…) or an MCP server you added yourself, such as the access Personalize leaves on. Google and Microsoft access comes with signing in, so use `/connectors remove` for those |
+| `/connectors allow <id>` | Let GAIA use a connected tool server that `/connectors` shows as off for GAIA. It takes effect with your next message |
 | `/connectors remove <id> [address]` | Sign a Google or Microsoft account out of GAIA. With several accounts connected, name the one to remove, or GAIA lists them |
 | `/connectors add <id>` | Sign another Google or Microsoft account in beside the ones already connected. Your browser opens the provider's account picker; GAIA waits up to 15 minutes |
 | `/connectors reconnect <id> <address>` | Sign an account in again after its sign-in expired. `/connectors` marks expired accounts |
@@ -803,6 +805,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 | `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
 | `/sessions all` | The same list with eval and scheduled runs included |
+| `/quit` | Quit, like `Ctrl+C`. `/exit` does the same |
 | `/<skill-name>` | Run an installed skill on the rest of the line, as in Claude Code: `/pdf turn notes.md into a report`. The palette lists your skills after the commands above. See [Skills](/guides/gaia#skills) |
 
 ### How full the context is
@@ -834,6 +837,19 @@ Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/skills`, `/research`, `/setup`, `/models`, `/gpu`, `/provider` and `/agent` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
 needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
+
+On `gaiacpp`, the native agent, `/sessions`, `/context`, `/skills`, `/research`
+and `/image` are not available yet. They drop out of `/help` and the palette
+too, and typing one answers with a line that names the Python agent
+(`/agent gaiapy` switches to it). Every other command works on both programs.
+
+With the GAIA agent, a line that starts with `/` and one word is read as a command and is
+never sent to the model. If it is not a command or an installed skill, the answer
+is `Unknown command /name; /help lists commands`. The word may hold letters,
+digits, `-` and `_`, in any case, so `/Help` runs `/help`. A path such as
+`/etc/hosts` or `/Users/me/notes.txt summarise this` has a second `/` and is sent
+as a message. A single-folder path on its own (`/tmp`) looks like a command: start
+the message with another word (`look at /tmp`) to send it.
 
 Selecting a different agent from `/agents` reconnects in place and re-runs the
 readiness gate for it; the transcript stays on screen with a divider noting the
@@ -1144,12 +1160,12 @@ The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
 scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
 under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
 through the background service instead, it doesn't keep them yet: `/sessions`
-and `--resume` say so rather than showing an empty list. The native agent, `gaiacpp`, doesn't keep sessions yet either: `--resume` with it stops and names the Python agent to use instead.
+and `--resume` say so rather than showing an empty list. `gaiacpp`, the Fast and light agent, doesn't keep sessions yet either: `--resume` with it stops and names Full-featured to use instead, and so does `/sessions`.
 
 ## Which agent program answers
 
-GAIA's agent comes as two programs: `gaiacpp`, the native one, and `gaia-agent`,
-the Python one. The terminal installers and the one-line installers put `gaiacpp` next
+GAIA's agent comes as two programs: `gaiacpp`, which is Fast and light, and
+`gaia-agent`, which is Full-featured. The terminal installers and the one-line installers put `gaiacpp` next
 to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. The
 terminal UI runs `gaia-agent` until you choose `gaiacpp`, the same default as the Agent UI,
 so `--use-claude` and `--resume` keep working. Once chosen, `gaiacpp` is looked for in `~/.gaia/bin`
@@ -1162,7 +1178,7 @@ is a Beta:
  GAIA  │ agent gaia v0.25.4 (gaiacpp · Beta) │ Gemma-4-E4B-it-GGUF
 ```
 
-Without `(gaiacpp · Beta)` the Python agent is answering, as it does on an Intel Mac,
+Without `(gaiacpp · Beta)` Full-featured is answering, as it does on an Intel Mac,
 Windows on Arm or Linux on Arm, where no `gaiacpp` is built.
 
 ### Choosing one
@@ -1172,8 +1188,8 @@ which one you saved:
 
 | Choice | Good at | Trade-off |
 |---|---|---|
-| `gaiapy` — the Python agent, `gaia-agent` | Mature and well tested, with every tool and feature | Heavier: slower to start and uses more memory |
-| `gaiacpp` — the native C++ agent (**Beta**) | Fast and light: starts quickly and uses little memory | Fewer tools and features so far, and less tested |
+| `gaiapy`, **Full-featured** (the Python agent, `gaia-agent`) | Every tool and feature, and well tested | Heavier: slower to start and uses more memory |
+| `gaiacpp`, **Fast and light** (the native C++ agent, **Beta**) | Starts quickly and uses little memory | Fewer tools and features so far, and less tested |
 
 `/agent gaiapy` and `/agent gaiacpp` switch. The agent restarts on the other
 program right away: the readiness check runs for it, the transcript stays on
@@ -1211,10 +1227,10 @@ opens on a short screen instead of stopping with an error. It says why and
 waits for you to pick:
 
 - **Download gaiacpp again**, with a progress bar, then GAIA starts on it
-- **Use the Python agent**, which saves `gaiapy` as your choice (`/agent gaiacpp` switches back)
+- **Use Full-featured**, which saves `gaiapy` as your choice (`/agent gaiacpp` switches back)
 - **Quit**
 
-GAIA never moves you to the Python agent by itself. `?` shows the full error,
+GAIA never moves you to Full-featured by itself. `?` shows the full error,
 including where it looked. When the release has no `gaiacpp` to download, the
 first row says so and can't be picked.
 
@@ -1245,15 +1261,15 @@ A `gaiacpp` the Agent UI downloaded has a record of its checksum next to it
 (`gaiacpp.install.json`), and the terminal UI checks the file against it before
 every run. If the file no longer matches, or the record is damaged, GAIA does
 not run it: a saved choice opens the same screen, offering the download again or
-the Python agent, and a flag or variable stops the launch and names the file. It
+Full-featured, and a flag or variable stops the launch and names the file. It
 does not run another copy or the other program instead. A `flagship_agent`
 value other than `gaiapy` or `gaiacpp` also stops the launch, naming the file
 and the key.
 
-The native agent has no Claude provider. `--use-claude` is refused at launch
+The Fast and light agent (`gaiacpp`) has no Claude provider. `--use-claude` is refused at launch
 with it, and `/model` with a Claude model is refused in the chat, leaving the
 session on its current model. Use `/provider` to pick a model on this PC or a
-cloud provider that Lemonade offers, or run the Python agent for Claude. The
+cloud provider that Lemonade offers, or run Full-featured for Claude. The
 developer manual has the [full comparison](/reference/tui-dev#which-agent-program-runs).
 
 ## Running an agent by id

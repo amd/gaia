@@ -184,19 +184,23 @@ export const AGENT_DOWNLOAD_FAILED = {
 
 export interface AgentProgramsAnswers {
     /** Installed; not here but downloadable; or not here and not offered. */
-    gaiacpp?: 'installed' | 'downloadable' | 'unavailable';
+    gaiacpp?: 'installed' | 'downloadable' | 'unavailable' | 'outdated';
     /** The download as the listing reports it when the page opens. */
     download?: object;
     /** What each poll of the download answers. */
     poll?: object;
+    /** The agent in use. */
+    current?: 'gaiapy' | 'gaiacpp';
 }
 
 /** The agent programs as this PC would report them, and the gaiacpp download's answers. */
-export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll }: AgentProgramsAnswers = {}): Promise<void> {
+export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll, current = 'gaiapy' }: AgentProgramsAnswers = {}): Promise<void> {
     const cpp = gaiacpp === 'installed' ? AGENT_PROGRAMS.programs[1]
         : gaiacpp === 'downloadable' ? { ...AGENT_PROGRAMS.programs[1], installed: false, can_download: true }
+            // A copy an older installer left on PATH, under a newer app.
+            : gaiacpp === 'outdated' ? { ...AGENT_PROGRAMS.programs[1], can_download: true, update_available: true, version: '0.27.0-rc.8', release_version: '0.27.0-rc.10' }
             : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'this GAIA release has no gaiacpp to download. Use the Python agent, or update GAIA.', unavailable_code: 'no_release' };
-    const listing = { ...AGENT_PROGRAMS, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
+    const listing = { ...AGENT_PROGRAMS, current, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
     await page.route((url) => url.pathname.startsWith('/api/agent-programs'), async (route) => {
         const { pathname } = new URL(route.request().url());
         if (pathname === '/api/agent-programs') await route.fulfill({ json: listing });
@@ -219,6 +223,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /setup/check': { ready: true, steps: [] },
     'GET /setup/status': { state: 'idle' },
     'GET /setup/needs/chat': { job: 'chat', needed: false, model: null, disk_free_gb: null },
+    'GET /setup/needs/embedding': { job: 'embedding', needed: false, model: null, disk_free_gb: null },
     'GET /settings': SETTINGS,
     'GET /agent-programs': AGENT_PROGRAMS,
     'GET /providers': {
@@ -262,7 +267,7 @@ const ROUTES: Record<string, unknown> = {
     },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
-    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
+    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /goals/health': { error: null },
@@ -355,7 +360,7 @@ export async function withoutFlagship(page: Page): Promise<void> {
 
 const modelRow = (id: string, over: Record<string, unknown>) => ({
     id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null, state: 'downloaded',
-    available: true, unavailable_reason: null, fits: true, custom: false,
+    available: true, unavailable_reason: null, fits: true, custom: false, support: 'untested',
     placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'expected', warning: null },
     ...over,
 });
@@ -364,13 +369,13 @@ const modelRow = (id: string, over: Record<string, unknown>) => ({
  *  other apps little memory, and two it can't run. */
 export const MODEL_LIST = [
     modelRow('Gemma-4-E4B-it-GGUF', {
-        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2,
+        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2, support: 'verified',
         placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
         evidence: 'Eval: 128 of 218 scenarios passed on this model',
     }),
-    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3 }),
+    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3, support: 'verified' }),
     modelRow('gemma4-it-e4b-FLM', {
-        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1,
+        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1, support: 'verified',
         placement: { device: 'npu', backend: 'flm', label: 'NPU · FLM', source: 'expected', warning: null },
     }),
     modelRow('user.Qwen3-4B-Instruct-2507-Q4_K_M-GGUF', {
@@ -659,6 +664,13 @@ export async function useLocale(page: Page, locale: string): Promise<void> {
     }, locale);
 }
 
+/** A user who turned the resource usage strip on. */
+export async function withResourceStrip(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        window.localStorage.setItem('gaia.resourceMonitor.visible', '1');
+    });
+}
+
 /** A status the running extraction tool's own model calls send, as the backend writes it. */
 export const TOOL_STATUS = [
     { name: 'page', phase: 'reading', message: 'Reading page 3 of 12…', en: 'Reading page 3 of 12…', ar: 'جارٍ قراءة الصفحة 3 من 12…' },
@@ -730,12 +742,31 @@ export interface MemoryState {
     failed?: boolean;
     /** More memories than the first page holds. */
     more?: boolean;
+    /** Whose memory the page shows; gaiacpp's store keeps the text and little else. */
+    agent?: 'gaiapy' | 'gaiacpp';
+    /** The other agent has a memory of its own, so the page says which one this is. */
+    otherAvailable?: boolean;
+    /** The backend cannot say whose memory this is. */
+    storeFailed?: boolean;
 }
 
+/** What gaiacpp's store serves: the text of each memory, null where it keeps nothing. */
+const NATIVE_MEMORY_ITEMS = [
+    { ...memoryItem('n1', 'fact', 'Sister Odalys lives in Trondheim'), source: null, confidence: null, use_count: null },
+    { ...memoryItem('n2', 'preference', 'Prefers short answers with the numbers first'), source: null, confidence: null, use_count: null },
+    { ...memoryItem('n3', 'note', 'يفضّل الاجتماعات الصباحية'), source: null, confidence: null, use_count: null },
+];
+
 /** The Memory dashboard's endpoints: a few memories, goals and tools, or empty, off or failing. */
-export async function withMemory(page: Page, { enabled = true, empty = false, failed = false, more = false }: MemoryState = {}): Promise<void> {
-    const items = empty ? [] : MEMORY_ITEMS;
+export async function withMemory(page: Page, { enabled = true, empty = false, failed = false, more = false, agent = 'gaiapy', otherAvailable = agent === 'gaiacpp', storeFailed = false }: MemoryState = {}): Promise<void> {
+    const native = agent === 'gaiacpp';
+    const items = empty ? [] : native ? NATIVE_MEMORY_ITEMS : MEMORY_ITEMS;
+    const can = !native;
     const answers: Record<string, unknown> = {
+        'GET /memory/store': {
+            agent, other_available: otherAvailable,
+            supports: { due_dates: can, sources: can, sensitive_toggle: can, recategorize: can, goals: can, profile: can, advanced: can },
+        },
         'GET /memory/settings': { memory_enabled: enabled, mcp_memory_enabled: false, system_discovery_consent: false },
         'GET /memory/stats': {
             knowledge: {
@@ -778,8 +809,13 @@ export async function withMemory(page: Page, { enabled = true, empty = false, fa
         if (key === 'GET /memory/stream-discovery') {
             const body = DISCOVERY_EVENTS.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
             await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
-        } else if (failed && key.startsWith('GET /memory/') && key !== 'GET /memory/settings') {
+        } else if (storeFailed && key === 'GET /memory/store') {
+            await route.fulfill({ status: 503, json: { detail: 'gaiacpp is not running, so its memory cannot be read.' } });
+        } else if (failed && key.startsWith('GET /memory/') && key !== 'GET /memory/settings' && key !== 'GET /memory/store') {
             await route.fulfill({ status: 500, json: { detail: 'Memory store is locked by another process' } });
+        } else if (native && (['GET /goals', 'GET /goals/stats'].includes(key) || (key.startsWith('GET /memory/') && !['GET /memory/store', 'GET /memory/settings', 'GET /memory/knowledge', 'GET /memory/stats'].includes(key)))) {
+            // gaiacpp's store has none of these; a page that asks anyway shows this.
+            await route.fulfill({ status: 409, json: { detail: 'Not available while gaiacpp is the agent.' } });
         } else if (key in answers) {
             await route.fulfill({ json: answers[key] });
         } else {

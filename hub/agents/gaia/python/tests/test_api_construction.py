@@ -19,30 +19,17 @@ same gap this file exists to close.
 
 from __future__ import annotations
 
-import contextlib
 import importlib
 from dataclasses import fields
 
 import pytest
 from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+from registry_isolation import isolated_registry
 
-from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.api.agent_registry import AGENT_MODELS, AgentRegistry, _apply_env_overrides
 from gaia.api.sse_handler import SSEOutputHandler
 
 MODEL_ID = "gaia"
-
-
-@contextlib.contextmanager
-def _isolated_registry():
-    """@tool writes into a process-global dict shared with every other agent."""
-    saved = dict(_TOOL_REGISTRY)
-    _TOOL_REGISTRY.clear()
-    try:
-        yield
-    finally:
-        _TOOL_REGISTRY.clear()
-        _TOOL_REGISTRY.update(saved)
 
 
 def test_get_agent_builds_the_flagship_and_installs_the_sse_handler():
@@ -55,7 +42,7 @@ def test_get_agent_builds_the_flagship_and_installs_the_sse_handler():
     # Memory init is forced off for the same reason as the sibling tests: no
     # embedder in CI, and MemoryMixin's self-disable makes the surface differ
     # between a dev box and a runner.
-    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+    with isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
         agent = AgentRegistry().get_agent(MODEL_ID)
 

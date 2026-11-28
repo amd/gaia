@@ -33,6 +33,7 @@ import { personalizeSourceKind, requestPersonalize } from '../utils/connectorPer
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { AccountAddress, ConnectorAccountList } from './ConnectorAccounts';
 import { accountChoices, needsSignIn, showsAccountList } from '../utils/connectorAccounts';
+import { openAuthUrl } from '../utils/openAuthUrl';
 import { ConfirmSheet } from './setup/ConfirmSheet';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import { ltrIn } from './setup/format';
@@ -171,7 +172,8 @@ function PersonalizeButton({ connector, primary, onStarted }: {
  * nothing more to say (#2591 review — the Disconnect button previously
  * always implied a full revoke, even when only the local credential was
  * cleared). A disconnect with nothing stored says so instead of claiming a
- * revoke (#8607). Mirrors the CLI wording in
+ * revoke (#8607). An unreadable stored sign-in says so instead of claiming
+ * nothing was stored (#8713). Mirrors the CLI wording in
  * ``connectors/cli.py::_handle_disconnect``.
  */
 function describeDisconnectOutcome(payload: Record<string, unknown>, t: Translate): string | null {
@@ -185,7 +187,8 @@ function describeDisconnectOutcome(payload: Record<string, unknown>, t: Translat
     if (payload.revoke_supported && payload.revoked_remotely) {
         return null;
     }
-    if (payload.revoke_supported && !payload.revoked_remotely) {
+    if (payload.revoke_attempted) {
+        // The revoke ran and the provider did not confirm it.
         return t('settings.connectors.notRevoked', { reason: String(payload.revoke_error ?? t.bare('settings.advanced.unknown')) });
     }
     if (payload.revoke_error) {
@@ -593,7 +596,7 @@ function ConnectorTile({
                             onClearCheck={onClearCheck}
                         />
                     )}
-                    {connector.configured && connector.enabled !== false && (
+                    {connector.configured && connector.enabled !== false && !connector.custom && (
                         <div className={`connector-personalize${justConnected ? ' connector-personalize--offer' : ''}`} role={justConnected ? 'status' : undefined}>
                             <p>{t(justConnected ? 'settings.connectors.personalize.offer' : 'settings.connectors.personalize.tile', { source: personalizeSourceRef(connector), name: connector.display_name })}</p>
                             <PersonalizeButton connector={connector} primary={justConnected} onStarted={onPersonalizeStarted} />
@@ -666,20 +669,6 @@ function OAuthConfigureBody({
         window.addEventListener('focus', handleFocus);
         return () => window.removeEventListener('focus', handleFocus);
     }, [onChanged]);
-
-    // Open the OAuth URL in a real browser (Electron prefers the system
-    // browser via the IPC bridge; fall back to window.open for the
-    // dev-server case).
-    const openAuthUrl = (url: string) => {
-        const anyWindow = window as unknown as {
-            gaia?: { openExternal?: (url: string) => void };
-        };
-        if (anyWindow.gaia?.openExternal) {
-            anyWindow.gaia.openExternal(url);
-        } else {
-            window.open(url, '_blank', 'noopener');
-        }
-    };
 
     const handleConnect = async () => {
         setBusy(true);
@@ -1298,6 +1287,11 @@ function MCPServerConfigureBody({
             {connector.description && (
                 <p className="connector-desc"><bdi>{connectorDescription(t, connector)}</bdi></p>
             )}
+            {connector.custom && (
+                <p className="connector-desc">
+                    {t('settings.connectors.customServer', { file: ltrIn(t.locale, 'mcp_servers.json') })}
+                </p>
+            )}
             {err && (
                 <div className="configure-error">
                     <AlertCircle size={12} /> {err}
@@ -1384,7 +1378,7 @@ function MCPServerConfigureBody({
                 );
             })}
             <div className="configure-actions">
-                {!(keyless && connector.configured) && (
+                {!(keyless && connector.configured) && !connector.custom && (
                     <button
                         className="btn-primary"
                         disabled={busy || (!keyless && nothingTyped)}
@@ -1410,7 +1404,7 @@ function MCPServerConfigureBody({
                         {t('settings.connectors.check')}
                     </button>
                 )}
-                {connector.configured && (
+                {connector.configured && !connector.custom && (
                     <button
                         className="btn-secondary"
                         disabled={busy}

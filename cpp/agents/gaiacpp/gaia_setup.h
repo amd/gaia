@@ -32,6 +32,12 @@ enum class ServerSource {
     Default,        // nothing found: Lemonade's standard port
 };
 
+/// Where the person reading a remedy is, so it names something they can do there.
+enum class Surface {
+    Terminal,  // a shell, the REPL or the terminal UI
+    App,       // the GAIA desktop app, which is open and has its own Restart
+};
+
 struct ServerOrigin {
     ServerSource source = ServerSource::Default;
     std::string label;  // e.g. "--base-url", "Settings file /x/config.json"
@@ -82,12 +88,22 @@ std::string embeddedKeyFor(const GaiaServer& server, const std::string& url);
 /// request, and no command a tool runs, carries it to a server it wasn't for.
 void dropForeignLemonadeKey(const GaiaServer& server);
 
+/// The key a request to `url` carries when no flag or settings file names one,
+/// in resolveApiKey's order: GAIA_API_KEY; else `lemonadeKey` (the user's
+/// LEMONADE_API_KEY) to a loopback address only; else, when the user set
+/// neither, GAIA's own key to GAIA's own server. Notes the source in `origin`.
+std::string keyForNamedServer(const GaiaServer& own, const std::string& url, const std::string& lemonadeKey,
+                              ServerOrigin& origin);
+
+/// "" when the model server answers its health check. Else why not, by what
+/// chose it: how to start it when nothing answers, or the key or address to
+/// fix when something answers with an error. Endpoints that are not Lemonade
+/// are not asked.
+std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin,
+                             Surface surface = Surface::Terminal, bool* nothingAnswered = nullptr);
+
 /// Which key `cfg` sends, recorded in `origin` for an error that has to name it.
 void noteKeySource(ServerOrigin& origin, const AgentConfig& cfg, bool gaiaKey);
-
-/// "" when the model server answers its health check, else why not and how to
-/// start it, by what chose it. Endpoints that are not Lemonade are not asked.
-std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin);
 
 /// The terminal a download question is asked at.
 struct DownloadPrompt {

@@ -1886,6 +1886,305 @@ def _mentioned(claim: _Claim, answer: str) -> bool:
     return claim.value.number in named
 
 
+#: A script the request names is how the file gets built, not where figures come from.
+_CODE_SUFFIXES = frozenset({".py", ".js", ".ts", ".sh", ".ps1", ".bat", ".ipynb"})
+
+
+#: Tools that bring in outside data: a web page, a download, an indexed document.
+_LOOKUP_WORDS = ("web", "fetch", "download", "query")
+
+
+def _data_source(path: str) -> bool:
+    """A file figures could come from: not a script, not a skill's own pages."""
+    parts = [p.lower() for p in re.split(r"[\\/]", path) if p]
+    return (
+        bool(parts)
+        and os.path.splitext(parts[-1])[1] not in _CODE_SUFFIXES
+        and parts[-1] != "skill.md"
+        and "skills" not in parts[:-1]
+    )
+
+
+def _outside_sources(
+    records: Sequence[Dict[str, Any]], input_names: Sequence[str], written: Set[str]
+) -> bool:
+    """The turn read a data file other than *written*, or looked something up."""
+    paths = list(input_names)
+    for record in records:
+        name = _name(record)
+        if not _ran(record) or record.get("failed"):
+            continue
+        if _has(name, _LOOKUP_WORDS):
+            return True
+        if _has(name, _WRITE_WORDS + _EXEC_WORDS):
+            continue
+        args = record.get("args") or {}
+        paths += [
+            args[key]
+            for key in _PATH_ARGS
+            if isinstance(args, dict) and isinstance(args.get(key), str)
+        ]
+    return any(_basename(p) not in written and _data_source(p) for p in paths)
+
+
+#: Longer requests are never exempted, so the scan below stays bounded.
+_MAX_REQUEST = 4000
+#: Words, file names ("sales.csv") and the punctuation that ends a phrase.
+_TOKEN = re.compile(r"[\w'&]+(?:[.-][\w'&]+)*|[.,;:!?]")
+_FILE_TOKEN = re.compile(r"[\w'&-]+(?:\.[\w-]+)*\.[A-Za-z][A-Za-z0-9]{1,5}")
+_DATA_WORDS = frozenset(
+    "data dataset datasets row rows record records entry entries figure figures "
+    "number numbers value values amount amounts sale sales price prices "
+    "transaction transactions order orders invoice invoices expense expenses "
+    "budget budgets spreadsheet spreadsheets table tables workbook workbooks csv "
+    "content list lists customer customers user users name names email emails "
+    "balance balances account accounts contact contacts employee employees "
+    "salary salaries revenue revenues profit profits cost costs score scores "
+    "grade grades reading readings measurement measurements log logs stats "
+    "statistics metrics inventory receipts receipt quotes listings".split()
+)
+#: Words that only ever mean invented data, when a data word follows:
+#: "fake customer list", "dummy data", "made-up numbers".
+_INVENTION_WORDS = frozenset(
+    "fake faked dummy mock mocked mock-up mockup made-up make-believe invented "
+    "fictional fictitious fabricated imaginary placeholder placeholders "
+    "synthetic".split()
+)
+#: Verbs that ask for invention: "make up 10 orders", "invent some prices".
+_INVENTION_VERBS = frozenset("invent fabricate".split())
+#: "make up" only as a request, not "the products that make up our revenue".
+_MAKE_UP_LEAD = frozenset(
+    ", ; : . ! ? please pls just and then to can could would will you i we "
+    "also simply so or".split()
+)
+_FILLERS = frozenset(
+    "a an some few several more the test sample example demo customer product "
+    "user employee transaction financial contact new extra up".split()
+)
+_KEEP_HYPHENATED = frozenset("made-up mock-up make-believe".split())
+_NEGATIONS = frozenset(
+    "no not never without avoid nothing none nor neither instead rather cannot "
+    "dont".split()
+)
+#: Any of these means the figures are meant to be real.
+_REAL_WORDS = frozenset(
+    "actual actually real genuine verified verifiable current currently today "
+    "todays tonight yesterday live latest official true accurate factual "
+    "authentic existing recent recently historical published reported "
+    "documented sourced cited stock msrp market database db crm erp from via "
+    "census correct".split()
+)
+#: First person beside a data word means the user's own figures: "our sales",
+#: "the prices we charge", "my expenses".
+_OWNERS = frozenset("our ours my mine we us".split())
+_OWNER_REACH = 3
+#: A clause after one of these is judged on its own: "fake names, but the
+#: prices must be correct", "dummy layout, then fill in my expenses".
+_CONTRASTS = frozenset("but then except however though although".split())
+_CLAUSE_ENDS = frozenset(".;:!?")
+#: Data words that name a container, not the figures in it.
+_CONTAINER_WORDS = frozenset(
+    "content list lists table tables spreadsheet spreadsheets workbook "
+    "workbooks csv".split()
+)
+_PERIOD_UNITS = frozenset("week month year quarter season weekend".split())
+_FINANCE_WORDS = frozenset(
+    "revenue revenues earnings sales profit profits income stock shares share "
+    "price prices results guidance margin margins".split()
+)
+_PERIOD_TOKEN = re.compile(r"(?:19|20)\d\d|q[1-4]|h[12]|fy\d{0,4}")
+
+
+def _word(token: str) -> str:
+    """*token* lowercased, without a trailing possessive: "today's" -> "today"."""
+    word = token.lower().strip("'")
+    return word[:-2] if word.endswith("'s") else word
+
+
+def _negation(word: str) -> bool:
+    return word in _NEGATIONS or word.endswith("n't")
+
+
+def _is_period(word: str) -> bool:
+    return bool(_PERIOD_TOKEN.fullmatch(word))
+
+
+def _request_tokens(text: str) -> List[str]:
+    """Split *text* once; hyphenated words are split unless they are one idea."""
+    tokens: List[str] = []
+    for token in _TOKEN.findall(text.replace("’", "'")):
+        if "-" in token and "." not in token and token.lower() not in _KEEP_HYPHENATED:
+            tokens += [part for part in token.split("-") if part]
+        else:
+            tokens.append(token)
+    return tokens
+
+
+def _invention_at(words: Sequence[str], i: int) -> int:
+    """Where an unambiguous ask for invented data starting at ``words[i]`` ends.
+
+    The data word must follow at once or after a few filler words ("a fake
+    customer list", "make up 10 sample orders"), so "fake Rolex prices" and
+    "the regions that make up our sales" don't count. Returns the index just
+    past the invented data words ("fake customer data"), or 0 for none.
+    """
+    word = words[i]
+    if word in ("make", "makes", "making"):
+        if words[i + 1 : i + 2] != ["up"] or (i and words[i - 1] not in _MAKE_UP_LEAD):
+            return 0
+        start = i + 2
+    elif word == "made" and words[i + 1 : i + 2] == ["up"]:
+        start = i + 2
+    elif word in _INVENTION_WORDS or word in _INVENTION_VERBS:
+        start = i + 1
+    elif word == "random":
+        if words[i + 1 : i + 2] == [] or words[i + 1] not in _DATA_WORDS:
+            return 0
+        start = i + 1
+    else:
+        return 0
+    for j in range(start, min(start + 4, len(words))):
+        if words[j] in _DATA_WORDS:
+            end = j + 1
+            while end < min(j + 4, len(words)) and words[end] in _DATA_WORDS:
+                end += 1
+            return end
+        if words[j] not in _FILLERS and not words[j].isdigit():
+            return 0
+    return 0
+
+
+def _invented(words: Sequence[str]) -> List[bool]:
+    """Which words sit inside an invention phrase ("our *fake numbers*")."""
+    covered = [False] * len(words)
+    for i in range(len(words)):
+        for j in range(i, _invention_at(words, i)):
+            covered[j] = True
+    return covered
+
+
+def _own_figures(words: Sequence[str], covered: Sequence[bool]) -> bool:
+    """The request wants the user's own figures beside the invented parts.
+
+    A data word outside every invention phrase counts when first person sits
+    within ``_OWNER_REACH`` words ("our price list", "the prices we charge"),
+    when "keep" or "fill in" leads to it, or when it is in a clause after
+    "but" or "then" that invents nothing ("fake names, but the prices must
+    be correct"). Container words ("table", "list") don't count.
+    """
+    figure = [
+        w in _DATA_WORDS and w not in _CONTAINER_WORDS and not c
+        for w, c in zip(words, covered)
+    ]
+    contrast = invents = names_figures = False
+    last_figure = last_owner = -_OWNER_REACH - 1
+    for i, word in enumerate(words):
+        if word in _CLAUSE_ENDS or word in _CONTRASTS:
+            if contrast and names_figures and not invents:
+                return True
+            contrast = word in _CONTRASTS
+            invents = names_figures = False
+            if word in _CLAUSE_ENDS:
+                last_figure = last_owner = -_OWNER_REACH - 1
+            continue
+        invents = invents or covered[i]
+        names_figures = names_figures or figure[i]
+        if word in _OWNERS:
+            if i - last_figure <= _OWNER_REACH:
+                return True
+            last_owner = i
+        if figure[i]:
+            if i - last_owner <= _OWNER_REACH:
+                return True
+            last_figure = i
+        leads = word == "keep" or (word == "fill" and words[i + 1 : i + 2] == ["in"])
+        if leads and any(figure[i + 1 : i + 2 + _OWNER_REACH]):
+            return True
+    return contrast and names_figures and not invents
+
+
+def _points_at_real_data(
+    tokens: Sequence[str], words: Sequence[str], written: Set[str]
+) -> bool:
+    """Anything in the request says the figures should be real.
+
+    A named company or product counts in two shapes only: a capitalised name
+    with "'s" before a finance word ("Apple's revenue"), or a capitalised,
+    all-caps or camelCase name right before a number ("RTX 4090", "iPhone
+    16"). A lowercase or bare name ("nvidia sales", "Microsoft") is not seen.
+    """
+    sentence_start = True
+    for i, (token, word) in enumerate(zip(tokens, words)):
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        capital_next = tokens[i + 1][:1].isupper() if nxt else False
+        negated = any(_negation(w) for w in words[max(0, i - 2) : i])
+        if word in _REAL_WORDS and not negated and (word, nxt) != ("from", "scratch"):
+            return True
+        if _is_period(word) or (
+            word in ("this", "last", "past") and nxt in _PERIOD_UNITS
+        ):
+            return True
+        if word == "per" and (nxt == "the" or capital_next):
+            return True
+        if word in ("at", "on") and capital_next:
+            return True
+        if word in ("according", "based") and nxt in ("to", "on"):
+            return True
+        if (
+            token.lower().endswith("'s")
+            and token[:1].isupper()
+            and nxt in _FINANCE_WORDS
+        ):
+            return True
+        if nxt.isdigit() and (
+            (token[:1].isupper() and not sentence_start)
+            or (len(token) > 1 and token.isupper())
+            or (token[:1].islower() and any(c.isupper() for c in token[1:]))
+        ):
+            return True
+        if _FILE_TOKEN.fullmatch(token):
+            name = token.lower()
+            if _data_source(name) and name not in written:
+                return True
+        sentence_start = token in (".", "!", "?", ";")
+    return False
+
+
+def asks_for_invented_data(query: str, written: Collection[str] = ()) -> bool:
+    """*query* clearly asks for invented data to be put in a file.
+
+    Only explicit invention counts: "fake", "dummy", "mock", "made-up",
+    "make up", "invent", "fictional", "placeholder", "synthetic", and
+    "random" right before a data word. "Sample", "example", "demo" and
+    "test" are ambiguous and don't. Any negation ("no fake numbers") or
+    sign of real figures means warn: a source, "actual" or "correct", a
+    period such as "Q3" or "2024", a named input file, a URL, the user's
+    own figures beside the invented ones (:func:`_own_figures`), or a named
+    company in the shapes :func:`_points_at_real_data` lists. Linear in the
+    request, and a request over ``_MAX_REQUEST`` characters is never exempted.
+    """
+    text = query or ""
+    if len(text) > _MAX_REQUEST:
+        return False
+    lowered = text.lower()
+    if "http://" in lowered or "https://" in lowered or "www." in lowered:
+        return False
+    tokens = _request_tokens(text)
+    words = [_word(t) for t in tokens]
+    real_negations = {
+        j
+        for j, w in enumerate(words)
+        if _negation(w) and any(x in _REAL_WORDS for x in words[j + 1 : j + 3])
+    }
+    if any(_negation(w) and j not in real_negations for j, w in enumerate(words)):
+        return False
+    covered = _invented(words)
+    if not any(covered) or _own_figures(words, covered):
+        return False
+    known = {name.lower() for name in written}
+    return not _points_at_real_data(tokens, words, known)
+
+
 def file_findings(
     files: Mapping[str, Sequence[Block]],
     records: Sequence[Dict[str, Any]],
@@ -1904,7 +2203,12 @@ def file_findings(
     (*context*). A script's output sources an amount only when it computed
     from files read this turn (*input_names* are the files *inputs* hold).
     An answer that says its figures are unverified and names a
-    value has already told the user about it.
+    value has already told the user about it. A request that clearly asks for
+    invented data ("fake", "dummy", "make up") has no source to find, so
+    nothing is reported, unless the turn read another file or looked
+    something up: the figures were meant to come from it. Which requests
+    count, and which signs of real figures (the user's own data, a named
+    company in two shapes only) cancel that, is :func:`asks_for_invented_data`.
 
     *built* are the paths in *files* a script or a tool produced, rather than
     the model typing their text. A figure in one of those is the program's
@@ -1918,6 +2222,10 @@ def file_findings(
     read_names = _read_names(records, written) | (
         {_basename(n) for n in input_names} - written
     )
+    if not _outside_sources(records, input_names, written) and asks_for_invented_data(
+        query, written
+    ):
+        return []
     input_texts = [_spelled_out(t) for t in inputs]
     copied = _copied_numbers(
         _source_records(records, written),

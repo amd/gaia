@@ -58,4 +58,39 @@ describe('shortScope', () => {
     ])('%s -> %s', (scope, short) => {
         expect(shortScope(scope)).toBe(short);
     });
+
+    // A command keeps every word: dropping the middle of one changes what the button offers.
+    it.each([
+        'Run `mkdir /Users/me/desk/q && rm -rf /Users/me/desk/made3`',
+        'Run `mkdir /w/in && touch /w/x.txt`',
+        'Run `cp /a/x /b/y`',
+        'Run `rm -rf /Users/me/proj/build`',
+        'Run `cat /etc/hosts | head -1`',
+        'Run `echo hi > /w/out.txt`',
+        'Run `C:\\tools\\x.exe /s C:\\data`',
+    ])('leaves the command %s whole', (scope) => {
+        expect(shortScope(scope)).toBe(scope);
+    });
+
+    it('cuts a long command with a visible ellipsis and keeps both ends', () => {
+        const scope = 'Run `mkdir /Users/me/a/very/long/path/to/some/folder/made1/q && rm -rf /Users/me/a/very/long/path/made3`';
+        const short = shortScope(scope);
+        expect(short).toContain(' … ');
+        expect(short.startsWith('Run `mkdir /Users/me/')).toBe(true);
+        expect(short.endsWith('/path/made3`')).toBe(true);
+        expect(short.length).toBeLessThan(scope.length);
+    });
+});
+
+describe('the Always allow button for a chained command', () => {
+    it('names the whole command, never one word of it', () => {
+        const command = 'mkdir /Users/me/desk/q && rm -rf /Users/me/desk/made3';
+        show({
+            tool: 'run_shell_command', toolLabel: 'running a command', toolArgs: { command },
+            alwaysScope: `bash_execute:exact:${command}`, alwaysLabel: `Run \`${command}\``,
+        });
+        const always = screen.getByRole('button', { name: /^Always allow/ });
+        expect(always.textContent).toContain('rm -rf /Users/me/desk/made3');
+        expect(always.textContent).not.toMatch(/Run `mkdir made3`/);
+    });
 });

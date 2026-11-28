@@ -71,6 +71,10 @@ export interface SetupTest {
     error: string | null;
     /** Why it failed. Only `broken`, a model file that didn't load, offers a fresh download. */
     kind: 'memory' | 'stuck' | 'broken' | 'answer' | 'window' | 'missing' | 'agent' | null;
+    /** Set on a failed chat test that ran on gaiacpp: that agent, not the model, failed it. */
+    agent?: 'gaiacpp' | null;
+    /** What that agent said went wrong. */
+    agent_error?: string | null;
     seconds: number | null;
 }
 
@@ -114,6 +118,8 @@ export interface SetupCatalogEntry {
     fit_code?: 'memory' | 'npu' | 'backend' | null;
     /** Fits, but leaves other apps less memory than GAIA keeps for them. */
     tight?: boolean;
+    /** Setup lists it as a chat choice: it runs on this PC, or it is the user's chat model already. */
+    setup_offer: boolean;
 }
 
 /** A 409 from a setup choice that asks to be confirmed, then sent again with `acknowledge` true. */

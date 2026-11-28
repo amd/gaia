@@ -22,11 +22,12 @@ import './ConnectionBanner.css';
  * context window is too small. Provides clear messaging and actionable hints.
  */
 /** A retry that says it is checking until the check answers. */
-function RetryButton({ onRetry, label, busyLabel = 'Checking…' }: {
+function RetryButton({ onRetry, label, busyLabel }: {
     onRetry: () => void | Promise<void>;
     label: string;
     busyLabel?: string;
 }) {
+    const t = useT();
     const [checking, setChecking] = useState(false);
     const run = () => {
         setChecking(true);
@@ -34,7 +35,7 @@ function RetryButton({ onRetry, label, busyLabel = 'Checking…' }: {
     };
     return (
         <button className="connection-banner__retry" onClick={run} disabled={checking}>
-            {checking ? busyLabel : label}
+            {checking ? busyLabel ?? t('banner.checking') : label}
         </button>
     );
 }
@@ -98,12 +99,19 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
 }) {
     const t = useT();
     const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
+    // A message that got no start in time says GAIA is stuck before the status check can.
+    const backendStalled = useChatStore((s) => s.backendStalled);
+    // A slow status check can come while a reply still streams; a restart would end it.
+    const streaming = useChatStore((s) => s.isStreaming);
     const lifecycle = useBackendStore((s) => s.lifecycle);
+    const restart = useBackendStore((s) => s.restart);
+    const restartError = useBackendStore((s) => s.restartError);
+    // Only the desktop app supervises the backend, so only it can restart a hung one.
+    const canRestart = lifecycle !== null;
     const [dismissed, setDismissed] = useState(false);
 
-    // Suppress the banner entirely while a conversation is in progress.
-    // The banner will not show, will not update its internal state, and will
-    // resume normal behaviour only when there is no active conversation.
+    // Setup and model banners stay hidden while a conversation is in progress;
+    // GAIA's own health (unreachable, erroring, slow or stalled) still shows.
     const hasActiveConversation = !!currentSessionId && messages.length > 0;
 
     const modelName = systemStatus?.default_model_name ?? DEFAULT_MODEL_NAME;
@@ -316,7 +324,11 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // Takes priority over all other cases (including dismiss and active-conversation suppression)
     // because the system is not yet ready to serve requests. A status the backend
     // can't refresh (slow or failing) is not proof the boot is still running.
-    if (isStarting(systemStatus) && !backendSlow && !backendError) {
+    // Once the server check is over, a server that isn't answering outranks the later boot steps.
+    const serverCheck = systemStatus?.init_tasks?.find(t => t.step === 'check_server');
+    const serverDownAfterCheck = systemStatus?.lemonade_running === false
+        && !!serverCheck && serverCheck.status !== 'pending' && serverCheck.status !== 'running';
+    if (isStarting(systemStatus) && !backendSlow && !backendError && !serverDownAfterCheck) {
         // The task's English `name` is a log label; only its `step` is shown, translated.
         const step = systemStatus?.init_tasks?.find(t => t.status === 'running')?.step;
         const stepKey = `banner.boot.${step}`;
@@ -333,12 +345,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
         );
     }
 
-    // Nothing to show
-    if (dismissed) return null;
-
-    // Hidden while a conversation is active (user is in a chat with messages).
-    if (hasActiveConversation) return null;
-
+    // GAIA's own health shows mid-chat too: a stuck assistant is why the next message would fail.
     // Case 1: Backend API is unreachable
     if (!backendConnected) {
         return (
@@ -348,9 +355,12 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 </div>
                 <div className="connection-banner__text" dir="auto">
                     {t('banner.unreachable')}{' '}
-                    <span className="connection-banner__hint">{t('banner.unreachableHint')}</span>
+                    <span className="connection-banner__hint">
+                        {restartError ? t('banner.restartFailed', { error: restartError }) : t('banner.unreachableHint')}
+                    </span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Retry" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('banner.retry')} />}
+                {canRestart && <RetryButton onRetry={restart} label={t('banner.restartButton')} busyLabel={t('banner.restartingShort')} />}
             </div>
         );
     }
@@ -363,33 +373,38 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA's backend answered with an error ({backendError}).{' '}
-                    <span className="connection-banner__hint">
-                        It may be overloaded. GAIA keeps checking; if it lasts, restart GAIA.
-                    </span>
+                    {t('banner.backendError', { error: backendError })}{' '}
+                    <span className="connection-banner__hint">{t('banner.backendErrorHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
             </div>
         );
     }
 
     // Case 1b: the backend answers, but too slowly to read its status.
-    if (backendSlow) {
+    if (backendSlow || backendStalled) {
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA is slow to answer.{' '}
+                    {t('banner.backendSlow')}{' '}
                     <span className="connection-banner__hint">
-                        It may be busy with another chat or app. GAIA keeps checking.
+                        {restartError ? t('banner.restartFailed', { error: restartError }) : t('banner.backendSlowHint')}
                     </span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
+                {canRestart && (backendStalled || !streaming) && <RetryButton onRetry={restart} label={t('banner.restartButton')} busyLabel={t('banner.restartingShort')} />}
             </div>
         );
     }
+
+    // Nothing to show
+    if (dismissed) return null;
+
+    // Hidden while a conversation is active (user is in a chat with messages).
+    if (hasActiveConversation) return null;
 
     // Case 1b: ~/.gaia/config.json exists but could not be loaded.
     // Not dismissable: the shared dismiss flag would also hide a Lemonade-down banner.
@@ -400,10 +415,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA settings could not be loaded.{' '}
+                    {t('banner.configError')}{' '}
                     <span className="connection-banner__hint">{systemStatus.config_error}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
             </div>
         );
     }
@@ -439,7 +454,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
+                    aria-label={t('banner.dismiss')}
                 >
                     <X size={14} />
                 </button>
@@ -461,17 +476,17 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <Layers size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    LLM context window is too small ({current.toLocaleString()} tokens;{' '}
-                    {MIN_CONTEXT_SIZE.toLocaleString()} required).{' '}
-                    <span className="connection-banner__hint">
-                        Reload it with a larger context in Settings → Advanced.
-                    </span>
+                    {t('banner.contextTooSmall', {
+                        current: ltrIn(t.locale, current.toLocaleString()),
+                        required: ltrIn(t.locale, MIN_CONTEXT_SIZE.toLocaleString()),
+                    })}{' '}
+                    <span className="connection-banner__hint">{t('banner.contextTooSmallHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
+                    aria-label={t('banner.dismiss')}
                 >
                     <X size={14} />
                 </button>

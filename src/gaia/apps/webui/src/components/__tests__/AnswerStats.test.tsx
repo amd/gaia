@@ -101,6 +101,21 @@ describe('AnswerStats', () => {
         expect(screen.getByText(line('Total time 1.0 s'))).toBeInTheDocument();
     });
 
+    it('says how long the turn waited on the user, apart from its own time', () => {
+        render(<AnswerStats latencyMs={25_000} stats={{ ...stats, waiting_seconds: 80 }} />);
+        const summary = screen.getByRole('button', { name: 'Answered in 25 s on your GPU' });
+        expect(summary).toHaveAttribute('title', expect.stringContaining('Waited 1 min 20 s for you'));
+        fireEvent.click(summary);
+        expect(screen.getByText(line('Waited 1 min 20 s for you'))).toBeInTheDocument();
+        expect(screen.getByText(line('Total time 25.0 s'))).toBeInTheDocument();
+    });
+
+    it('says nothing about waiting when the turn never waited', () => {
+        render(<AnswerStats latencyMs={25_000} stats={stats} />);
+        fireEvent.click(screen.getByRole('button'));
+        expect(document.body).not.toHaveTextContent('Waited');
+    });
+
     it('renders nothing with nothing measured', () => {
         const { container } = render(<AnswerStats />);
         expect(container).toBeEmptyDOMElement();
@@ -163,5 +178,13 @@ describe('AnswerStats in Arabic', () => {
             'الرموز: 68 → 510 (68 → 510 tokens)',
             'رموز في الثانية: 38.1 (38.1 tokens/s)',
         ]);
+    });
+
+    it('translates the time the turn waited on the user', () => {
+        useChatStore.setState({ locale: 'ar' });
+        const { container } = render(<AnswerStats latencyMs={25_000} stats={{ ...stats, waiting_seconds: 80 }} />);
+        fireEvent.click(screen.getByRole('button'));
+        const lines = [...container.querySelectorAll(':scope > span')].slice(1).map((s) => read(s.textContent));
+        expect(lines).toContain('انتظر ردّك 1 min 20 s (Waited 1 min 20 s for you)');
     });
 });

@@ -41,8 +41,12 @@ class TestDiffLedgers:
         assert diff_ledgers({}, {"mcp-x": {"a": True}}) == [("mcp-x", "a", True)]
 
     def test_deactivation_removed(self):
-        # Deactivate deletes the entry; absence => inactive.
+        # A removed entry (the connector was disconnected) reads as inactive.
         assert diff_ledgers({"mcp-x": {"a": True}}, {}) == [("mcp-x", "a", False)]
+
+    def test_first_recorded_as_off_counts(self):
+        # A user-added server is on for GAIA until an explicit off is stored.
+        assert diff_ledgers({}, {"toy": {"a": False}}) == [("toy", "a", False)]
 
     def test_no_change_returns_empty(self):
         assert diff_ledgers({"mcp-x": {"a": True}}, {"mcp-x": {"a": True}}) == []

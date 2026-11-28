@@ -43,6 +43,14 @@ def test_a_proven_platform_offers_dictation():
         assert "- dictation:" in agent.get_skill_catalog_system_prompt()
 
 
+@pytest.mark.parametrize("platform, told", [("darwin", True), ("linux", False)])
+def test_the_flagship_prompt_says_speech_is_off_only_on_a_mac(platform, told):
+    with _agent(platform) as agent:
+        prompt = agent._prompt_text()
+        assert ("**NO SPEECH OUTPUT ON THIS PC:**" in prompt) is told
+        assert ("aren't offered on macOS yet" in prompt) is told
+
+
 def test_a_mac_is_offered_no_speech_tools_and_no_dictation_skill():
     with _agent("darwin") as agent:
         assert not SPEECH_OUTPUT_TOOLS & set(agent._tools_registry)

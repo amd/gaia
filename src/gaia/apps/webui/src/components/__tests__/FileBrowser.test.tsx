@@ -599,4 +599,23 @@ describe('FileBrowser folder add', () => {
             'Added 1 file Left out 2 images: add them one at a time and GAIA will read them.',
         )).toBeInTheDocument();
     });
+
+    it('names skipped files from a folder and why', async () => {
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 2, skipped_images: 0,
+            skipped_files: [
+                { file: 'program.exe', reason: 'unsupported_type' },
+                { file: 'secrets.json', reason: 'credential_file' },
+            ],
+            skipped_files_truncated: false,
+            errors: [], documents: [DOC],
+        } as never);
+
+        await addScanFolder();
+
+        await waitFor(() => expect(document.querySelector('.fb-index-status')).not.toBeNull());
+        const text = stripIsolates(document.querySelector('.fb-index-status')?.textContent ?? '');
+        expect(text).toContain("Credential files GAIA won't add: secrets.json");
+        expect(text).not.toContain('Showing the first 50 skipped files.');
+    });
 });
