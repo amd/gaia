@@ -2570,10 +2570,11 @@ TEST(GaiaAgentTest, PromptListsIndexedDocumentsAndPrefersQueryDocuments) {
 
 TEST(GaiaAgentTest, ShellAttemptOnIndexedPdfRedirectsToQueryDocumentsBeforeAsking) {
     Workdir w;
-    const fs::path pdf = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "northwind_annual_report.pdf";
-    ASSERT_TRUE(fs::exists(pdf)) << pdf;
-    const fs::path copy = w.path / "report.pdf";
-    fs::copy_file(pdf, copy);
+    // Use .docx so the test exercises the PDF/Word redirect without depending on pdftotext in CI.
+    const fs::path doc = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "orion_onboarding.docx";
+    ASSERT_TRUE(fs::exists(doc)) << doc;
+    const fs::path copy = w.path / "report.docx";
+    fs::copy_file(doc, copy);
 
     bench::MockLlmServer mock;
     GaiaAgent agent(cfgFor(mock), optionsFor(w));
@@ -2585,7 +2586,7 @@ TEST(GaiaAgentTest, ShellAttemptOnIndexedPdfRedirectsToQueryDocumentsBeforeAskin
         ++asked;
         return ToolConfirmResult::ALLOW_ONCE;
     });
-    const json cmd = {{"command", "python3 -c \"print('report.pdf')\""}};
+    const json cmd = {{"command", "python3 -c \"print('report.docx')\""}};
     const json first = agent.toolRegistry().executeTool("bash_execute", cmd);
     EXPECT_EQ(first.value("status", ""), "error") << first.dump();
     EXPECT_EQ(first.value("executed", true), false) << first.dump();
@@ -2599,26 +2600,26 @@ TEST(GaiaAgentTest, ShellAttemptOnIndexedPdfRedirectsToQueryDocumentsBeforeAskin
 
 TEST(GaiaAgentTest, IndexedPdfRedirectMatchesTheWholeFileNameOnly) {
     Workdir w;
-    const fs::path pdf = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "northwind_annual_report.pdf";
-    ASSERT_TRUE(fs::exists(pdf)) << pdf;
-    fs::copy_file(pdf, w.path / "report.pdf");
+    const fs::path doc = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "orion_onboarding.docx";
+    ASSERT_TRUE(fs::exists(doc)) << doc;
+    fs::copy_file(doc, w.path / "report.docx");
 
     bench::MockLlmServer mock;
     GaiaAgent agent(cfgFor(mock), optionsFor(w));
     ASSERT_NE(agent.documents(), nullptr);
-    ASSERT_GT(agent.documents()->indexFile((w.path / "report.pdf").string()), 0u);
+    ASSERT_GT(agent.documents()->indexFile((w.path / "report.docx").string()), 0u);
 
     int asked = 0;
     agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
         ++asked;
         return ToolConfirmResult::ALLOW_ONCE;
     });
-    for (const char* other : {"annual_report.pdf", "report.pdf.bak", "old-report.pdf"}) {
+    for (const char* other : {"annual_report.docx", "report.docx.bak", "old-report.docx"}) {
         const json cmd = {{"command", std::string("python3 -c \"print('") + other + "')\""}};
         const json r = agent.toolRegistry().executeTool("bash_execute", cmd);
         EXPECT_EQ(r.value("error", "").find("is already indexed"), std::string::npos) << other << ": " << r.dump();
     }
-    EXPECT_EQ(asked, 3) << "a different file whose name contains report.pdf goes to approval, not the redirect";
+    EXPECT_EQ(asked, 3) << "a different file whose name contains report.docx goes to approval, not the redirect";
 }
 
 TEST(GaiaAgentTest, PromptListsAtMostTwentyIndexedDocuments) {
