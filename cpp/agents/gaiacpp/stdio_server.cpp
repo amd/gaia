@@ -20,6 +20,7 @@
 #include <gaia/http_client.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/shell_guard.h>
 #include <gaia/workspace.h>
 
 #include "gaia_agent.h"
@@ -359,12 +360,21 @@ std::string shownBlock(const std::string& text) {
     return out.empty() ? "    (nothing)" : out;
 }
 
+// The terminal UI's own name for the folder prompt, as the Python agent raises it.
+constexpr const char* kPathAccessPrompt = "allow_path_access";
+
 // The body of an approval prompt: what the call will do, with no tool name or JSON.
 // The command keeps its line breaks; a path, URL or id is one line, so its
 // own text can't add a line that reads as part of the card, and a joiner or
 // mark in a name can't make it read as another.
 std::string promptSummary(const std::string& tool, const json& args) {
     const auto one = [&args](const char* key) { return visible(argOf(args, key), Shown::Name); };
+    if (tool == kPathAccessPrompt) {
+        const std::string kind = argOf(args, "kind");
+        if (kind == "folder") return "Allow GAIA to use the folder " + one("path") + " and everything in it for this session?";
+        if (kind == "file") return "Allow GAIA to use the file " + one("path") + " for this session?";
+        return "Allow GAIA to use " + one("path") + " for this session?";
+    }
     if (tool == "bash_execute") return visible(argOf(args, "command"), Shown::Command);
     if (tool == "file_write") {
         return one("path") + "\n\nWhat will be saved:\n" + shownBlock(argOf(args, "content"));
@@ -545,6 +555,10 @@ public:
     void printToolProgress(const std::string& phase, const std::string& m) override {
         server_.write({{"type", "status"}, {"message", m}, {"phase", phase}});
     }
+    void printReasoningProgress(size_t words) override {
+        server_.write({{"type", "status"}, {"phase", "reasoning"}, {"words", words},
+                       {"message", "Reasoning - " + std::to_string(words) + " words so far"}});
+    }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
@@ -681,6 +695,10 @@ StdioServer::StdioServer(GaiaAgent& agent, std::istream& in, std::ostream& out, 
       fullAccess_(options_.fullAccess),
       acceptEdits_(options_.acceptEdits) {
     if (options_.editRoots.empty()) options_.editRoots.push_back(workingFolderUtf8());
+    // The terminal UI starts this program itself, so its user has no --max-tokens to pass.
+    AgentConfig cfg = agent_.config();
+    cfg.replyLimitRemedy = GaiaAgent::kChatReplyLimitRemedy;
+    agent_.setConfig(cfg);
 }
 
 StdioServer::~StdioServer() {
@@ -899,11 +917,44 @@ void StdioServer::pumpStdin() {
     watchHost();
 }
 
+bool StdioServer::askForPath(const std::string& path) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (runId_ != declinedRun_) {
+            declinedRun_ = runId_;
+            declinedPaths_.clear();
+        }
+    }
+    // One prompt per place per turn: a no is not asked again for what is inside it.
+    for (const auto& d : declinedPaths_) {
+        if (path.rfind(d, 0) == 0 &&
+            (path.size() == d.size() || path[d.size()] == '/' || path[d.size()] == '\\')) {
+            return false;
+        }
+    }
+    json args = {{"path", path}};
+    std::error_code ec;
+    if (fs::is_directory(fs::u8path(path), ec)) args["kind"] = "folder";
+    else if (fs::is_regular_file(fs::u8path(path), ec)) args["kind"] = "file";
+    const bool granted = confirm(kPathAccessPrompt, args) == ToolConfirmResult::ALLOW_ONCE;
+    if (!granted) declinedPaths_.insert(path);
+    return granted;
+}
+
 ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args) {
+    const bool pathAccess = tool == kPathAccessPrompt;
     // "Always" is only offered where the grant is narrower than the tool: a
     // write to one file must not approve every later write.
     const ToolInfo* info = agent_.tools().findTool(tool);
-    const std::string key = info && info->grantScope ? tool + ":" + info->grantScope(args) : "";
+    const bool shell = tool == "bash_execute";
+    // A line of several commands gets no "always": a label for it reads as covering less than it does.
+    // One program's grant (`cmd:`) is the exception: `cd folder && one command`, where cd never asks.
+    const std::string scope = info && info->grantScope ? info->grantScope(args) : "";
+    const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
+                         judgeShellCommand(argOf(args, "command"), "", {}, nullptr).compound;
+    const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
+    // Read off the lock: it looks at the files the command names.
+    const std::string unchecked = shell ? agent_.shellApprovalNote(argOf(args, "command")) : "";
     const bool edit = tool == "file_write" || tool == "file_edit";
     // Judged off the lock: it reads the filesystem and PATH.
     const bool acceptable = edit && editIsInside(argOf(args, "path"), options_.editRoots);
@@ -912,20 +963,24 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
         log() << "[gaiacpp] " << line << std::endl;
     };
     std::unique_lock<std::mutex> lock(mutex_);
-    if (fullAccess_) return ToolConfirmResult::ALLOW_ONCE;
+    // Full access here turns tool prompts off; it never opens another folder unasked.
+    if (fullAccess_ && !pathAccess) return ToolConfirmResult::ALLOW_ONCE;
     if (acceptEdits_ && acceptable) return ToolConfirmResult::ALLOW_ONCE;
     if (cancelled_ || inputClosed_ || hostGone_) {
         note("denied " + tool + ": " + (cancelled_ ? "the turn was cancelled" : "nobody is left to approve it"));
-        return ToolConfirmResult::DENY;
+        return ToolConfirmResult::UNATTENDED;
     }
     const std::string confirmId = randomHex(16);
-    const std::string summary = promptSummary(tool, args);
+    // The terminal UI shows the summary as the card's body, so the warning goes under the command.
+    const std::string summary =
+        promptSummary(tool, args) + (unchecked.empty() ? "" : "\n\n" + visible(unchecked, Shown::Line));
     json event = {{"type", "needs_confirmation"},
                   {"run_id", runId_},
                   {"action", tool},
                   {"summary", summary},
-                  {"confirm_id", confirmId},
-                  {"risk", toolRisk(tool)}};
+                  {"confirm_id", confirmId}};
+    // The terminal UI labels the folder prompt by its action.
+    if (!pathAccess) event["risk"] = toolRisk(tool);
     if (!key.empty()) event["always_scope"] = grantLabel(key);
     pendingConfirmId_ = confirmId;
     decision_.clear();
@@ -942,7 +997,7 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     if (decision == "allow") return ToolConfirmResult::ALLOW_ONCE;
     if (decision == "always") {
         if (!key.empty()) return ToolConfirmResult::ALWAYS_ALLOW;
-        note("'always' was not offered for " + tool + ": allowed this one call");
+        if (!pathAccess) note("'always' was not offered for " + tool + ": allowed this one call");
         return ToolConfirmResult::ALLOW_ONCE;
     }
     if (decision.empty()) {
@@ -952,7 +1007,8 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     } else if (decision == "timeout") {
         note("denied " + tool + ": the host's approval prompt timed out");
     }
-    return ToolConfirmResult::DENY;
+    // Only an answered "deny" is the user's no.
+    return decision == "deny" ? ToolConfirmResult::DENY : ToolConfirmResult::UNATTENDED;
 }
 
 json StdioServer::switchableModels() {
@@ -1168,6 +1224,7 @@ int StdioServer::run() {
         agent_.setAllowedToolsStore(grants_);
         agent_.setToolConfirmCallback(
             [this](const std::string& tool, const json& args) { return confirm(tool, args); });
+        agent_.setPathAccessPrompt([this](const std::string& path) { return askForPath(path); });
         // A cancel that lands before the agent resets its own flag still holds.
         agent_.setCancelCheck([this] { return cancelled_.load(); });
         if (options_.fullAccess) {

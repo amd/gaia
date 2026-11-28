@@ -77,16 +77,39 @@ func findDeliverables(work []ActivityItem, answer string, since time.Time) []del
 		written bool
 	}
 	var candidates []candidate
+	// A file the turn only read is an input, however recently the user saved it.
+	onlyRead := map[string]bool{}
+	touched := map[string]bool{}
+	note := func(set map[string]bool, p string) {
+		if abs := resolveCandidate(p); abs != "" {
+			set[strings.ToLower(abs)] = true
+		}
+	}
 	for _, it := range work {
 		if !isStep(it) || failedItem(it) {
 			continue
 		}
+		for _, r := range it.Call.Reads {
+			note(onlyRead, r)
+		}
 		for _, w := range it.Call.Writes {
 			candidates = append(candidates, candidate{w, true})
+			note(touched, w)
 		}
 		if c := it.Call.Command; c != "" {
+			reads, into := onlyReadsFiles(c), cdTarget(c)
 			for _, p := range deliverablePathRe.FindAllString(c, -1) {
+				// After `cd dir &&` a bare name is a file in dir.
+				at := p
+				if into != "" && !filepath.IsAbs(p) && !strings.HasPrefix(p, "~") {
+					at = filepath.Join(into, p)
+				}
+				if reads {
+					note(onlyRead, at)
+					continue
+				}
 				candidates = append(candidates, candidate{p, false})
+				note(touched, at)
 			}
 		}
 	}
@@ -107,6 +130,9 @@ func findDeliverables(work []ActivityItem, answer string, since time.Time) []del
 		if !c.written && !underLocalRoot(abs) {
 			continue
 		}
+		if key := strings.ToLower(abs); onlyRead[key] && !touched[key] {
+			continue
+		}
 		seen[strings.ToLower(abs)] = true
 		info, err := os.Stat(abs)
 		if err != nil || !info.Mode().IsRegular() {
@@ -121,6 +147,67 @@ func findDeliverables(work []ActivityItem, answer string, since time.Time) []del
 		out = append(out, deliverable{Path: abs, Size: info.Size(), Peek: peekFile(abs)})
 	}
 	return out
+}
+
+// readerPrograms show or search a file and never change it.
+var readerPrograms = map[string]bool{
+	"cat": true, "head": true, "tail": true, "less": true, "more": true, "wc": true, "nl": true,
+	"grep": true, "egrep": true, "fgrep": true, "rg": true, "file": true, "stat": true, "ls": true,
+	"type": true, "sort": true, "uniq": true, "cut": true, "diff": true, "cd": true, "pwd": true,
+}
+
+var harmlessRedirectRe = regexp.MustCompile(`\d?>&\d|\d?>\s*/dev/null`)
+
+// onlyReadsFiles reports a command that writes nothing: every part of it is a
+// reader and no output is sent to a file.
+func onlyReadsFiles(cmd string) bool {
+	cmd = harmlessRedirectRe.ReplaceAllString(cmd, "")
+	if strings.ContainsAny(cmd, ">`") || strings.Contains(cmd, "$(") {
+		return false
+	}
+	parts := splitShell(cmd)
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		prog, args := program(part)
+		if !readerPrograms[prog] || readerWrites(prog, args) {
+			return false
+		}
+	}
+	return true
+}
+
+// readerWrites reports a reader given a file to write: `sort -o out`, `uniq in out`.
+func readerWrites(prog string, args []string) bool {
+	operands := 0
+	for _, a := range args {
+		switch {
+		case a == "--output" || strings.HasPrefix(a, "--output="):
+			return prog == "sort"
+		case strings.HasPrefix(a, "--"):
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			// A short-option cluster with o (`-o`, `-uo`, `-ofile`) names sort's output.
+			if prog == "sort" && strings.ContainsRune(a[1:], 'o') {
+				return true
+			}
+		default:
+			operands++
+		}
+	}
+	return prog == "uniq" && operands > 1
+}
+
+// cdTarget is the folder a command moves to first (`cd dir && …`), or "".
+func cdTarget(cmd string) string {
+	parts := splitShell(cmd)
+	if len(parts) < 2 {
+		return ""
+	}
+	if prog, args := program(parts[0]); (prog == "cd" || prog == "pushd") && len(args) == 1 {
+		return strings.Trim(args[0], `"'`)
+	}
+	return ""
 }
 
 // deliverableScan bounds how many candidate paths one turn may stat.

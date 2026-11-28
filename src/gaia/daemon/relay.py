@@ -67,6 +67,7 @@ from gaia.daemon.sidecars.errors import (
 )
 from gaia.daemon.timeouts import agent_read_timeout
 from gaia.logger import get_logger
+from gaia.utils.background_tasks import spawn_background
 
 logger = get_logger(__name__)
 
@@ -116,10 +117,6 @@ _RESPONSE_DROP = _HOP_BY_HOP | {"content-length", "content-encoding", "date", "s
 # misclassifying a valid oversized final as a crash.
 _WATCHER_BUFFER_CAP = 16 << 20
 
-# Strong refs to fire-and-forget cancel tasks spawned from a cancelled response
-# generator (asyncio only weak-refs pending tasks).
-_background_tasks: "set[asyncio.Task]" = set()
-
 
 class RelayTurns:
     """How many relayed agent streams are open right now.
@@ -144,23 +141,6 @@ class RelayTurns:
     def closed(self) -> None:
         with self._lock:
             self._open -= 1
-
-
-def _spawn_background(coro) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # Loop already gone (server teardown): cleanup cannot run, so the
-        # upstream response/client leak until GC — name it instead of hiding it.
-        logger.warning(
-            "daemon relay: no running loop for background cancel/cleanup task; "
-            "upstream connection will be reclaimed by GC"
-        )
-        coro.close()
-        return
-    task = loop.create_task(coro)
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
 
 
 def _agent_name(agent_id: str) -> str:
@@ -478,7 +458,12 @@ def build_relay_router(token: str, registry, turns: Optional[RelayTurns] = None)
                     # torn down and can no longer await safely, so cleanup +
                     # cancel-propagation move to a detached task.
                     disconnected = True
-                    _spawn_background(_finalize("client disconnected"))
+                    spawn_background(
+                        _finalize("client disconnected"),
+                        log=logger,
+                        owner="daemon relay",
+                        task_kind="cancel/cleanup",
+                    )
                     raise
                 except httpx.HTTPError as exc:
                     # Upstream transport died mid-stream (crash/reset/timeout).

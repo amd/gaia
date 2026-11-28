@@ -14,27 +14,13 @@ through retrieval: whatever is offered is CORE plus the workspace.
 
 from __future__ import annotations
 
-import contextlib
-
 import numpy as np
 import pytest
 from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 from gaiapy.tool_bundles import FULL_CORE_TOOLS
-
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from registry_isolation import isolated_registry
 
 CODING_REQUEST = "Skip gfx90a tests on PRs unless labeled"
-
-
-@contextlib.contextmanager
-def _isolated_registry():
-    saved = dict(_TOOL_REGISTRY)
-    _TOOL_REGISTRY.clear()
-    try:
-        yield
-    finally:
-        _TOOL_REGISTRY.clear()
-        _TOOL_REGISTRY.update(saved)
 
 
 def _query_vec(self, text):
@@ -56,7 +42,7 @@ def _offered_tools(monkeypatch, env_root: str | None = None, **config) -> list[s
     monkeypatch.setattr(GaiaAgent, "_embed_text", _query_vec)
     monkeypatch.setattr(GaiaAgent, "_embed_texts_batch", _tool_vecs)
     monkeypatch.setattr(GaiaAgent, "_uses_native_tool_calls", lambda self: True)
-    with _isolated_registry():
+    with isolated_registry():
         agent = GaiaAgent(
             config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True, **config)
         )
@@ -76,7 +62,7 @@ def _workspace_core(monkeypatch, env_root: str | None = None, **config) -> froze
         monkeypatch.delenv("GAIA_PROJECT_ROOT", raising=False)
     else:
         monkeypatch.setenv("GAIA_PROJECT_ROOT", env_root)
-    with _isolated_registry():
+    with isolated_registry():
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config))
         try:
             return agent._workspace_core_tools()

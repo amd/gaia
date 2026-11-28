@@ -104,7 +104,7 @@ The agent remembered across sessions -- no copy-paste, no notes app. Run `gaia c
 Agent memory operates on four principles:
 
 1. **Store automatically once enabled** -- conversations, tool calls, errors, and preferences are captured without manual effort
-2. **Recall naturally** -- each turn, the few stored memories most relevant to your message are added to the agent's context automatically, each with the date it was learned. For anything more, the LLM searches with its own tools: hybrid semantic+keyword search finds memories by meaning, not just exact words.
+2. **Recall naturally** -- each turn, the few stored memories most relevant to your message are added to the agent's context automatically, each with the date it was learned, along with what you asked it to remember earlier in the same chat (the latest eight). For anything more, the LLM searches with its own tools: hybrid semantic+keyword search finds memories by meaning, not just exact words.
 3. **Learn continuously** -- LLM extraction from every conversation, not just regex patterns. The agent sees what it already knows and decides what's new, what's changed, and what's contradicted -- like intelligent memory management.
 4. **Be temporally aware** -- the agent knows the current time, what is coming up, what is overdue, and proactively surfaces time-sensitive items
 
@@ -430,6 +430,16 @@ The Agent UI has a **Memory** page for seeing and correcting what GAIA knows abo
 ```bash
 gaia chat --ui
 ```
+
+The page shows the memory of the agent chosen under **Settings › Agent & model**. Full-featured (`gaiapy`) and Fast and light (`gaiacpp`, beta) each keep their own, so what one remembered the other doesn't see. A line under the tabs says whose memory you are looking at and links to that setting; with gaiapy it appears once gaiacpp has a memory too. Change the agent and the page reloads with the other memory.
+
+gaiacpp keeps the text of each memory and little else. While it is the agent:
+
+- **About you** still lets you add, edit, forget, undo a forget, and show a sensitive item.
+- Reminders can't be added and no due date is shown, because gaiacpp doesn't keep due dates.
+- Items don't say where they came from, because gaiacpp doesn't record it.
+- **Goals**, **Profile setup** and **Advanced** each show one line saying they work on Full-featured's memory. **Advanced** keeps the switch that turns memory on or off.
+- If gaiacpp can't be reached, the page shows that error. It never shows the Python agent's memory in its place.
 
 ### About you
 

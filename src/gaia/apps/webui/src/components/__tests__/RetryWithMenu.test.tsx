@@ -87,3 +87,14 @@ describe('RetryWithMenu', () => {
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('fireworks');
     });
 });
+
+describe('RetryWithMenu placement', () => {
+    it('anchors the menu to the button, not the whole message', async () => {
+        useModelStore.setState({ active: { provider: 'local', model: 'x', label: null, remote: false, is_default: true } });
+        render(<RetryWithMenu answeredBy="x" onPick={vi.fn()} />);
+        const button = screen.getByRole('button', { name: 'Retry with another model' });
+        const menu = await openMenu();
+        expect(menu.parentElement).toBe(button.parentElement);
+        expect(menu.parentElement).toHaveClass('retry-menu-anchor');
+    });
+});

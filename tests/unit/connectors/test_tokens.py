@@ -402,6 +402,56 @@ class TestTenantRotationForwarding:
         assert loaded["tenant"] == "consumers"
 
 
+class TestRotationLeavesLegacyItemAlone:
+    """A background refresh updates the vault only: rewriting the legacy
+    per-item entry on every Microsoft rotation would raise an OS keychain
+    prompt roughly hourly on unsigned macOS builds."""
+
+    @respx.mock
+    async def test_rotation_of_a_migrated_slot_writes_no_keyring_item(
+        self, microsoft_provider, _autouse_in_memory_keyring, monkeypatch
+    ):
+        from gaia.connectors import store
+
+        username = _connection_username("microsoft", "default")
+        legacy = json.dumps(
+            {
+                "account_email": "alice@example.com",
+                "account_id": "alice-oid",
+                "client_id_hash": microsoft_provider.client_id_hash,
+                "connected_at": 1,
+                "refresh_token": "legacy-rt",
+                "scopes": ["https://graph.microsoft.com/Mail.Read"],
+                "tenant": "consumers",
+            },
+            sort_keys=True,
+        )
+        keyring.set_password(SERVICE_NAME, username, legacy)
+        assert load_connection(
+            "microsoft", current_client_id_hash=microsoft_provider.client_id_hash
+        )
+
+        writes = []
+        real_set = _autouse_in_memory_keyring.set_password
+
+        def recording_set(service, user, value):
+            writes.append(user)
+            return real_set(service, user, value)
+
+        monkeypatch.setattr(_autouse_in_memory_keyring, "set_password", recording_set)
+        respx.post(MS_TOKEN_URL).mock(
+            return_value=_ok_token_response(access="a1", refresh="ROTATED-1")
+        )
+        await get_or_refresh("microsoft")
+
+        assert writes == []
+        assert store._kr_legacy_get(username) == legacy
+        loaded = load_connection(
+            "microsoft", current_client_id_hash=microsoft_provider.client_id_hash
+        )
+        assert loaded["refresh_token"] == "ROTATED-1"
+
+
 class TestForwardedFlagRotation:
     """#2591 review: a forwarded connection's ``forwarded`` marker must
     survive refresh-token rotation. If rotation dropped it, the very next

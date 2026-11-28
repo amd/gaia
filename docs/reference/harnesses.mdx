@@ -15,6 +15,7 @@ same whichever is answering.
 | What it is | The Python harness | The native C++ harness (**beta**) |
 | Good at | Every tool and feature, and the most tested | Starts in a fraction of a second and uses a few megabytes of memory |
 | Trade-off | Slower to start and uses more memory | Fewer tools and features so far, no Claude provider, keeps no sessions yet |
+| In the Agent UI | Everything | Its own memory, no undo of file changes, keyword-only document search, no image creation, transcription or document-to-speech tools, no context meter. See [the list](/cpp/gaia-agent#running-as-the-gaia-agent-in-the-agent-ui) |
 | Default | Yes | No, it runs only once chosen |
 | Agent source | `hub/agents/gaia/python/gaiapy/` | `cpp/agents/gaiacpp/` |
 | Framework it is built on | `src/gaia/` (the `amd-gaia` package) | `cpp/` (the `gaia-cpp` CMake project) |
@@ -47,6 +48,10 @@ another, and no other harness runs in its place.
 A saved choice whose program is missing, or no longer matches its recorded
 checksum, is an error that names the file. Neither app runs the other harness
 in its place.
+
+A `gaiacpp` from another GAIA release than the app, such as one an older
+installer left on `PATH`, still runs. The Agent UI's Agent card tags it
+**Out of date** and offers **Update**, which downloads this release's copy.
 
 ## What the two share
 

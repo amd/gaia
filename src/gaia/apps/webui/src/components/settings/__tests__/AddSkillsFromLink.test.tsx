@@ -41,11 +41,11 @@ beforeEach(() => {
     mockedApi.addSkillsFromLink.mockResolvedValue({ added: [{ name: 'deslop', updated: false, verdict: 'ALLOW', has_code: false, findings: [] }], failed: {} });
 });
 
-async function readLink() {
+async function readLink(first = 'deslop') {
     render(<AddSkillsFromLink onAdded={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Link to a skill or skills library'), { target: { value: LINK } });
     fireEvent.click(screen.getByRole('button', { name: 'Read' }));
-    await screen.findByText('deslop');
+    await screen.findByText(first);
 }
 
 describe('AddSkillsFromLink', () => {
@@ -131,6 +131,20 @@ describe('AddSkillsFromLink', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent('Nothing found at the link');
     });
 
+    it('leaves the link alone on Escape while it is being read', async () => {
+        let done: (p: unknown) => void = () => {};
+        mockedApi.previewSkillLink.mockReturnValue(new Promise((resolve) => { done = resolve; }));
+        render(<AddSkillsFromLink onAdded={vi.fn()} />);
+        const box = screen.getByLabelText('Link to a skill or skills library');
+        fireEvent.change(box, { target: { value: LINK } });
+        fireEvent.click(screen.getByRole('button', { name: 'Read' }));
+        await screen.findByText('Reading…');
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(box).toHaveValue(LINK);
+        done({ link: LINK, source: 'owner/library', pin: 'commit:abc', warning: 'w', skills: [found('deslop')] });
+        expect(await screen.findByText('deslop')).toBeInTheDocument();
+    });
+
     it('dismisses the preview on Escape in the link box instead of closing Settings', async () => {
         const onClose = vi.fn();
         render(<InDialog onClose={onClose} />);
@@ -148,5 +162,26 @@ describe('AddSkillsFromLink', () => {
         expect(onClose).not.toHaveBeenCalled();
         fireEvent.keyDown(box, { key: 'Escape' });
         expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it('lets you read a cut-off description before adding the skill', async () => {
+        const full = 'Draft a weekly meal plan from what is in the fridge, then list what is missing and group it by shop aisle.';
+        mockedApi.previewSkillLink.mockResolvedValue({
+            link: LINK, source: 'owner/library', pin: 'commit:abc', warning: 'w',
+            skills: [found('meal-planner', { description: full })],
+        });
+        const scroll = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(80);
+        const client = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(18);
+        await readLink('meal-planner');
+        const more = screen.getByRole('button', { name: 'Show more' });
+        fireEvent.click(more);
+        expect(screen.getByText(full).parentElement).toHaveClass('is-open');
+        expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
+        // Opening the text does not tick the skill's checkbox.
+        expect(screen.getByLabelText('Add meal-planner')).toBeChecked();
+        fireEvent.click(screen.getByText(full));
+        expect(screen.getByLabelText('Add meal-planner')).toBeChecked();
+        scroll.mockRestore();
+        client.mockRestore();
     });
 });

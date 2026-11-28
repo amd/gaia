@@ -3,8 +3,9 @@
 """Shared text-file helpers for the file tool mixins.
 
 Opening a file in the encoding :mod:`gaia.utils.text_decoding` detects (BOM,
-UTF-8, or a legacy code page such as CP1252, Windows-1256 or Shift-JIS), and
-bounding a matching line to an excerpt that still shows the match.
+UTF-8, or a legacy code page such as CP1252, Windows-1256 or Shift-JIS),
+reading and writing UTF-8 with line endings left alone, and bounding a matching
+line to an excerpt that still shows the match.
 """
 
 import os
@@ -13,7 +14,14 @@ from typing import Tuple, Union
 from gaia.utils.text_decoding import file_encoding as text_encoding
 from gaia.utils.text_decoding import name_file
 
-__all__ = ["MATCH_EXCERPT_CHARS", "match_excerpt", "read_text", "text_encoding"]
+__all__ = [
+    "MATCH_EXCERPT_CHARS",
+    "match_excerpt",
+    "read_exact",
+    "read_text",
+    "text_encoding",
+    "write_exact",
+]
 
 MATCH_EXCERPT_CHARS = 200
 _ELLIPSIS = "..."
@@ -43,6 +51,30 @@ def read_text(path: Union[str, os.PathLike]) -> Tuple[str, str]:
             f"{os.fspath(path)} has NUL at character {nul}: not a text file",
         )
     return content, encoding
+
+
+def read_exact(path: Union[str, os.PathLike]) -> str:
+    """Read *path* as text without translating its line endings.
+
+    ``open()`` in text mode, and ``Path.read_text``, default to universal
+    newlines: every CRLF in the file arrives as a bare LF. Paired with
+    :func:`write_exact` this keeps a read/modify/write round trip
+    byte-exact, so a one-line edit stays a one-line diff on every platform.
+    """
+    with open(path, "r", encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def write_exact(path: Union[str, os.PathLike], content: str) -> None:
+    """Write *content* to *path* with its line endings left alone.
+
+    ``open()`` in text mode, and ``Path.write_text``, translate every LF to
+    ``os.linesep`` on write. On Windows that silently turns an LF-terminated
+    file into a CRLF one, which no byte-comparing tool treats as a no-op: a
+    three-line edit to a 400-line file is reported as 400 lines changed.
+    """
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(content)
 
 
 def match_excerpt(

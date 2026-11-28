@@ -61,6 +61,9 @@ struct GAIA_API ExtractedText {
 ///     from its PDF/PPTX extractors, which are out of scope here (see
 ///     extractFile), so text that carries them verbatim is the one input where
 ///     the two runtimes chunk differently.
+///   - A paragraph with no sentence breaks (a PDF table, one row per line) is
+///     cut at its line breaks; Python keeps it as one oversized chunk. A
+///     single line longer than the budget stays whole in both.
 ///   - An unusable config throws instead of degrading: Python accepts
 ///     chunkOverlap >= chunkSize and produces chunks that never advance.
 ///   - The uppercase table is pinned to one Unicode release (see

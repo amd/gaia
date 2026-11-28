@@ -87,10 +87,10 @@ MAX_OVERLAY_TOKENS = 120
 #: write; the real bound on *resident* cost is MAX_OVERLAY_TOKENS above.
 MAX_PAYLOAD_CHARS = 2000
 
-#: Matches ``skill_library_tools.estimate_prompt_tokens`` (4 chars ≈ 1 token).
-#: Verified against tiktoken cl100k on the shipped skill corpus: 3.97 vs 4.00
-#: chars/token, i.e. within 1%. Kept local so this module stays importable
-#: without pulling in the agent tool stack.
+#: 4 chars ≈ 1 token. Verified against tiktoken cl100k on the shipped skill
+#: corpus: 3.97 vs 4.00 chars/token, i.e. within 1%. Undercounts CJK, which
+#: ``gaia.rag.text_units.estimate_tokens`` handles; kept local because importing
+#: ``gaia.rag`` loads the whole RAG SDK.
 _CHARS_PER_TOKEN = 4
 
 

@@ -19,6 +19,25 @@ from gaia.messaging.discord import credentials as discord_credentials
 from gaia.messaging.slack import credentials as slack_credentials
 
 
+def _record_writes(monkeypatch, backend) -> list:
+    """Usernames the OS keyring is asked to write or delete from now on."""
+    writes = []
+    real_set = backend.set_password
+    real_delete = backend.delete_password
+
+    def recording_set(service, username, value):
+        writes.append(("set", username))
+        return real_set(service, username, value)
+
+    def recording_delete(service, username):
+        writes.append(("delete", username))
+        return real_delete(service, username)
+
+    monkeypatch.setattr(backend, "set_password", recording_set)
+    monkeypatch.setattr(backend, "delete_password", recording_delete)
+    return writes
+
+
 def _record_reads(monkeypatch, backend) -> list:
     """Usernames the OS keyring is asked to read from now on."""
     reads = []
@@ -241,15 +260,24 @@ class TestLazyLegacyMigration:
         assert store._kr_legacy_get(username) is None
         assert store.peek_secret("rotating") is None
 
-    def test_a_failed_legacy_mirror_write_fails_the_save(
+    def test_a_failed_legacy_mirror_write_fails_a_user_save(
         self, _autouse_in_memory_keyring, monkeypatch
     ):
+        username = store._secret_username("mirrored")
+        keyring.set_password(vault.SERVICE_NAME, username, "old")
+        assert store.peek_secret("mirrored") == "old"
+
         def refuse(_username, _value):
             raise ConnectorsError("Keyring set_password failed: denied")
 
         monkeypatch.setattr(store, "_kr_legacy_set", refuse)
-        with pytest.raises(ConnectorsError, match="set_password failed"):
-            store.save_secret("mirrored", "val")
+        with pytest.raises(ConnectorsError, match="set_password failed.*save again"):
+            store.save_secret("mirrored", "new")
+
+        # The retry mirrors even though the vault already holds the value.
+        monkeypatch.undo()
+        store.save_secret("mirrored", "new")
+        assert keyring.get_password(vault.SERVICE_NAME, username) == "new"
 
     def test_chunked_legacy_slot_is_copied_and_kept(self, _autouse_in_memory_keyring):
         import json
@@ -323,6 +351,160 @@ class TestLazyLegacyMigration:
             slack_credentials.save("xoxb-bot", "xapp-app")
         with pytest.raises(discord_credentials.DiscordCredentialsError):
             discord_credentials.save("discord-bot-tok")
+        assert not vault.vault_path().exists()
+
+
+class TestLegacyMirrorScope:
+    """Only slots migrated from a legacy item are mirrored, and only on a
+    user save whose value changed, so unsigned macOS builds do not raise a
+    Keychain prompt on every background token refresh."""
+
+    def _migrate_ms_connection(self, token: str) -> str:
+        import json
+
+        username = store._connection_username("microsoft", "default")
+        payload = json.dumps(
+            {
+                "account_email": "a@example.com",
+                "client_id_hash": "h",
+                "connected_at": 1,
+                "refresh_token": token,
+                "scopes": ["Mail.Read"],
+            },
+            sort_keys=True,
+        )
+        keyring.set_password(vault.SERVICE_NAME, username, payload)
+        assert store.load_connection("microsoft", current_client_id_hash="h")
+        return username
+
+    def _save_ms(self, token: str, **kwargs) -> None:
+        store.save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=token,
+            scopes=["Mail.Read"],
+            client_id_hash="h",
+            connected_at=1,
+            **kwargs,
+        )
+
+    def test_fresh_install_creates_no_legacy_items(
+        self, _autouse_in_memory_keyring, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(browser_session, "sessions_dir", lambda: tmp_path)
+        self._save_ms("rt-1")
+        self._save_ms("rt-2")
+        self._save_ms("rt-3", background_refresh=True)
+        store.save_provider_credentials("google", client_id="cid", client_secret="s")
+        store.save_secret("fireworks_api_key", "fw-1")
+        store.save_secret("fireworks_api_key", "fw-2")
+        slack_credentials.save("xoxb-bot", "xapp-app")
+        discord_credentials.save("discord-bot")
+        browser_session._load_key()
+
+        assert set(_autouse_in_memory_keyring._store) == {
+            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+        }
+
+    def test_migrated_slot_is_mirrored_on_a_user_save(self, _autouse_in_memory_keyring):
+        username = self._migrate_ms_connection("legacy-rt")
+        self._save_ms("signed-in-rt")
+        assert '"signed-in-rt"' in store._kr_legacy_get(username)
+
+    def test_token_refresh_does_not_touch_the_keyring(
+        self, _autouse_in_memory_keyring, monkeypatch
+    ):
+        username = self._migrate_ms_connection("legacy-rt")
+        writes = _record_writes(monkeypatch, _autouse_in_memory_keyring)
+        self._save_ms("rotated-rt", background_refresh=True)
+
+        assert writes == []
+        assert '"legacy-rt"' in store._kr_legacy_get(username)
+        loaded = store.load_connection("microsoft", current_client_id_hash="h")
+        assert loaded["refresh_token"] == "rotated-rt"
+
+    def test_unchanged_value_does_not_write_the_legacy_item(
+        self, _autouse_in_memory_keyring, monkeypatch
+    ):
+        username = store._secret_username("api_key")
+        keyring.set_password(vault.SERVICE_NAME, username, "same")
+        assert store.peek_secret("api_key") == "same"
+
+        writes = _record_writes(monkeypatch, _autouse_in_memory_keyring)
+        store.save_secret("api_key", "same")
+        assert writes == []
+
+        store.save_secret("api_key", "changed")
+        assert ("set", username) in writes
+        writes.clear()
+        store.save_secret("api_key", "changed")
+        assert writes == []
+
+    def test_background_mirror_failure_warns_and_keeps_the_vault_update(
+        self, _autouse_in_memory_keyring, monkeypatch, caplog
+    ):
+        username = store._secret_username("bg")
+        keyring.set_password(vault.SERVICE_NAME, username, "old-value")
+        assert store.peek_secret("bg") == "old-value"
+
+        def refuse(_username, value):
+            raise ConnectorsError(f"backend-detail-text {value}")
+
+        monkeypatch.setattr(store, "_kr_legacy_set", refuse)
+        with caplog.at_level("WARNING", logger="gaia.connectors.vault"):
+            vault.put(username, "new-value", mirror=vault.MIRROR_BACKGROUND)
+
+        assert store.peek_secret("bg") == "new-value"
+        assert "could not update" in caplog.text
+        assert "ConnectorsError" in caplog.text
+        # Neither the secret nor the exception message reaches the log.
+        assert "new-value" not in caplog.text
+        assert "old-value" not in caplog.text
+        assert "backend-detail-text" not in caplog.text
+        assert keyring.get_password(vault.SERVICE_NAME, username) == "old-value"
+
+        # Still stale, so the next save retries even with the same value.
+        monkeypatch.undo()
+        vault.put(username, "new-value", mirror=vault.MIRROR_BACKGROUND)
+        assert keyring.get_password(vault.SERVICE_NAME, username) == "new-value"
+
+    def test_vault_stores_no_digest_of_a_secret(self, _autouse_in_memory_keyring):
+        username = store._secret_username("flag")
+        keyring.set_password(vault.SERVICE_NAME, username, "legacy-val")
+        assert store.peek_secret("flag") == "legacy-val"
+        store.save_secret("flag", "next-val")
+
+        key = bytes.fromhex(
+            keyring.get_password(vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+        )
+        _, legacy_mirror = vault._decrypt_payload(key, vault.vault_path().read_bytes())
+        assert legacy_mirror == {username: "synced"}
+
+    def test_refresh_then_unchanged_user_save_brings_legacy_current(
+        self, _autouse_in_memory_keyring
+    ):
+        username = self._migrate_ms_connection("legacy-rt")
+        self._save_ms("rotated-rt", background_refresh=True)
+        assert '"legacy-rt"' in store._kr_legacy_get(username)
+        # Same value as the vault, but the legacy item is behind it.
+        self._save_ms("rotated-rt")
+        assert '"rotated-rt"' in store._kr_legacy_get(username)
+
+    def test_delete_forgets_the_migration_so_a_re_save_creates_nothing(
+        self, _autouse_in_memory_keyring
+    ):
+        username = store._secret_username("gone")
+        keyring.set_password(vault.SERVICE_NAME, username, "old")
+        store.save_secret("keep", "k")
+        assert store.peek_secret("gone") == "old"
+
+        store.delete_secret("gone")
+        store.save_secret("gone", "again")
+        assert keyring.get_password(vault.SERVICE_NAME, username) is None
+
+    def test_unknown_mirror_mode_is_rejected(self, _autouse_in_memory_keyring):
+        with pytest.raises(ConnectorsError, match="mirror mode"):
+            vault.put("secret:x", "v", mirror="sometimes")
         assert not vault.vault_path().exists()
 
 
@@ -412,7 +594,9 @@ class TestConcurrency:
 
         monkeypatch.undo()
         assert store.peek_secret("rotated") == "fresh-rotated-token"
-        # The legacy copy follows the newer write, so a downgrade is not stale.
+        # The slot is still recorded as migrated, so the next user save
+        # brings the legacy copy up to date for a downgrade.
+        store.save_secret("rotated", "fresh-rotated-token")
         assert keyring.get_password(vault.SERVICE_NAME, slot) == "fresh-rotated-token"
 
     def test_read_recovers_from_concurrent_vault_remint(

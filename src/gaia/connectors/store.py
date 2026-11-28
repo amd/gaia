@@ -523,11 +523,14 @@ def _kr_legacy_set(username: str, payload: str) -> None:
     _kr_sweep_chunks_from(username, len(chunks))
 
 
-def _kr_set(username: str, payload: str) -> None:
-    """Store ``payload`` under ``username`` in the single-master-key vault."""
+def _kr_set(username: str, payload: str, *, mirror: str = "user") -> None:
+    """Store ``payload`` under ``username`` in the single-master-key vault.
+
+    ``mirror`` is a ``vault.MIRROR_*`` mode: who is saving, for the legacy item.
+    """
     from gaia.connectors import vault
 
-    vault.put(username, payload)
+    vault.put(username, payload, mirror=mirror)
 
 
 def _kr_get(username: str, *, for_delete: bool = False) -> Optional[str]:
@@ -559,6 +562,7 @@ def save_connection(
     tenant: Optional[str] = None,
     account_type: Optional[str] = None,
     forwarded: bool = False,
+    background_refresh: bool = False,
 ) -> None:
     """
     Atomically persist a connection record to the keyring.
@@ -599,6 +603,10 @@ def save_connection(
     correctly read back as not-forwarded. Callers that re-save an existing
     connection (refresh-token rotation) MUST pass the stored value through
     or a forwarded connection silently loses its protection.
+
+    ``background_refresh``: True for a token-refresh re-save, which updates the
+    vault only and never the legacy per-item entry (a refresh nobody asked for
+    must not raise an OS credential-store prompt).
     """
     verify_keyring_backend()
 
@@ -620,7 +628,7 @@ def save_connection(
     payload = json.dumps(blob, sort_keys=True)
     username = _connection_username(provider, slot)
 
-    _kr_set(username, payload)
+    _kr_set(username, payload, mirror="never" if background_refresh else "user")
     # A completed write supersedes an interrupted forward's recovery record.
     _drop_forward_recovery_for(provider, slot)
 
@@ -788,7 +796,7 @@ def write_forward_recovery(
     payload = json.dumps(
         {"version": 2, "account_slot": slot, "slots": snapshot}, sort_keys=True
     )
-    _kr_set(_forward_recovery_username(provider), payload)
+    _kr_set(_forward_recovery_username(provider), payload, mirror="background")
 
 
 def clear_forward_recovery(provider: str) -> None:
@@ -859,7 +867,7 @@ def restore_connection_slots(snapshot: dict) -> None:
         if raw is None:
             _kr_delete(username)
         else:
-            _kr_set(username, raw)
+            _kr_set(username, raw, mirror="background")
 
 
 def delete_connection(provider: str, *, slot: str = DEFAULT_ACCOUNT) -> None:

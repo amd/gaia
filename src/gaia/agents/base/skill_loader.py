@@ -28,7 +28,6 @@ or not the query matched it (mirrors ``search_tools``).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -44,6 +43,8 @@ from typing import (
 )
 
 import numpy as np
+
+from gaia.agents.base.tool_loader import _sha256, embed_docs
 
 if TYPE_CHECKING:
     from gaia.skills.format import Skill
@@ -205,31 +206,7 @@ class SkillLoader:
         docs: Dict[str, str] = {
             name: self._doc_text(skill) for name, skill in loaded_skills.items()
         }
-        keys: Dict[str, tuple] = {
-            name: (name, _sha256(text)) for name, text in docs.items()
-        }
-
-        missing = [name for name, key in keys.items() if key not in self._embed_cache]
-        if missing:
-            if self._embed_batch_fn is not None:
-                vecs = self._embed_batch_fn([docs[n] for n in missing])
-                if len(vecs) != len(missing):
-                    # A warming-up embedder can answer 200 with fewer vectors
-                    # than texts; a bare zip would silently drop entries and
-                    # surface later as a misleading KeyError.
-                    raise RuntimeError(
-                        f"embedding batch returned {len(vecs)} vectors for "
-                        f"{len(missing)} texts — embedder still loading?"
-                    )
-                for name, vec in zip(missing, vecs):
-                    self._embed_cache[keys[name]] = np.asarray(vec, dtype=np.float32)
-            else:
-                for name in missing:
-                    self._embed_cache[keys[name]] = np.asarray(
-                        self._embed_fn(docs[name]), dtype=np.float32
-                    )
-
-        return {name: self._embed_cache[keys[name]] for name in docs}
+        return embed_docs(docs, self._embed_cache, self._embed_fn, self._embed_batch_fn)
 
     @staticmethod
     def _doc_text(skill: "Skill") -> str:
@@ -249,11 +226,6 @@ def skill_doc_text(skill: "Skill") -> str:
             description = line.strip()
             break
     return f"{skill.name}: {description}" if description else skill.name
-
-
-def _sha256(text: str) -> str:
-    """Hex SHA-256 of *text* (UTF-8)."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 __all__ = [

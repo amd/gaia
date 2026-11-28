@@ -14,8 +14,9 @@ export interface AboutYouItem {
     category: string;
     content: string;
     domain: string | null;
-    source: string;
-    context: string;
+    /** Null from a store that doesn't record it. */
+    source: string | null;
+    context: string | null;
     entity: string | null;
     sensitive: boolean;
     created_at: string;
@@ -90,6 +91,9 @@ export function dueLabel(iso: string, now: Date = new Date(), t: Translate = tEn
 }
 
 interface Props {
+    /** Whose memory this is; the limits below name it. */
+    agent: memoryApi.MemoryAgent;
+    supports: memoryApi.MemoryStoreSupports;
     memoryEnabled: boolean;
     /** Bumped by the parent whenever another tab changes memory. */
     reloadKey: number;
@@ -98,8 +102,9 @@ interface Props {
     showToast: (text: string, type?: 'success' | 'error' | 'info') => void;
 }
 
-export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, onOpenAdvanced, showToast }: Props) {
+export function MemoryDashboardAboutYou({ agent, supports, memoryEnabled, reloadKey, onChanged, onOpenAdvanced, showToast }: Props) {
     const t = useT();
+    const agentName = ref(agent === 'gaiacpp' ? 'setup.agent.gaiacpp' : 'setup.agent.gaiapy');
     const [items, setItems] = useState<AboutYouItem[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -177,7 +182,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
     const saveEdit = useCallback(async (item: AboutYouItem) => {
         const content = draft.trim();
-        const dueChanged = item.category === 'reminder' && !!draftDue && draftDue !== dueInputValue(item.due_at);
+        const dueChanged = supports.due_dates && item.category === 'reminder' && !!draftDue && draftDue !== dueInputValue(item.due_at);
         if (!content || (content === item.content && !dueChanged)) { setEditingId(null); return; }
         setBusyId(item.id);
         try {
@@ -195,7 +200,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         } finally {
             setBusyId(null);
         }
-    }, [draft, draftDue, load, onChanged, showToast, t]);
+    }, [draft, draftDue, load, onChanged, showToast, supports.due_dates, t]);
 
     const forget = useCallback(async (item: AboutYouItem) => {
         setBusyId(item.id);
@@ -221,10 +226,11 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                 content: item.content,
                 category: item.category,
                 domain: item.domain ?? undefined,
-                context: item.context,
+                context: item.context ?? undefined,
                 entity: item.entity ?? undefined,
                 sensitive: item.sensitive,
-                due_at: item.due_at ?? undefined,
+                // A store without due dates refuses one, even an empty one.
+                ...(supports.due_dates && item.due_at ? { due_at: item.due_at } : {}),
             });
             setForgotten(prev => prev.filter(f => f.id !== item.id));
             await load();
@@ -235,7 +241,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         } finally {
             setBusyId(null);
         }
-    }, [load, onChanged, showToast, t]);
+    }, [load, onChanged, showToast, supports.due_dates, t]);
 
     const add = useCallback(async () => {
         const content = newText.trim();
@@ -277,6 +283,13 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         <div className="mem-about">
             <h2 className="mem-about-title">{t('mem.about.title')}</h2>
             <p className="mem-about-intro">{t('mem.about.intro')}</p>
+            {(!supports.due_dates || !supports.sources) && (
+                <p className="mem-about-limits" role="note">
+                    {!supports.due_dates && <span>{t('mem.about.limit.dueDates', { name: agentName })}</span>}
+                    {!supports.due_dates && !supports.sources && ' '}
+                    {!supports.sources && <span>{t('mem.about.limit.sources', { name: agentName })}</span>}
+                </p>
+            )}
 
             <form
                 className="mem-about-add"
@@ -297,7 +310,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                 >
                     <option value="fact">{t.bare('mem.about.group.about')}</option>
                     <option value="preference">{t.bare('mem.about.kind.preference')}</option>
-                    <option value="reminder">{t.bare('mem.about.kind.reminder')}</option>
+                    {supports.due_dates && <option value="reminder">{t.bare('mem.about.kind.reminder')}</option>}
                     <option value="note">{t.bare('mem.about.kind.note')}</option>
                 </select>
                 {newCategory === 'reminder' && (
@@ -348,7 +361,8 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                         <ul className="mem-about-list">
                             {group.rows.map(item => {
                                 const hidden = item.sensitive && !revealed.has(item.id);
-                                const due = item.due_at ? dueLabel(item.due_at, new Date(), t) : null;
+                                const due = supports.due_dates && item.due_at ? dueLabel(item.due_at, new Date(), t) : null;
+                                const source = supports.sources && item.source ? sourceKey(item.source) : null;
                                 const when = relativeDay(item.updated_at, t);
                                 const name = hidden ? ref('mem.about.sensitiveMemory') : item.content;
                                 return (
@@ -370,7 +384,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); saveEdit(item); }
                                                     }}
                                                 />
-                                                {item.category === 'reminder' && (
+                                                {supports.due_dates && item.category === 'reminder' && (
                                                     <input
                                                         type="datetime-local"
                                                         className="mem-input mem-about-when"
@@ -400,11 +414,15 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                             {due.text}
                                                         </span>
                                                     )}
-                                                    <span className="mem-about-meta">
-                                                        {when === null
-                                                            ? t(sourceKey(item.source))
-                                                            : t('mem.about.meta', { source: ref(sourceKey(item.source)), when })}
-                                                    </span>
+                                                    {(source || when !== null) && (
+                                                        <span className="mem-about-meta">
+                                                            {source === null
+                                                                ? (typeof when === 'string' ? when : t(when!.ref, when!.params))
+                                                                : when === null
+                                                                    ? t(source)
+                                                                    : t('mem.about.meta', { source: ref(source), when })}
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="mem-about-actions">
                                                     <button

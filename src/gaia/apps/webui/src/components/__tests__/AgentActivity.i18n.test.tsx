@@ -24,6 +24,14 @@ function tool(id: number, name: string, opts: Partial<AgentStep> = {}): Activity
 
 afterEach(() => act(() => useChatStore.getState().setLocale('en')));
 
+describe("GAIA's own steps", () => {
+    it('names the attach step in the UI language, not by its English narration', () => {
+        const step = tool(1, 'index_documents', { narration: 'Indexing documents', active: true, success: undefined, result: undefined });
+        expect(toolRowText(step)).toBe('Adding documents');
+        expect(plain(toolRowText(step, ar))).toBe('إضافة المستندات (Adding documents)');
+    });
+});
+
 describe('folded-run summary', () => {
     const rows = [tool(1, 'index_documents'), tool(2, 'query_specific_file'), tool(3, 'query_specific_file')];
 
