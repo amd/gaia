@@ -931,11 +931,14 @@ func ensureRequestBody(agentID string) ([]byte, error) {
 		return json.Marshal(body)
 	}
 	body["mode"] = mode
+	if mode != "dev" {
+		return json.Marshal(body)
+	}
 	applies, err := devModeApplies(agentID)
 	if err != nil {
 		return nil, err
 	}
-	if mode == "dev" && applies {
+	if applies {
 		devSrcDir, err := callerDevSrcDir(agentID)
 		if err != nil {
 			return nil, err

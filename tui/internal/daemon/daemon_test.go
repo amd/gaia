@@ -657,6 +657,19 @@ func TestEnsureAgentSurfacesAnUnreadableHarnessChoice(t *testing.T) {
 	}
 }
 
+func TestEnsureAgentUserModeNeverReadsTheHarnessChoice(t *testing.T) {
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "user")
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	prev := SavedFlagshipHarness
+	SavedFlagshipHarness = func() (string, error) { return "", fmt.Errorf("config.json is malformed") }
+	t.Cleanup(func() { SavedFlagshipHarness = prev })
+
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia"); err != nil {
+		t.Fatalf("EnsureAgent in user mode = %v, want no error: only dev mode reads the choice", err)
+	}
+}
+
 func TestEnsureAgentSurfacesDaemonRefusal(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.writeInstance(nil)
