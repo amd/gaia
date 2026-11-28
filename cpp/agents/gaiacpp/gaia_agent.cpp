@@ -55,7 +55,7 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
         const std::string memoryPath =
             options_.memoryPath.empty() ? MemoryStore::defaultPath() : options_.memoryPath;
         try {
-            memory_ = std::make_unique<MemoryStore>(memoryPath, embed, options_.embeddingModel);
+            memory_ = std::make_unique<MemoryStore>(memoryPath, embed, options_.embeddingModel, options_.embeddingNote);
         } catch (const std::exception& e) {
             throw std::runtime_error("The memory store at " + memoryPath + " could not be opened: " + e.what() +
                                      "\nNothing was changed. Move that file aside to start a new memory, or run "

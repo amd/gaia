@@ -44,6 +44,7 @@ public:
         bool unattended = false;
         bool documents = true;       // index_document / query_documents
         std::string embeddingModel;  // empty = keyword-only retrieval
+        std::string embeddingNote;   // why embeddings are inactive when embeddingModel is empty
         bool memory = true;          // remember / recall across sessions
         std::string memoryPath;      // empty = MemoryStore::defaultPath()
         bool vision = true;          // analyze_image

@@ -92,8 +92,10 @@ std::string resolveGaiaEmbeddingModel();
 /// Match `wanted` against `client`'s downloaded models (case-insensitive, with or
 /// without a leading "user." prefix). Returns the server's exact model id when
 /// present and downloaded, or "" when absent, not downloaded, non-Lemonade, or
-/// unreachable / missing `/models`. Throws on HTTP 5xx/auth errors or malformed JSON.
-std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::string& wanted);
+/// unreachable / missing `/models` (writing an actionable explanation to `reasonOut`
+/// when provided). Throws on HTTP 5xx/auth errors or malformed JSON.
+std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::string& wanted,
+                                        std::string* reasonOut = nullptr);
 
 /// GAIA's running server's key when `url` is that server (http, loopback, its
 /// port), else "". The key never goes anywhere else.

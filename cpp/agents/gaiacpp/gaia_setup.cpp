@@ -387,8 +387,19 @@ std::string resolveGaiaEmbeddingModel() {
                              "'. Fix it with `gaia config set embedding_device auto`.");
 }
 
-std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::string& wanted) {
-    if (wanted.empty() || !isLemonadeUrl(client.baseUrl())) return "";
+std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::string& wanted,
+                                        std::string* reasonOut) {
+    auto setReason = [reasonOut](std::string msg) {
+        if (reasonOut) *reasonOut = std::move(msg);
+    };
+    if (wanted.empty()) {
+        setReason("no embedding model configured");
+        return "";
+    }
+    if (!isLemonadeUrl(client.baseUrl())) {
+        setReason("embedding model " + wanted + " is only probed on Lemonade endpoints");
+        return "";
+    }
     auto stripUser = [](std::string id) {
         id = lower(std::move(id));
         if (id.rfind("user.", 0) == 0) id.erase(0, 5);
@@ -404,6 +415,7 @@ std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::strin
         if (e.status() == 0 || e.status() == 404) {
             std::cerr << "gaiacpp: skipped embedding model probe at " << client.baseUrl() << ": " << e.what()
                       << std::endl;
+            setReason(wanted + " could not be checked (" + client.baseUrl() + " unreachable)");
             return "";
         }
         throw;
@@ -412,12 +424,23 @@ std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::strin
         throw std::runtime_error("Model catalog at " + client.baseUrl() +
                                  "/models did not return a JSON object with a \"data\" array.");
     }
+    bool foundNotDownloaded = false;
     for (const auto& m : catalog["data"]) {
         if (!m.is_object()) continue;
         const std::string id = m.value("id", "");
         if (id.empty() || stripUser(id) != target) continue;
         const bool downloaded = !m.contains("downloaded") || m.value("downloaded", false) == true;
-        if (downloaded) return id;
+        if (downloaded) {
+            setReason("");
+            return id;
+        }
+        foundNotDownloaded = true;
+    }
+    if (foundNotDownloaded) {
+        setReason(wanted + " is not downloaded; install it with `gaia download " + wanted + "`");
+    } else {
+        setReason(wanted + " is not available on " + client.baseUrl() +
+                  "; install it with `gaia download " + wanted + "`");
     }
     return "";
 }

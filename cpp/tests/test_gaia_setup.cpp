@@ -251,10 +251,15 @@ TEST_F(GaiaSetup, ServerEmbeddingModelMatchesWithOrWithoutUserPrefix) {
         {"id":"embed-gemma-300m-FLM","downloaded":false}
     ]})");
     LemonadeClient client(mock.baseUrl());
-    EXPECT_EQ(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF"), "embeddinggemma-300m-GGUF");
-    EXPECT_EQ(resolveServerEmbeddingModel(client, "embed-gemma-300m-FLM"), "")
+    std::string reason;
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF", &reason),
+              "embeddinggemma-300m-GGUF");
+    EXPECT_TRUE(reason.empty());
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "embed-gemma-300m-FLM", &reason), "")
         << "not-downloaded model must not be reported ready";
-    EXPECT_EQ(resolveServerEmbeddingModel(client, "missing-embedder"), "");
+    EXPECT_NE(reason.find("gaia download embed-gemma-300m-FLM"), std::string::npos);
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "missing-embedder", &reason), "");
+    EXPECT_NE(reason.find("missing-embedder"), std::string::npos);
 }
 
 TEST_F(GaiaSetup, ServerEmbeddingModelFailsLoudlyOnHttp500AndMalformedJson) {

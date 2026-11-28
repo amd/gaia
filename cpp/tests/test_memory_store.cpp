@@ -433,3 +433,80 @@ TEST(MemoryStoreTest, SensitiveAndCategoryFiltersApplyToSemanticRecall) {
     ASSERT_EQ(factOnly.size(), 1u);
     EXPECT_EQ(factOnly[0].id, secretCar);
 }
+
+TEST(MemoryStoreTest, WeaklyOverlappingUnrelatedVectorsFilteredBySimilarityFloor) {
+    // {0.9, 0.1} vs {0.1, 0.9} has cosine similarity ~0.219 (> 0, < kMinVectorSimilarity=0.35).
+    EmbedFunction embed = [](const std::vector<std::string>& texts) {
+        std::vector<std::vector<float>> out;
+        for (const auto& t : texts) {
+            if (t.find("ocean") != std::string::npos || t.find("marine") != std::string::npos) {
+                out.push_back({0.9f, 0.1f});
+            } else {
+                out.push_back({0.1f, 0.9f});
+            }
+        }
+        return out;
+    };
+    MemoryStore m(":memory:", embed, "test-embed");
+    const std::string ocean = m.remember("Deep ocean trenches host bioluminescent squid");
+    m.remember("Sourdough starter needs daily flour and water");
+
+    const auto hits = m.recall("marine biology", "", 10);
+    ASSERT_EQ(hits.size(), 1u) << "weakly overlapping unrelated vector must be filtered out";
+    EXPECT_EQ(hits[0].id, ocean);
+}
+
+TEST(MemoryStoreTest, ConcurrentStoresWithDifferentEmbeddersNeverMixDimensions) {
+    std::mt19937_64 rng(std::random_device{}());
+    const fs::path dbPath = fs::temp_directory_path() / ("gaia-mem-switch-" + std::to_string(rng()) + ".db");
+
+    EmbedFunction embed2d = [](const std::vector<std::string>& texts) {
+        std::vector<std::vector<float>> out;
+        for (size_t i = 0; i < texts.size(); ++i) out.push_back({1.0f, 0.0f});
+        return out;
+    };
+    EmbedFunction embed3d = [](const std::vector<std::string>& texts) {
+        std::vector<std::vector<float>> out;
+        for (size_t i = 0; i < texts.size(); ++i) out.push_back({1.0f, 0.0f, 0.0f});
+        return out;
+    };
+
+    {
+        MemoryStore storeA(dbPath.string(), embed2d, "model-2d");
+        MemoryStore storeB(dbPath.string(), embed3d, "model-3d");
+
+        storeA.remember("First fact from store A");
+        storeB.remember("Second fact from store B");
+        EXPECT_NO_THROW({
+            const auto hitsB = storeB.recall("fact", "", 10);
+            EXPECT_EQ(hitsB.size(), 2u);
+        });
+
+        // Long-lived storeA writes and searches after storeB switched meta.embedder_id.
+        storeA.remember("Third fact from store A");
+        EXPECT_NO_THROW({
+            const auto hitsA = storeA.recall("fact", "", 10);
+            EXPECT_EQ(hitsA.size(), 3u);
+        });
+        EXPECT_NO_THROW({
+            const auto hitsB2 = storeB.recall("fact", "", 10);
+            EXPECT_EQ(hitsB2.size(), 3u);
+        });
+    }
+
+    std::error_code ec;
+    fs::remove(dbPath, ec);
+}
+
+TEST(MemoryStoreTest, KeywordOnlyRetrievalSurfacesEmbeddingNote) {
+    MemoryStore m(":memory:", {}, "",
+                  "user.embeddinggemma-300m-GGUF is not downloaded; install it with `gaia download user.embeddinggemma-300m-GGUF`");
+    m.remember("Prefers dark theme", "preference");
+    ToolRegistry reg;
+    m.registerTools(reg);
+    const json out = reg.executeTool("recall", json{{"query", "dark"}});
+    ASSERT_EQ(out["status"], "success");
+    EXPECT_NE(out["retrieval"].get<std::string>().find("gaia download user.embeddinggemma-300m-GGUF"),
+              std::string::npos)
+        << out.dump();
+}

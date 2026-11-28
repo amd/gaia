@@ -37,15 +37,20 @@ struct GAIA_API MemoryEntry {
 
 class GAIA_API MemoryStore {
 public:
+    /// Minimum cosine similarity for vector-only recall matches (matches Python's semantic floor).
+    static constexpr double kMinVectorSimilarity = 0.35;
+
     /// The default database path for this user.
     static std::string defaultPath();
 
     /// Opens (creating) the store. ":memory:" gives a throwaway one.
     /// @param embed           Vector embedder, or empty for keyword-only recall.
     /// @param embeddingModel  Model id recorded with stored vectors; changing it clears stale vectors.
+    /// @param embeddingNote   Why embeddings are inactive when embed is empty (surfaced in recall).
     explicit MemoryStore(const std::string& path = defaultPath(),
                          EmbedFunction embed = {},
-                         std::string embeddingModel = "");
+                         std::string embeddingModel = "",
+                         std::string embeddingNote = "");
 
     static const std::vector<std::string>& categories();
 
@@ -72,6 +77,7 @@ public:
 
     bool usesEmbeddings() const { return static_cast<bool>(embed_); }
     const std::string& embeddingModel() const { return embeddingModel_; }
+    const std::string& embeddingNote() const { return embeddingNote_; }
 
     /// A short block of stored preferences for the system prompt ("" when none).
     std::string promptBlock(int limit = 10);
@@ -85,6 +91,7 @@ private:
     std::unique_ptr<Database> db_;
     EmbedFunction embed_;
     std::string embeddingModel_;
+    std::string embeddingNote_;
     std::mutex mutex_;
 };
 

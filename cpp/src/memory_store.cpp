@@ -195,8 +195,11 @@ std::string MemoryStore::refusalFor(const std::string& content) {
     return "";
 }
 
-MemoryStore::MemoryStore(const std::string& path, EmbedFunction embed, std::string embeddingModel)
-    : embed_(std::move(embed)), embeddingModel_(std::move(embeddingModel)) {
+MemoryStore::MemoryStore(const std::string& path, EmbedFunction embed, std::string embeddingModel,
+                         std::string embeddingNote)
+    : embed_(std::move(embed)),
+      embeddingModel_(std::move(embeddingModel)),
+      embeddingNote_(std::move(embeddingNote)) {
     if (path == ":memory:") {
         db_ = std::make_unique<Database>(Database::inMemory());
     } else {
@@ -266,6 +269,7 @@ std::string MemoryStore::remember(const std::string& content, const std::string&
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    if (hasEmb && !embeddingModel_.empty()) reconcileEmbedderLocked();
     // One write transaction: the duplicate check and both tables change together.
     Transaction txn(*db_, Transaction::Behavior::Immediate);
     const std::string now = nowIso();
@@ -320,6 +324,7 @@ size_t MemoryStore::backfillEmbeddings() {
     std::vector<std::pair<std::string, std::string>> missing;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!embeddingModel_.empty()) reconcileEmbedderLocked();
         auto s = db_->prepare("SELECT id, content FROM knowledge WHERE embedding IS NULL");
         while (s.step()) missing.emplace_back(s.columnText(0), s.columnText(1));
     }
@@ -441,7 +446,7 @@ std::vector<MemoryEntry> MemoryStore::recall(const std::string& query, const std
                     "); check that the configured embedding model matches the store.");
             }
             const double sim = dotProduct(qvec, vec);
-            if (sim > 0.0) vecHits.push_back({sim, rowToEntry(s)});
+            if (sim >= kMinVectorSimilarity) vecHits.push_back({sim, rowToEntry(s)});
         }
     }
     std::sort(vecHits.begin(), vecHits.end(), [](const VecHit& a, const VecHit& b) {
@@ -495,6 +500,7 @@ bool MemoryStore::update(const std::string& id, const std::string& content) {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    if (hasEmb && !embeddingModel_.empty()) reconcileEmbedderLocked();
     Transaction txn(*db_, Transaction::Behavior::Immediate);
     auto upd = db_->prepare("UPDATE knowledge SET content = ?, updated_at = ?, embedding = ? WHERE id = ?");
     upd.bindText(1, content);
@@ -564,9 +570,11 @@ void MemoryStore::registerTools(ToolRegistry& registry) {
     };
     registry.registerTool(std::move(remember));
 
-    const std::string mode = usesEmbeddings()
-                                 ? "hybrid (keyword + " + (embeddingModel_.empty() ? std::string("embeddings") : embeddingModel_) + ")"
-                                 : "keyword only (no embedding model configured)";
+    const std::string mode =
+        usesEmbeddings()
+            ? "hybrid (keyword + " + (embeddingModel_.empty() ? std::string("embeddings") : embeddingModel_) + ")"
+            : "keyword only (" +
+                  (embeddingNote_.empty() ? std::string("no embedding model configured") : embeddingNote_) + ")";
 
     ToolInfo recall;
     recall.name = "recall";

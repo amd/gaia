@@ -530,12 +530,15 @@ private:
 
     std::string defaultModel() const { return opts_.defaultModel.empty() ? resolveGaiaModel() : opts_.defaultModel; }
 
-    std::string resolveEmbeddingModel(const ModelServer& server) const {
-        if (!opts_.embeddingModel.empty()) return opts_.embeddingModel;
+    std::string resolveEmbeddingModel(const ModelServer& server, std::string* reasonOut = nullptr) const {
+        if (!opts_.embeddingModel.empty()) {
+            if (reasonOut) reasonOut->clear();
+            return opts_.embeddingModel;
+        }
         const std::string wanted = resolveGaiaEmbeddingModel();
         LemonadeClient client(server.baseUrl);
         client.setApiKey(server.apiKey);
-        return resolveServerEmbeddingModel(client, wanted);
+        return resolveServerEmbeddingModel(client, wanted, reasonOut);
     }
 
     static EmbedFunction makeEmbedFunction(const ModelServer& server, const std::string& model) {
@@ -549,8 +552,9 @@ private:
     std::unique_ptr<MemoryStore> openMemoryStore(const std::string& path, bool needEmbeddings) const {
         if (!needEmbeddings) return std::make_unique<MemoryStore>(path);
         const ModelServer server = modelServer();
-        const std::string embModel = resolveEmbeddingModel(server);
-        if (embModel.empty()) return std::make_unique<MemoryStore>(path);
+        std::string reason;
+        const std::string embModel = resolveEmbeddingModel(server, &reason);
+        if (embModel.empty()) return std::make_unique<MemoryStore>(path, EmbedFunction{}, "", reason);
         return std::make_unique<MemoryStore>(path, makeEmbedFunction(server, embModel), embModel);
     }
 
@@ -558,7 +562,8 @@ private:
     // Only called while the session holds its busy flag.
     void ensureAgent(Session& s, const ModelServer& server) {
         const std::set<std::string> roots = s.effectiveRoots();
-        const std::string embModel = resolveEmbeddingModel(server);
+        std::string embReason;
+        const std::string embModel = resolveEmbeddingModel(server, &embReason);
         if (s.agent && s.builtWith == roots && s.builtEmbeddingModel == embModel) {
             AgentConfig cfg = s.agent->config();
             cfg.baseUrl = server.baseUrl;
@@ -581,6 +586,7 @@ private:
         cfg.apiKey = server.apiKey;
         GaiaAgent::Options o;
         o.embeddingModel = embModel;
+        o.embeddingNote = embReason;
         o.maxHelpers = opts_.maxHelpers;
         if (roots.empty() && s.scoped) {
             // Detaching a chat's last file must not widen it to home: a folder GAIA owns grants nothing else.
