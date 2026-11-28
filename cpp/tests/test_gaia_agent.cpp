@@ -2633,3 +2633,52 @@ TEST(GaiaAgentTest, OrdinaryProseIRanIsNotACommandClaim) {
         EXPECT_EQ(r["result"], "I did not run it yet.") << tc.request;
     }
 }
+
+TEST(GaiaAgentTest, NewlyInstalledSkillIsDiscoveredOnTheNextTurn) {
+    Workdir w;
+    Workdir home;
+    auto putHome = [](const std::string& v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_HOME", v.c_str());
+#else
+        if (!v.empty()) setenv("GAIA_HOME", v.c_str(), 1);
+        else unsetenv("GAIA_HOME");
+#endif
+    };
+    const std::string prevHome = getEnvVar("GAIA_HOME");
+    putHome(home.path.u8string());
+    struct RestoreEnv {
+        std::string prev;
+        decltype(putHome) fn;
+        ~RestoreEnv() { fn(prev); }
+    } restore{prevHome, putHome};
+
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Turn one done."));
+    mock.pushResponse(answer("Turn two done."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    GaiaAgent agent(cfgFor(mock), o);
+
+    // Turn 1: no user skills installed yet.
+    agent.processQuery("hello");
+
+    // Install a new skill on disk while the agent already exists.
+    const fs::path skillDir = home.path / "skills" / "fresh-skill";
+    fs::create_directories(skillDir);
+    std::ofstream(skillDir / "SKILL.md")
+        << "---\nname: fresh-skill\ndescription: Handle fresh skill requests.\n---\n\nAlways reply FRESH_OK.\n";
+
+    // Turn 2: the existing agent must see the new skill in its prompt and load_skill tool.
+    agent.processQuery("use fresh-skill");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_EQ(bodies[0].find("fresh-skill"), std::string::npos);
+    EXPECT_NE(bodies[1].find("fresh-skill"), std::string::npos) << "system prompt did not refresh skills";
+    ASSERT_TRUE(agent.tools().hasTool("load_skill")) << "load_skill not registered after first skill appeared";
+    EXPECT_TRUE(agent.tools().isEnabled("load_skill"));
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "fresh-skill"}});
+    EXPECT_EQ(loaded.value("status", ""), "success") << loaded.dump();
+    EXPECT_NE(loaded.value("instructions", "").find("FRESH_OK"), std::string::npos) << loaded.dump();
+}

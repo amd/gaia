@@ -149,7 +149,10 @@ void GaiaAgent::registerTools() {
                                                       [ws](const std::string& p) { return ws->checkPath(p); })
                                                 : std::function<std::string(const std::string&)>());
     }
-    if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
+    if (skills_ && !skills_->skills().empty()) {
+        skills_->registerTools(toolRegistry());
+        skillToolsRegistered_ = true;
+    }
     if (memory_) memory_->registerTools(toolRegistry());
     // The model means the script's own $; the shell would blank it and the script would still exit 0.
     toolRegistry().setArgRewrite([this](const ToolInfo& tool, json& args) {
@@ -629,6 +632,21 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
 void GaiaAgent::onTurnStart() {
     // A page read last turn may have changed, and fetching it again is the user's call.
     webPages_->clear();
+    // Rescan installed skills so skills added or removed mid-chat take effect immediately.
+    if (skills_) {
+        skills_->refresh();
+        const bool hasSkills = !skills_->skills().empty();
+        if (hasSkills && !skillToolsRegistered_) {
+            skills_->registerTools(toolRegistry());
+            skillToolsRegistered_ = true;
+        }
+        for (const char* name : {"list_skills", "load_skill"}) {
+            if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != hasSkills) {
+                toolRegistry().setEnabled(name, hasSkills);
+            }
+        }
+        rebuildSystemPrompt();
+    }
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
     for (const auto& name : compactWithheldTools()) {

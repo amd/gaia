@@ -422,3 +422,58 @@ def test_a_sidecar_without_followups_says_so_up_front(
 
     assert {"type": "followup_unavailable"} in events
     assert seen == [False]
+
+
+def test_gaiacpp_says_followups_unavailable_up_front(monkeypatch):
+    """gaiacpp advertises API >= 2.15 but refuses /followup with 409."""
+    from gaia.daemon.sidecars import fetch
+    from gaia.ui._chat_helpers import _dispatch_sidecar_query
+
+    class _Proxy:
+        base_url = "http://127.0.0.1:9"
+
+        def init(self):
+            return 200, {}
+
+    class _Handle:
+        api_version = "2.27"
+
+        def proxy(self):
+            return _Proxy()
+
+    class _SSE:
+        def __init__(self):
+            self.events = []
+            self.cancelled = threading.Event()
+            self.relay_ignores_internet = False
+
+        def _emit(self, event):
+            self.events.append(event)
+
+    def _run_with(flagship):
+        sse = _SSE()
+        monkeypatch.setattr(fetch, "saved_flagship", lambda: flagship)
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda _id: _Handle()
+        )
+        monkeypatch.setattr("gaia.daemon.client.deferred_restart_notice", lambda: None)
+        monkeypatch.setattr(
+            chat_helpers_module, "_replay_cloud_key_for_relay", lambda *_a: None
+        )
+        monkeypatch.setattr("gaia.ui.sidecar.grants.reconcile", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            "gaia.ui.sidecar.relay.relay_query", lambda *_a, **_kw: None
+        )
+        _dispatch_sidecar_query(
+            sse,
+            ChatRequest(session_id="s-cpp", message="hi", stream=True),
+            [],
+            "m",
+            "gaia",
+            session_id="s-cpp",
+            record_followup=lambda _t: None,
+        )
+        return sse.events
+
+    assert {"type": "followup_unavailable"} in _run_with(fetch.NATIVE_FLAGSHIP)
+    assert {"type": "followup_unavailable"} not in _run_with(fetch.PYTHON_FLAGSHIP)

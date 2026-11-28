@@ -293,6 +293,31 @@ def test_a_relative_or_deleted_path_is_not_offered(tmp_path):
     assert ledger.summary(location=LOCAL)["files"] == []
 
 
+def test_gaiacpp_relative_write_and_edit_use_resolved_result_path(tmp_path):
+    notes = tmp_path / "repro_notes.md"
+    notes.write_text("# Repro Notes\n", encoding="utf-8")
+    edited = tmp_path / "edited.txt"
+    edited.write_text("hello gaia\n", encoding="utf-8")
+    ledger = TurnLedger()
+    _call(
+        ledger,
+        "write_file",
+        {"file_path": "repro_notes.md"},
+        {"success": True, "path": str(notes), "bytes_written": 14},
+    )
+    _call(
+        ledger,
+        "edit_file",
+        {"file_path": "edited.txt"},
+        {"success": True, "path": str(edited), "replacements": 1},
+    )
+    files = ledger.summary(location=LOCAL)["files"]
+    assert [(f["name"], f["path"]) for f in files] == [
+        ("repro_notes.md", str(notes)),
+        ("edited.txt", str(edited)),
+    ]
+
+
 # ── Where it ran, live data, cost ───────────────────────────────────────
 
 

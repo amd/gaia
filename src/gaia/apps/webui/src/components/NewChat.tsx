@@ -12,14 +12,13 @@ import { ModelChip } from './ModelChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
-import { readSkillsForResearch, researchNeedsSkills, ResearchChip } from './ResearchChip';
+import { readSkillsForResearch, researchNeedsSkills, ResearchChip, useResearchMode, withResearch } from './ResearchChip';
 import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { isStarting } from '../services/statusPoll';
-import { researchOn, useChatStore } from '../stores/chatStore';
-import { withResearchCommand } from '../utils/research';
+import { useChatStore } from '../stores/chatStore';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
@@ -202,7 +201,7 @@ function SetupFailed({ error }: { error: string }) {
 /** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissing = false, agentRefused: heldRefused = false }: NewChatProps) {
     const t = useT();
-    const researchMode = useChatStore((s) => researchOn(s, null));
+    const researchMode = useResearchMode(null);
     const starting = useChatStore((s) => isStarting(s.systemStatus));
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
     // Moot once chats run in the cloud or a local model has loaded after all.
@@ -334,7 +333,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
             // Edited during the wait: the box now holds the message the user means, so it stays unsent.
             if (textNowRef.current !== text) return;
         }
-        await send(attachments.compose(withResearchCommand(typed, researchOn(useChatStore.getState(), null))), typed);
+        await send(attachments.compose(withResearch(typed, null)), typed);
     }, [agentProblem, attachments, send, text, t]);
 
     useEffect(() => {
