@@ -90,12 +90,29 @@ private:
     int offset_;
 };
 
+std::shared_ptr<const Zone> zoneByName(const std::string& name);
+
 class SystemZone : public Zone {
 public:
     int offsetAt(int64_t utc) const override {
         const std::time_t t = static_cast<std::time_t>(utc);
         std::tm tm{};
 #ifdef _WIN32
+        // The CRT reads TZ only in its "EST5EDT" form, so an IANA name like America/New_York needs the zone table.
+        std::string tz = getEnvVar("TZ");
+        if (!tz.empty() && tz[0] == ':') tz = tz.substr(1);
+        if (!tz.empty()) {
+            std::shared_ptr<const Zone> named;
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                if (tz != cachedName_) {
+                    cachedName_ = tz;
+                    cachedZone_ = zoneByName(tz);
+                }
+                named = cachedZone_;
+            }
+            if (named) return named->offsetAt(utc);
+        }
         if (_localtime64_s(&tm, &t) != 0) throw CalendarError("This computer's clock can't read that date.");
         return static_cast<int>(_mkgmtime64(&tm) - t);
 #else
@@ -103,6 +120,13 @@ public:
         return static_cast<int>(tm.tm_gmtoff);
 #endif
     }
+
+#ifdef _WIN32
+private:
+    mutable std::mutex mu_;
+    mutable std::string cachedName_;
+    mutable std::shared_ptr<const Zone> cachedZone_;
+#endif
 };
 
 // A POSIX TZ rule, as a TZif footer carries it: "EST5EDT,M3.2.0,M11.1.0".
