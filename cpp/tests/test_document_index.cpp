@@ -785,6 +785,62 @@ TEST(DocumentIndexTest, FolderIndexIncludesXlsxAndPptx) {
     EXPECT_EQ(res["indexed"].size(), 2u) << res.dump();
 }
 
+TEST(DocumentIndexTest, XlsxFormatsBuiltInDateAndPercentStyles) {
+    TempDir d;
+    const std::string stylesXml = R"(<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <cellXfs count="3">
+    <xf numFmtId="0"/>
+    <xf numFmtId="14"/>
+    <xf numFmtId="10"/>
+  </cellXfs>
+</styleSheet>)";
+    const std::string sheetXml = R"(<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Milestone</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>Date</t></is></c>
+      <c r="C1" t="inlineStr"><is><t>Margin</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>Launch</t></is></c>
+      <c r="B2" s="1"><v>45231</v></c>
+      <c r="C2" s="2"><v>0.15</v></c>
+    </row>
+  </sheetData>
+</worksheet>)";
+    const std::string xlsxPath = writeBinary(
+        d.path / "dates_percent.xlsx",
+        buildStoredZip({{"xl/styles.xml", stylesXml}, {"xl/worksheets/sheet1.xml", sheetXml}}));
+    const auto pages = DocumentIndex::extractPages(xlsxPath);
+    ASSERT_EQ(pages.size(), 1u);
+    EXPECT_NE(pages[0].second.find("2023-11-01"), std::string::npos) << pages[0].second;
+    EXPECT_NE(pages[0].second.find("15%"), std::string::npos) << pages[0].second;
+    EXPECT_EQ(pages[0].second.find("45231"), std::string::npos) << pages[0].second;
+}
+
+TEST(DocumentIndexTest, RejectsZipEntryWithGlobWildcards) {
+    TempDir d;
+    const std::string workbookXml = R"(<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Bad" sheetId="1" r:id="rId1"/></sheets>
+</workbook>)";
+    const std::string relsXml = R"(<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet[1].xml"/>
+</Relationships>)";
+    const std::string badXlsx = writeBinary(
+        d.path / "wildcard.xlsx",
+        buildStoredZip({
+            {"xl/workbook.xml", workbookXml},
+            {"xl/_rels/workbook.xml.rels", relsXml},
+            {"xl/worksheets/sheet[1].xml", "<worksheet><sheetData><row><c><v>1</v></c></row></sheetData></worksheet>"},
+        }));
+    EXPECT_THROW(DocumentIndex::extractPages(badXlsx), std::runtime_error);
+}
+
 TEST(DocumentIndexTest, UnsupportedOfficeFormatsReportPlainEnglishErrors) {
     TempDir d;
     const std::string xls = d.write("legacy_budget.xls", std::string("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8));

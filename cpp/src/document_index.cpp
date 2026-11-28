@@ -270,7 +270,7 @@ public:
     std::string readEntry(const std::string& entry) {
         if (entry.empty() || entry[0] == '-' || entry.find('\0') != std::string::npos ||
             entry.find('\n') != std::string::npos || entry.find('\r') != std::string::npos ||
-            entry.find("..") != std::string::npos) {
+            entry.find("..") != std::string::npos || entry.find_first_of("*?[]") != std::string::npos) {
             throw std::runtime_error("Can't read " + format_ + " file " + name_ + ": invalid archive entry path.");
         }
         if (totalExtracted_ >= kMaxExtractBytes) {
@@ -626,8 +626,111 @@ std::string extractFirstV(std::string_view cellBody) {
     return "";
 }
 
+enum class CellNumKind { Plain, Date, Percent };
+
+CellNumKind classifyNumFmt(int numFmtId, const std::string& formatCode) {
+    if ((numFmtId >= 14 && numFmtId <= 22) || (numFmtId >= 45 && numFmtId <= 47)) return CellNumKind::Date;
+    if (numFmtId == 9 || numFmtId == 10) return CellNumKind::Percent;
+    if (formatCode.empty()) return CellNumKind::Plain;
+    // Strip quoted literals and bracketed conditions before inspecting custom format tokens.
+    std::string cleaned;
+    bool inQuote = false;
+    bool inBracket = false;
+    for (char c : formatCode) {
+        if (c == '"') {
+            inQuote = !inQuote;
+            continue;
+        }
+        if (inQuote) continue;
+        if (c == '[') {
+            inBracket = true;
+            continue;
+        }
+        if (c == ']') {
+            inBracket = false;
+            continue;
+        }
+        if (!inBracket) cleaned.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    if (cleaned.find('%') != std::string::npos) return CellNumKind::Percent;
+    if (cleaned.find("yy") != std::string::npos || cleaned.find("dd") != std::string::npos) {
+        return CellNumKind::Date;
+    }
+    return CellNumKind::Plain;
+}
+
+std::vector<CellNumKind> parseCellStyleKinds(std::string_view xml) {
+    std::map<int, std::string> customCodes;
+    std::vector<CellNumKind> styles;
+    XmlTag tag;
+    size_t pos = 0;
+    while (nextXmlTag(xml, pos, tag)) {
+        pos = tag.end;
+        if (tag.closing) continue;
+        if (tag.local == "numFmt") {
+            size_t id = 0;
+            if (parseUnsignedDecimal(extractXmlAttr(tag.attrs, "numFmtId"), 100000u, id)) {
+                customCodes[static_cast<int>(id)] = extractXmlAttr(tag.attrs, "formatCode");
+            }
+        } else if (tag.local == "cellXfs" && !tag.selfClosing) {
+            size_t afterXfs = pos;
+            const size_t closeXfs = findMatchingClose(xml, pos, "cellXfs", afterXfs);
+            if (closeXfs == std::string_view::npos) break;
+            const std::string_view body = xml.substr(pos, closeXfs - pos);
+            pos = afterXfs;
+            size_t xPos = 0;
+            XmlTag xTag;
+            while (nextXmlTag(body, xPos, xTag)) {
+                xPos = xTag.end;
+                if (xTag.closing || xTag.local != "xf") continue;
+                size_t id = 0;
+                const std::string idStr = extractXmlAttr(xTag.attrs, "numFmtId");
+                const int numFmtId = parseUnsignedDecimal(idStr, 100000u, id) ? static_cast<int>(id) : 0;
+                auto it = customCodes.find(numFmtId);
+                styles.push_back(classifyNumFmt(numFmtId, it == customCodes.end() ? std::string() : it->second));
+            }
+        }
+    }
+    return styles;
+}
+
+std::string formatExcelDate(double serial) {
+    if (!std::isfinite(serial) || serial < 1.0 || serial >= 2958466.0) return "";
+    // Excel's 1900 epoch has a phantom 1900-02-29 at serial 60; 1899-12-30 is Unix day -25569.
+    const std::int64_t whole = static_cast<std::int64_t>(std::floor(serial));
+    const std::int64_t unixDays = (whole >= 60 ? whole : whole + 1) - 25569;
+    // Civil date from Unix days (Howard Hinnant's algorithm, timezone-independent).
+    const std::int64_t z = unixDays + 719468;
+    const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const std::int64_t doe = z - era * 146097;
+    const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    std::int64_t y = yoe + era * 400;
+    const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const std::int64_t mp = (5 * doy + 2) / 153;
+    const std::int64_t d = doy - (153 * mp + 2) / 5 + 1;
+    const std::int64_t m = mp + (mp < 10 ? 3 : -9);
+    y += (m <= 2 ? 1 : 0);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04lld-%02lld-%02lld", static_cast<long long>(y), static_cast<long long>(m),
+                  static_cast<long long>(d));
+    return buf;
+}
+
+std::string formatExcelPercent(double v) {
+    if (!std::isfinite(v)) return "";
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.4f", v * 100.0);
+    std::string s = buf;
+    if (s.find('.') != std::string::npos) {
+        while (!s.empty() && s.back() == '0') s.pop_back();
+        if (!s.empty() && s.back() == '.') s.pop_back();
+    }
+    return s + "%";
+}
+
 std::vector<std::vector<std::string>> parseWorksheetRows(std::string_view xml,
-                                                         const std::vector<std::string>& sharedStrings) {
+                                                         const std::vector<std::string>& sharedStrings,
+                                                         const std::vector<CellNumKind>& styleKinds = {}) {
     std::vector<std::vector<std::string>> rows;
     XmlTag tag;
     size_t pos = 0;
@@ -649,6 +752,7 @@ std::vector<std::vector<std::string>> parseWorksheetRows(std::string_view xml,
             if (cTag.closing || cTag.local != "c") continue;
             const int parsedCol = parseCellColumn(extractXmlAttr(cTag.attrs, "r"));
             const std::string cellType = extractXmlAttr(cTag.attrs, "t");
+            const std::string styleAttr = extractXmlAttr(cTag.attrs, "s");
             std::string_view cellBody;
             if (!cTag.selfClosing) {
                 size_t afterCell = cPos;
@@ -674,6 +778,20 @@ std::vector<std::vector<std::string>> parseWorksheetRows(std::string_view xml,
                 else value = raw;
             } else {
                 value = extractFirstV(cellBody);
+                if ((cellType.empty() || cellType == "n") && !styleAttr.empty() && !value.empty()) {
+                    size_t styleIdx = 0;
+                    if (parseUnsignedDecimal(styleAttr, styleKinds.size(), styleIdx) &&
+                        styleIdx < styleKinds.size() && styleKinds[styleIdx] != CellNumKind::Plain) {
+                        char* endPtr = nullptr;
+                        const double num = std::strtod(value.c_str(), &endPtr);
+                        if (endPtr && endPtr != value.c_str()) {
+                            const std::string formatted = styleKinds[styleIdx] == CellNumKind::Date
+                                                              ? formatExcelDate(num)
+                                                              : formatExcelPercent(num);
+                            if (!formatted.empty()) value = formatted;
+                        }
+                    }
+                }
             }
 
             if (!trimAscii(value).empty()) hasAnyText = true;
@@ -794,6 +912,10 @@ std::vector<std::pair<int, std::string>> extractXlsxPages(const std::string& pat
     const std::string ssEntry = zip.resolve("xl/sharedStrings.xml");
     if (!ssEntry.empty()) sharedStrings = parseSharedStrings(zip.readEntry(ssEntry));
 
+    std::vector<CellNumKind> styleKinds;
+    const std::string stylesEntry = zip.resolve("xl/styles.xml");
+    if (!stylesEntry.empty()) styleKinds = parseCellStyleKinds(zip.readEntry(stylesEntry));
+
     struct SheetSpec {
         std::string name;
         std::string entry;
@@ -846,7 +968,7 @@ std::vector<std::pair<int, std::string>> extractXlsxPages(const std::string& pat
 
     std::vector<std::pair<int, std::string>> pages;
     for (const auto& sheet : sheets) {
-        auto rows = parseWorksheetRows(zip.readEntry(sheet.entry), sharedStrings);
+        auto rows = parseWorksheetRows(zip.readEntry(sheet.entry), sharedStrings, styleKinds);
         const std::string text = formatSheetText(sheet.name, std::move(rows));
         if (!text.empty()) pages.emplace_back(0, text);
     }

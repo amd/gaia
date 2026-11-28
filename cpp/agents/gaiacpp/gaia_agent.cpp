@@ -2738,15 +2738,23 @@ std::optional<std::string> GaiaAgent::uncomputedFiguresNote(const std::string& a
         std::regex::icase);
     if (!std::regex_search(answer, figure)) return std::nullopt;
     static const std::regex dataFile(R"(\.(?:csv|tsv|xlsx|xls)\b)", std::regex::icase);
+    static const std::regex xlsxFile(R"(\.xlsx\b)", std::regex::icase);
     static const std::regex ranOnData(R"(\.(?:csv|tsv|xlsx|xls|py)\b)", std::regex::icase);
     bool readData = false;
+    bool indexedXlsx = false;
+    bool queriedDocs = false;
     for (const auto& c : calls) {
         // A program that names a data file or a script ran, or the read itself totalled the file.
         if (c.name == "bash_execute" && std::regex_search(argsText(c), ranOnData)) return std::nullopt;
         if (c.name == "file_read" && c.output.find("\"summary\"") != std::string::npos) return std::nullopt;
+        if (c.name == "query_documents") queriedDocs = true;
+        if (c.name == "index_document" && std::regex_search(argsText(c), xlsxFile)) {
+            indexedXlsx = true;
+            continue;
+        }
         if (readsContents(c.name) && std::regex_search(argsText(c), dataFile)) readData = true;
     }
-    if (!readData) return std::nullopt;
+    if (!readData && (!indexedXlsx || queriedDocs)) return std::nullopt;
     return "Your answer gives totals or rates from a data file, but no program read that file in this "
            "request. Compute them with a short script that reads the file by its path (Python as named "
            "under Environment), then answer with the computed figures.";
