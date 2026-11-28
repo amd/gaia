@@ -561,3 +561,52 @@ def test_index_document_path_arg_is_mapped_to_file_path():
         "index_document",
         python_call,
     )
+
+
+def test_relayed_generate_image_produces_inline_media_card_and_output(
+    tmp_path, monkeypatch
+):
+    import gaia.config as gaia_config
+    from gaia.ui.generated_media import media_card
+    from gaia.ui.turn_summary import TurnLedger
+
+    monkeypatch.setattr(gaia_config, "GAIA_CONFIG_DIR", tmp_path)
+    out_dir = tmp_path / "cache" / "sd" / "images"
+    out_dir.mkdir(parents=True)
+    img = out_dir / "a_cat_SDXL-Turbo_20261128_120000_abcd1234.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    payload = {
+        "status": "success",
+        "image_path": str(img),
+        "path": str(img),
+        "file_path": str(img),
+        "prompt": "a cat",
+        "model": "SDXL-Turbo",
+        "size": "512x512",
+        "steps": 4,
+        "display_message": f"Saved {img}",
+    }
+    handler = _relay(
+        {"type": "tool_call", "tool": "generate_image", "args": {"prompt": "a cat"}},
+        {"type": "tool_result", "tool": "generate_image", "data": payload},
+    )
+    result = handler.events[-1]
+    assert result["tool"] == "generate_image"
+    assert result["success"] is True
+
+    card = media_card(result, {"prompt": "a cat"})
+    assert card is not None
+    assert card["render"] == "image"
+    assert card["data"]["src"] == f"/api/media/image/{img.name}"
+    assert card["data"]["path"] == str(img.resolve())
+    assert card["data"]["caption"] == "a cat"
+
+    ledger = TurnLedger()
+    ledger.tool_started("generate_image")
+    ledger.tool_args({"prompt": "a cat"})
+    ledger.tool_result(payload, True)
+    summary = ledger.summary(location=None)
+    assert summary["outputs"] == [
+        {"kind": "image", "name": img.name, "path": str(img), "detail": "a cat"}
+    ]

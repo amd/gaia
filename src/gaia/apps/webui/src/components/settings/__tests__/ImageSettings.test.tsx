@@ -117,15 +117,11 @@ describe('ImageSettings', () => {
         expect(await screen.findByLabelText('Model')).toBeTruthy();
     });
 
-    it('tells Fast and light users image creation only applies to Full-featured and links to Agent & model', () => {
+    it('loads and renders image settings when Fast and light (gaiacpp) is active', async () => {
         useActiveAgentStore.setState({ current: 'gaiacpp' });
         render(<ImageSettings />);
-        const notice = screen.getByRole('status');
-        expect(notice.textContent).toMatch(/Fast and light/i);
-        expect(notice.textContent).toMatch(/Full-featured/i);
-        expect(mockedApi.getImageSettings).not.toHaveBeenCalled();
-        expect(screen.queryByLabelText('Model')).toBeNull();
-        fireEvent.click(screen.getByRole('button', { name: /Agent & model/i }));
-        expect(useChatStore.getState().settingsSection).toBe('model');
+        expect(await screen.findByLabelText('Model')).toBeTruthy();
+        expect(mockedApi.getImageSettings).toHaveBeenCalledTimes(1);
+        expect(screen.queryByRole('status')).toBeNull();
     });
 });

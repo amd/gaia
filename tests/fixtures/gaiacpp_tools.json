@@ -21,6 +21,7 @@
     "list_indexed_documents",
     "list_mcp_prompts",
     "list_mcp_resources",
+    "list_sd_models",
     "list_skills",
     "load_skill",
     "query_documents",

@@ -94,6 +94,7 @@ const std::vector<std::string>& compactWithheldTools() {
         "index_codebase", "search_code",                  // grep and file_search find code
         "update_memory", "forget",                        // remember and recall stay
         "env_inspect",                                    // the prompt names the shell and Python
+        "generate_image", "list_sd_models",               // mirrors Python COMPACT image_generation=False
     };
     return kWithheld;
 }

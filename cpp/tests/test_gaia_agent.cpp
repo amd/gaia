@@ -1525,6 +1525,8 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     const json compactBody = json::parse(mock.receivedBodies().back());
     const auto compactTools = toolNamesIn(compactBody);
     EXPECT_FALSE(has(compactTools, "git_status"));
+    EXPECT_FALSE(has(compactTools, "generate_image"));
+    EXPECT_FALSE(has(compactTools, "list_sd_models"));
     EXPECT_FALSE(has(compactTools, "search_code"));
     EXPECT_FALSE(has(compactTools, "env_inspect"));
     EXPECT_TRUE(has(compactTools, "bash_execute"));
@@ -1537,6 +1539,8 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     agent.processQuery("hello again");
     const json fullBody = json::parse(mock.receivedBodies().back());
     EXPECT_TRUE(has(toolNamesIn(fullBody), "git_status")) << "the tier follows the config each turn";
+    EXPECT_TRUE(has(toolNamesIn(fullBody), "generate_image"));
+    EXPECT_TRUE(has(toolNamesIn(fullBody), "list_sd_models"));
     EXPECT_NE(fullBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
     EXPECT_GT(fullBody.dump().size(), compactBody.dump().size() + 4000);
 }

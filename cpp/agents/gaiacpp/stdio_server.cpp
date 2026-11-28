@@ -393,7 +393,9 @@ std::string promptSummary(const std::string& tool, const json& args) {
         return to.empty() ? "The whole screen" : "The whole screen, saved to " + to;
     }
     if (tool == "generate_image") {
-        return clipCounted(visible(argOf(args, "prompt"), Shown::Line), 600) + "\nSaved to " + one("output_path");
+        const std::string to = one("output_path");
+        const std::string p = clipCounted(visible(argOf(args, "prompt"), Shown::Line), 600);
+        return to.empty() ? p : p + "\nSaved to " + to;
     }
     std::string name = tool;
     std::replace(name.begin(), name.end(), '_', ' ');

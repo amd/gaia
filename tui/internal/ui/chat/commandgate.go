@@ -55,7 +55,6 @@ var nativeLacks = map[string]string{
 	skillsCommandPrefix: "list or add skills on command",
 	researchCommand:     "write research reports",
 	"/research-report":  "write research reports",
-	imageCommandPrefix:  "use GAIA's image settings",
 }
 
 // nativeUnavailable is the refusal for a command gaiacpp cannot serve, or "".
