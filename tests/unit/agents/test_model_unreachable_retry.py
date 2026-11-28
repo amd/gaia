@@ -90,6 +90,8 @@ def _make_agent(streaming: bool) -> _LedgerAgent:
         )
     agent.streaming = streaming
     agent._is_loaded_ctx_too_small = lambda: False
+    # The provider label has its own tests (test_model_service_label.py).
+    agent._model_service_label = lambda: None
     agent.sleeps = []
     agent._model_retry_sleep = agent.sleeps.append
     return agent
