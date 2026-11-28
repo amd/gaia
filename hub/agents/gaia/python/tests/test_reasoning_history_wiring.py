@@ -8,6 +8,8 @@ import pytest
 from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
+from gaia.agents.base import model_switch  # noqa: E402
+
 PRIOR_TURN = [
     {"role": "user", "content": "Read notes.md"},
     {
@@ -70,11 +72,11 @@ class _ReasonerClient:
 def _switch_to_cloud_reasoner(monkeypatch, agent, target):
     from gaiapy import stdio
 
-    monkeypatch.setattr(stdio, "_lemonade_url", lambda agent: "http://x/api/v1")
+    monkeypatch.setattr(model_switch, "_lemonade_url", lambda agent: "http://x/api/v1")
     monkeypatch.setattr(
-        stdio, "_lemonade_models", lambda base_url: {target: {"id": target}}
+        model_switch, "_lemonade_models", lambda base_url: {target: {"id": target}}
     )
-    monkeypatch.setattr(stdio, "create_client", lambda **kw: _ReasonerClient())
+    monkeypatch.setattr(model_switch, "create_client", lambda **kw: _ReasonerClient())
     return stdio.switch_model(agent, target)
 
 

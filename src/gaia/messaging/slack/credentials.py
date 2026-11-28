@@ -47,34 +47,29 @@ class SlackCredentials:
     app_token: str
 
 
-def _keyring():
-    """The checked keyring access, imported through the connectors guard."""
-    from gaia.connectors import keyring_access
+def _vault():
+    from gaia.connectors import vault
 
-    return keyring_access
+    return vault
 
 
 def save(bot_token: str, app_token: str) -> None:
-    """Store both tokens in the OS keyring."""
-    keyring = _keyring()
-    keyring.write(SERVICE_NAME, BOT_TOKEN_KEY, bot_token)
-    keyring.write(SERVICE_NAME, APP_TOKEN_KEY, app_token)
-    log.info("Stored Slack tokens in the OS keyring under %s", SERVICE_NAME)
+    """Store both tokens in the encrypted credential vault."""
+    vault = _vault()
+    vault.put(BOT_TOKEN_KEY, bot_token)
+    vault.put(APP_TOKEN_KEY, app_token)
+    log.info("Stored Slack tokens in the encrypted vault under %s", SERVICE_NAME)
 
 
 def clear() -> None:
     """Remove both tokens. Missing entries are not an error."""
-    keyring = _keyring()
+    vault = _vault()
     for key in (BOT_TOKEN_KEY, APP_TOKEN_KEY):
-        try:
-            keyring.delete(SERVICE_NAME, key)
-        except keyring.errors.PasswordDeleteError:
-            # Already absent — the desired end state either way.
-            log.debug("No stored Slack credential for %s", key)
+        vault.delete(key)
 
 
 def load() -> SlackCredentials:
-    """Return both tokens, environment first, then the keyring.
+    """Return both tokens, environment first, then the credential vault.
 
     Raises:
         SlackCredentialsError: when either token is missing, naming the command
@@ -87,9 +82,9 @@ def load() -> SlackCredentials:
         from gaia.connectors.errors import ConnectorsError
 
         try:
-            keyring = _keyring()
-            bot = bot or keyring.read(SERVICE_NAME, BOT_TOKEN_KEY)
-            app = app or keyring.read(SERVICE_NAME, APP_TOKEN_KEY)
+            vault = _vault()
+            bot = bot or vault.get(BOT_TOKEN_KEY)
+            app = app or vault.get(APP_TOKEN_KEY)
         except ConnectorsError as e:
             raise SlackCredentialsError(str(e)) from e
         except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
