@@ -122,7 +122,7 @@ void GaiaAgent::registerTools() {
         // Such a read runs without a card, and its `cd` to an attached file's folder isn't refused.
         const auto proven = [check = readStaysInside](const json& args) { return check(args.value("command", "")); };
         ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
-                                              !BashTools::detectShell().empty(), proven);
+                                              !BashTools::detectShell().empty(), proven, shellFolder);
         // A command approved unread (a script, an interpreter) can leave the shell outside the folders.
         ToolCallback runShell = std::move(sh.callback);
         sh.callback = [ws, shell, runShell](const json& args) -> json {

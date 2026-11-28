@@ -766,12 +766,14 @@ ToolInfo Workspace::confine(ToolInfo tool, std::shared_ptr<const Workspace> ws,
 
 ToolInfo Workspace::confineShell(ToolInfo tool, std::shared_ptr<const Workspace> ws,
                                  std::string commandArg, bool posixShell,
-                                 std::function<bool(const json&)> provenInside) {
+                                 std::function<bool(const json&)> provenInside,
+                                 std::function<std::string()> shellCwd) {
     ToolCallback inner = std::move(tool.callback);
-    tool.callback = [inner, ws, commandArg, posixShell, provenInside](const json& args) -> json {
+    tool.callback = [inner, ws, commandArg, posixShell, provenInside, shellCwd](const json& args) -> json {
         if (args.contains(commandArg) && args[commandArg].is_string() && !(provenInside && provenInside(args))) {
-            const std::string why =
-                ws->checkCommand(args[commandArg].get<std::string>(), posixShell);
+            const std::string why = ws->judgeCommand(args[commandArg].get<std::string>(), posixShell,
+                                                     shellCwd ? shellCwd() : "")
+                                        .refusal;
             if (!why.empty()) return json{{"status", "error"}, {"error", why}};
         }
         return inner(args);

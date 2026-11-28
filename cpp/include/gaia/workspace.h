@@ -115,10 +115,12 @@ public:
                             std::vector<std::string> pathArgs);
 
     /// Wrap a shell tool so its command argument must pass checkCommand(), unless
-    /// `provenInside` says the call only reads what the roots hold.
+    /// `provenInside` says the call only reads what the roots hold. `shellCwd` names where
+    /// the shell stands, for a relative `cd`; unset means the process's folder.
     static ToolInfo confineShell(ToolInfo tool, std::shared_ptr<const Workspace> ws,
                                  std::string commandArg = "command", bool posixShell = true,
-                                 std::function<bool(const json&)> provenInside = nullptr);
+                                 std::function<bool(const json&)> provenInside = nullptr,
+                                 std::function<std::string()> shellCwd = nullptr);
 
 private:
     std::string refusal(const std::string& path) const;
