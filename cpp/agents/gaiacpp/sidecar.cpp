@@ -91,12 +91,15 @@ struct Run {
     bool skipPermissions = false;  // gated tools run unasked; a path outside still isn't granted
     int timeLimit = 0;             // seconds, 0 = none
     std::atomic<bool> timedOut{false};
+    std::function<bool(const std::string&)> enqueueFollowup;  // guarded by mu; live only during processQuery
+    std::function<void()> clearFollowups;                     // guarded by mu; clears pending follow-ups on cancel
 
     // Under the lock, so a waiter between its check and its sleep can't miss it.
     void cancel() {
         {
             std::lock_guard<std::mutex> lock(mu);
             cancelled = true;
+            if (clearFollowups) clearFollowups();
         }
         cv.notify_all();
     }
@@ -898,12 +901,40 @@ private:
             if (!admit(req, res, true)) return;
             sendDetail(res, 404, "This agent asks no questions mid-turn");
         });
-        // 409 tells the UI to send the text as the next message instead.
         server_.Post(R"(/v1/gaia/query/([^/]+)/followup)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
             const std::string id = req.matches[1];
-            if (!findRun(id)) return sendDetail(res, 404, "No run " + id + " in flight");
-            sendDetail(res, 409, "gaiacpp takes messages between turns, not during one");
+            const json body = json::parse(req.body, nullptr, false);
+            if (!body.is_object() || !body.contains("text") || !body["text"].is_string()) {
+                return sendDetail(res, 422, "text must be a non-empty string");
+            }
+            const std::string raw = body["text"].get<std::string>();
+            const size_t first = raw.find_first_not_of(" \t\r\n\f\v");
+            if (first == std::string::npos) {
+                return sendDetail(res, 422, "text must be a non-empty string");
+            }
+            const std::string trimmed = raw.substr(first, raw.find_last_not_of(" \t\r\n\f\v") - first + 1);
+            auto run = findRun(id);
+            if (!run) {
+                return sendDetail(
+                    res, 404,
+                    "No run " + id +
+                        " is in flight, so the follow-up was not delivered. It may have already finished or been "
+                        "cancelled — send it as a new query instead.");
+            }
+            bool accepted = false;
+            {
+                std::lock_guard<std::mutex> lock(run->mu);
+                if (!run->cancelled.load() && !run->finished && run->enqueueFollowup) {
+                    accepted = run->enqueueFollowup(trimmed);
+                }
+            }
+            if (!accepted) {
+                return sendDetail(
+                    res, 409,
+                    "Run " + id + " cannot take a follow-up right now; send it as a new query instead.");
+            }
+            sendJson(res, 200, {{"run_id", id}, {"delivered", true}});
         });
         server_.Post(R"(/v1/gaia/sessions/([^/]+)/bypass)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -1467,6 +1498,22 @@ private:
                     }
                     ~StopLimiter() { stop(); }
                 } stopLimiter{limitMu, limitCv, turnOver, limiter};
+                GaiaAgent* liveAgent = s->agent.get();
+                {
+                    std::lock_guard<std::mutex> lock(run->mu);
+                    run->enqueueFollowup = [liveAgent](const std::string& msg) {
+                        return liveAgent->queueFollowup(msg);
+                    };
+                    run->clearFollowups = [liveAgent]() { liveAgent->clearPendingFollowups(); };
+                }
+                struct ClearFollowupHook {
+                    Run& r;
+                    ~ClearFollowupHook() {
+                        std::lock_guard<std::mutex> lock(r.mu);
+                        r.enqueueFollowup = nullptr;
+                        r.clearFollowups = nullptr;
+                    }
+                } clearFollowupHook{*run};
                 json r = s->agent->processQuery(text, maxSteps);
                 stopLimiter.stop();  // a finished answer is never relabelled as stopped at the limit
                 const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
