@@ -457,9 +457,14 @@ Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posi
                            " is a path, not a switch: use bash commands such as ls -R or find "
                            "instead of cmd.exe switches.");
         }
-        // A wildcard names no one place to ask about.
-        const bool onePlace = expanded.find_first_of("*?[{") == std::string::npos;
-        return Outside{refusal(token), onePlace ? resolveWriteTarget(expanded) : ""};
+        // A wildcard is read from one folder: the one before its first wildcard, asked about as itself.
+        const size_t wild = expanded.find_first_of("*?[{");
+        std::string place = expanded;
+        if (wild != std::string::npos) {
+            const size_t slash = expanded.find_last_of("/\\", wild);
+            place = slash == std::string::npos || slash == 0 ? "" : expanded.substr(0, slash);
+        }
+        return Outside{refusal(token), place.empty() ? "" : resolveWriteTarget(place)};
     }
     // \\host\share, which the path pattern above does not see.
     for (size_t at = command.find("\\\\"); at != std::string::npos; at = command.find("\\\\", at + 1)) {
