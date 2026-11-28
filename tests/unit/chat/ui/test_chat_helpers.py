@@ -640,6 +640,35 @@ class TestFailedTurnProgram:
         assert _failed_turn_program("gaia", failure) == "gaiacpp"
 
 
+class TestTurnProgramPersistence:
+    """Messages record which flagship program answered them so reopened chats keep Undo status without 409s."""
+
+    def test_turn_program_returns_chosen_flagship_only_for_flagship(self, monkeypatch):
+        from gaia.daemon.sidecars import fetch
+        from gaia.ui._chat_helpers import _turn_program
+
+        monkeypatch.setattr(fetch, "chosen_flagship", lambda: "gaiacpp")
+        assert _turn_program("gaia") == "gaiacpp"
+        assert _turn_program("hello-world") is None
+
+    def test_add_and_upsert_message_persist_agent_program(self):
+        from gaia.ui.database import ChatDatabase
+        from gaia.ui.utils import message_to_response
+
+        db = ChatDatabase(":memory:")
+        session = db.create_session(agent_type="gaia")
+        sid = session["id"]
+
+        mid1 = db.add_message(sid, "assistant", "wrote file", agent_program="gaiacpp")
+        mid2 = db.upsert_message(
+            sid, None, "assistant", "edited file", agent_program="gaiapy"
+        )
+
+        msgs = {m["id"]: message_to_response(m) for m in db.get_messages(sid)}
+        assert msgs[mid1].agent_program == "gaiacpp"
+        assert msgs[mid2].agent_program == "gaiapy"
+
+
 class TestRelayOnePromptFailures:
     """A relayed run's failure keeps its cause, so setup can tell a server outage apart."""
 
