@@ -2014,6 +2014,7 @@ const messages: Messages = {
     'settings.setup.ready': 'جاهز',
     'settings.setup.running': 'يعمل بنموذج {name}',
     'settings.setup.serverDown': 'خادم النماذج لا يستجيب',
+    'settings.setup.chatUnusable': 'لا يمكن استخدام نموذج المحادثة بعد',
     'settings.setup.runAgain': 'تشغيل الإعداد مرة أخرى',
     'settings.setup.where': 'مكان تشغيل GAIA',
     'settings.setup.chatRuns': 'نموذج المحادثة',

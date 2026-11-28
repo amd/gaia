@@ -2015,6 +2015,7 @@ export const enMessages = {
     'settings.setup.ready': 'Ready',
     'settings.setup.running': 'Running {name}',
     'settings.setup.serverDown': "The model server isn't answering",
+    'settings.setup.chatUnusable': "Your chat model can't be used yet",
     'settings.setup.runAgain': 'Run setup again',
     'settings.setup.where': 'Where GAIA runs',
     'settings.setup.chatRuns': 'Chat model',
