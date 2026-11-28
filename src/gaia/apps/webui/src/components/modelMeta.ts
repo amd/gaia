@@ -3,6 +3,8 @@
 
 /** Shared wording for a local model's state, device, size and speed. */
 
+import { tEn, type Translate } from '../i18n/useT';
+import type { MessageKey } from '../i18n/registry';
 import type { LocalModelState, ModelPlacement, ProviderModel } from '../types';
 
 export const STATE_LABELS: Record<LocalModelState, string> = {
@@ -11,10 +13,17 @@ export const STATE_LABELS: Record<LocalModelState, string> = {
     not_downloaded: 'Not downloaded',
 };
 
+/** The backend's recommendation notes (gaia/llm/recommended_models.py), mapped to locale keys. */
+export const RECOMMENDED_NOTES: Record<string, MessageKey> = {
+    'best overall, fastest': 'settings.model.note.bestFastest',
+    cheapest: 'settings.model.note.cheapest',
+    'most truthful': 'settings.model.note.mostTruthful',
+};
+
 /** "GPU · Vulkan" for a loaded model, "GPU · Vulkan (expected)" before it loads. */
-export function placementText(p: ModelPlacement | null | undefined): string | null {
+export function placementText(p: ModelPlacement | null | undefined, t: Translate = tEn): string | null {
     if (!p?.label) return null;
-    return p.source === 'expected' ? `${p.label} (expected)` : p.label;
+    return p.source === 'expected' ? t('settings.model.expected', { label: p.label }) : p.label;
 }
 
 export function ctxLabel(tokens: number | null | undefined): string {

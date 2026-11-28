@@ -669,6 +669,7 @@ const messages: Messages = {
     'modelMenu.addFromLinkNote': 'أي نموذج محادثة GGUF على Hugging Face',
     'modelMenu.providers': 'المزوّدون والمفاتيح…',
     'modelMenu.downloadModel': 'تنزيل {name}',
+    'modelMenu.aboutModel': 'حول {name}',
     'modelMenu.ready': 'جاهز',
     'media.showFull': 'عرض بالحجم الكامل',
     'media.showSmaller': 'عرض بحجم أصغر',
