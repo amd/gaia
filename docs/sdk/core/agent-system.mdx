@@ -325,12 +325,14 @@ class WeatherAgent(Agent):
 
 # Usage
 agent = WeatherAgent()
+agent.start_session_history()  # remember earlier turns (see Per-conversation history)
 result = agent.process_query("What's the weather like in Seattle?")
 print(result["result"])
 
-# Multi-turn conversation works too
+# The follow-up can lean on the first turn
 result = agent.process_query("How about in Miami?")
 print(result["result"])
+agent.close()
 ```
 
 **Key patterns demonstrated:**
@@ -349,6 +351,8 @@ Agents accept many configuration parameters. Here's what each one does:
 ```python
 agent = MyAgent(
     # === LLM Selection ===
+    provider=None,                 # "lemonade", "claude", or a hosted provider
+                                   # ("fireworks", "amd"); None keeps use_claude
     use_claude=False,              # Use Anthropic Claude API
     # If False, uses local Lemonade Server
 
@@ -357,8 +361,12 @@ agent = MyAgent(
     model_id="Gemma-4-E4B-it-GGUF",  # Model to use
 
     # === Cloud LLM Settings ===
-    claude_model="claude-sonnet-4-20250514",  # Claude model version
+    claude_model="claude-sonnet-5",  # Claude model (the default)
     # API key is read from environment: ANTHROPIC_API_KEY
+
+    # === Hosting ===
+    output_handler=None,           # Where output goes (AgentConsole, SilentConsole, SSEOutputHandler)
+    tool_scope=None,               # Tool names allowed to run; None = all, [] = none
 
     # === Agent Behavior ===
     max_steps=50,                  # Max reasoning loop iterations (DEFAULT_MAX_STEPS, overridable via GAIA_AGENT_MAX_STEPS)
@@ -411,10 +419,8 @@ export ANTHROPIC_API_KEY="your-key-here"
 ```
 
 ```python
-agent = MyAgent(
-    use_claude=True,
-    claude_model="claude-sonnet-4-20250514"
-)
+agent = MyAgent(provider="claude", claude_model="claude-sonnet-5")
+# Same as: MyAgent(use_claude=True, claude_model="claude-sonnet-5")
 ```
 
 **Pros:**
@@ -437,6 +443,38 @@ model ID to the agent.
 See [gateway migration](/sdk/sdks/llm#gateway-migration).
 
 </Accordion>
+
+### Hosted models
+
+A hosted model runs on a cloud provider that Lemonade routes to, so the agent
+code is the same as for a local model. Name the provider and the model:
+
+```python
+agent = MyAgent(provider="fireworks", model_id="accounts/fireworks/models/glm-4p6")
+print(agent.model_id)  # fireworks.accounts/fireworks/models/glm-4p6
+```
+
+| `provider` | Runs on | Key |
+|------------|---------|-----|
+| `"lemonade"` | A local model in Lemonade | None |
+| `"claude"` | The Claude API (same as `use_claude=True`) | `ANTHROPIC_API_KEY` |
+| `"fireworks"` | Fireworks AI, through Lemonade | `FIREWORKS_API_KEY` in the agent's environment, or `LEMONADE_FIREWORKS_API_KEY` where your own Lemonade runs |
+| `"amd"` | The AMD LLM gateway, through Lemonade | Connect it with `gaia gateway install`, or `/gateway` in the TUI |
+
+The model id gets the `<provider>.` prefix when it lacks one. While it is built,
+the agent registers and keys the provider on GAIA's own Lemonade. If the
+provider can't be used (no key, a Lemonade you run without it, local-only mode
+on), the constructor raises `HostedProviderError` saying what to set. It never
+falls back to a local model. An unknown provider, or one that contradicts
+`use_claude=True`, raises `ValueError`.
+
+With `provider="claude"`, a Claude id passed as `model_id`
+(`model_id="claude-opus-5"`) is the model that runs, the same as passing it as
+`claude_model`. Naming two different Claude models raises `ValueError`.
+
+When a hosted turn fails, the answer names the provider (`Fireworks AI: ...`),
+or the server address when you pointed GAIA at your own server, so the user
+knows which service to check.
 
 ### Tuning Agent Behavior
 
@@ -862,6 +900,154 @@ print(result["result"])
 
 ---
 
+## Running an Agent Inside Your App
+
+Everything here comes with the base `Agent`; a subclass gets it without extra code.
+
+### Native tool calls
+
+Models with native tool calling (Claude and many local and hosted models) get
+your tools as JSON schemas in the request's `tools=` field and answer with
+structured tool calls. Other models read the tool list in the system prompt and
+reply with a JSON tool call, which the agent parses. You write the same `@tool`
+functions either way. When a model calls a tool with missing or wrong arguments,
+the tool result says what was wrong so the model can retry. An agent that sends
+thin schemas (names only, to keep a local prompt short) also gets the tool's
+full docs back once per turn.
+
+### Where output goes
+
+`output_handler` decides where the agent's progress and answer go:
+`AgentConsole` (the default) prints to the terminal, `SilentConsole` prints
+nothing, and `SSEOutputHandler` turns each step into Server-Sent Events for a
+web client. See [Console](/sdk/core/console) for all three.
+
+```python
+from gaia.ui.sse_handler import SSEOutputHandler
+
+agent = MyAgent(output_handler=SSEOutputHandler())
+```
+
+### Asking before risky tools
+
+Tools in `confirmation_required_tools()` don't run until the output handler's
+`confirm_tool_execution()` says yes. That set is GAIA's shell and file-changing
+tools plus the names your agent adds:
+
+```python
+class MailAgent(Agent):
+    CONFIRMATION_REQUIRED_TOOLS = frozenset({"send_email"})
+```
+
+With nobody to ask (piped input, CI, a handler that doesn't override
+`confirm_tool_execution`), the call is denied and the model is told why. See
+[Confirming dangerous tools](/sdk/core/console#confirming-dangerous-tools).
+
+### Limiting which tools run
+
+`tool_scope` is the fixed set of tool names this agent may run. Calls to any
+other tool are refused, and they don't appear in "did you mean" suggestions.
+`None` (the default) allows every registered tool and `[]` allows none.
+
+```python
+agent = MyAgent(tool_scope=["search_docs", "read_file"])
+```
+
+### Stopping a turn
+
+Set `cancel_event` before the turn and set the event from another thread to
+stop it at the next step boundary. A `TurnCancel` also sets the answer the turn
+ends with:
+
+```python
+from gaia.agents.base.agent import TurnCancel
+
+stop = TurnCancel()
+agent.cancel_event = stop
+# ... on the user's Stop button, from another thread:
+stop.cancel("Stopped at your request.")
+```
+
+### Per-conversation history
+
+A plain agent answers each `process_query` on its own. Call
+`start_session_history()` to give it a conversation: each turn then sends the
+earlier turns that fit the model's window, tool calls included, and records the
+finished turn. A turn that raises is not recorded.
+
+```python
+agent = MyAgent()
+agent.start_session_history("chats/alice.sqlite3")  # None keeps it in memory
+agent.process_query("Find the Q3 report")
+agent.process_query("Summarize its second section")
+```
+
+Pass `on_cut=callback` to hear when older turns no longer fit the model's
+window: the callback gets a `HistoryCut(turns, tokens)`, so your app can tell
+the user. The file keeps every turn either way.
+
+Use one agent per conversation so they never mix. A host can run turns on any
+thread, one turn at a time per agent. Passing the same path to a
+new agent resumes that conversation. The file holds tool output, including
+local file contents; delete it to remove the conversation. A host that manages
+history itself can still assign `agent.conversation_history` directly. The agent
+then leaves recording to the host.
+
+### Switching models
+
+`switch_model()` moves a running agent to another model and keeps the
+conversation. The target is a Claude id or any model your Lemonade server
+lists, local or hosted:
+
+```python
+agent.switch_model("Qwen3.5-4B-GGUF")
+agent.switch_model("fireworks.accounts/fireworks/models/glm-4p6")
+agent.switch_model("claude-sonnet-5")
+```
+
+The new client is built first and the change is applied as a unit. If anything
+fails (the model isn't listed, a key is missing, local-only mode is on) it
+raises `RuntimeError` with the fix and the agent stays on its old model. Call
+it between turns. A subclass that keeps something else per model overrides
+`follow_model_switch()` to move it, and `_snapshot_model_followers()` /
+`_restore_model_followers()` so a failed switch puts it back.
+
+### Asking the user a question
+
+Compose `UserInputToolsMixin` to give the model a `request_user_input` tool. It
+shows a question, with optional choices, and waits for the answer:
+
+```python
+from gaia.agents.tools.user_input_tools import UserInputToolsMixin
+
+class SetupAgent(Agent, UserInputToolsMixin):
+    def _register_tools(self):
+        self.register_user_input_tools()
+```
+
+The answer comes through the output handler: the Agent UI and TUI handlers
+show the question and wait, and a terminal console reads a line. Where nobody
+can type (a service, a pipe) the model is told to put the question in its
+reply. If nobody answers in time, the model is told so. It never receives its own default as if
+the user chose it, and until the next turn any confirmation-gated change is
+marked as needing a person, even when tools were pre-approved.
+
+### Releasing resources
+
+`close()` releases what the agent holds, including the history file. Call it
+when a conversation ends, or use the agent as a context manager. It also runs
+the `close()` of any mixin listed after `Agent` (`DatabaseMixin` closes its
+database this way). A subclass that owns more (watchers, MCP servers) extends
+`close()` and calls `super().close()`.
+
+```python
+with MyAgent() as agent:
+    agent.start_session_history()
+    agent.process_query("Hello")
+```
+
+---
+
 ## Deep Dive: Under the Hood
 
 `process_query()` also returns `model_messages`: a deep-copied, model-facing trace
@@ -912,60 +1098,49 @@ than a successful saved turn.
 
 <Accordion title="How process_query() Works Internally">
 
-When you call `agent.process_query(user_input)`, here's the detailed flow:
+A simplified view of one turn. The real loop in `Agent._process_query_impl`
+adds retries, loop detection, answer checks and token accounting:
 
 ```python
-def process_query(self, user_input, max_steps=None):  # defaults to self.max_steps (50, via DEFAULT_MAX_STEPS)
-    # 1. Add user message to conversation history
-    self.conversation_history.append({
-        "role": "user",
-        "content": user_input
-    })
+def process_query(self, user_input, max_steps=None):  # max_steps defaults to self.max_steps
+    # 1. With start_session_history(), earlier turns that fit the model's
+    #    window go first, and the turn is opened in the transcript.
+    messages = [*self.conversation_history, {"role": "user", "content": user_input}]
 
-    # 2. Build the full prompt for the LLM
-    prompt = self._build_prompt()
-    # Includes: system prompt + tool definitions + conversation history
-
-    # 3. Enter the reasoning loop
     for step in range(max_steps):
-        # 4. Call LLM
-        response = self.llm.generate(prompt)
+        # 2. A host can stop the turn between steps.
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            break
 
-        # 5. Parse response - is it a tool call or final answer?
-        if self._is_tool_call(response):
-            # 6a. Execute the tool
-            tool_name, tool_args = self._parse_tool_call(response)
-            tool_result = self.execute_tool(tool_name, tool_args)
+        # 3. One model call. Native tool-calling models get the tool schemas
+        #    in tools=; others read them in the system prompt.
+        response = self.chat.send_messages(messages, system_prompt=self.system_prompt,
+                                           tools=self._openai_tools)
 
-            # 7. Add tool result to history
-            self.conversation_history.append({
-                "role": "tool",
-                "name": tool_name,
-                "content": str(tool_result)
-            })
+        if response asks for tools:
+            for name, args in tool_calls:
+                # 4. Arguments are checked first, then confirmation-gated tools
+                #    ask the user, then the tool runs under a timeout.
+                result = self._execute_tool(name, args)
+                messages.append(tool result for this call)
+            continue
 
-            # 8. Rebuild prompt with new information
-            prompt = self._build_prompt()
-            # Loop continues...
+        # 5. A final answer, after the agent checks it against what it did.
+        answer = response.text
+        break
+    else:
+        # 6. Out of steps: one more call that may not use a tool, so the agent
+        #    says what it found, what it couldn't finish and why.
+        answer = closing call with tool_choice="none"
 
-        else:
-            # 6b. It's a final answer
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": response
-            })
-            return {"status": "success", "result": response, "steps_taken": step + 1}
-
-    # 9. Max steps reached: one more call that may not use a tool, so the agent
-    #    says what it found, what it couldn't finish and why, and what to try next
-    answer = self.llm.generate(
-        prompt + STEP_LIMIT_INSTRUCTION, tools=self.tools, tool_choice="none"
-    )
-    return {"status": "incomplete", "result": answer, "steps_taken": max_steps + 1,
-            "max_steps_reached": True}
+    result = {"status": ..., "result": answer, "steps_taken": ...,
+              "model_messages": this turn's messages, ...}
+    # 7. The owned history records the finished turn, tool calls included.
+    return result
 ```
 
-**Key insight:** The conversation history grows with each tool call, giving the LLM more context for its next decision.
+Each step's messages stay in this turn's list, so the model sees its earlier
+tool results when it decides the next step.
 
 </Accordion>
 
