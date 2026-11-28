@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import re
 from pathlib import Path
 
 import pytest
@@ -140,5 +141,5 @@ def test_daemon_still_compares_checkouts_for_the_python_agent(tmp_path):
     _choose("gaiapy")
     other = tmp_path / "checkout-b" / "hub" / "agents" / "gaia" / "python"
 
-    with pytest.raises(ModeConflictError, match=str(Path(other).resolve())):
+    with pytest.raises(ModeConflictError, match=re.escape(str(Path(other).resolve()))):
         _flagship_registry(tmp_path).ensure("gaia", mode="dev", dev_src_dir=str(other))
