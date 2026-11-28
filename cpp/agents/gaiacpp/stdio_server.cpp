@@ -72,6 +72,7 @@ std::string narrate(const std::string& tool, const json& args) {
     if (tool == "file_search") return "Searching files";
     if (tool == "bash_execute") return "Running " + clip(argOf(args, "command"), 120);
     if (tool == "web_fetch") return "Reading " + argOf(args, "url");
+    if (tool == "web_search") return "Searching the web for " + clip(argOf(args, "query"), 120);
     if (tool == "remember") return "Saving to memory";
     if (tool == "recall") return "Checking memory";
     if (tool == "load_skill") return "Loading the " + argOf(args, "name") + " skill";
@@ -127,6 +128,10 @@ std::string outcomeOf(const std::string& tool, const json& r) {
     }
     if (tool == "web_fetch" && number("total_chars")) {
         return "Read " + counted(r["total_chars"].get<long long>(), "character", "characters") + " from the page";
+    }
+    if (tool == "web_search" && r.contains("results") && r["results"].is_array()) {
+        const auto n = static_cast<long long>(r["results"].size());
+        return n == 0 ? "No results found" : "Found " + counted(n, "result", "results");
     }
     return "";
 }
@@ -387,6 +392,7 @@ std::string promptSummary(const std::string& tool, const json& args) {
                shownBlock(argOf(args, "new_string"));
     }
     if (tool == "web_fetch") return one("url");
+    if (tool == "web_search") return one("query");
     if (tool == "forget") return "Memory " + one("id");
     if (tool == "take_screenshot") {
         const std::string to = one("output_path");
@@ -414,7 +420,7 @@ std::string promptSummary(const std::string& tool, const json& args) {
 // Same as sidecar.cpp's toolRisk and grantLabel; this label's text goes through visible().
 std::string toolRisk(const std::string& tool) {
     if (tool == "bash_execute") return "execute";
-    if (tool == "web_fetch" || tool == "take_screenshot") return "read";
+    if (tool == "web_fetch" || tool == "web_search" || tool == "take_screenshot") return "read";
     return "write";
 }
 

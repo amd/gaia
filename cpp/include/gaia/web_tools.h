@@ -1,8 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// Web tools: fetch a page as readable text. Mirrors the fetch half of
-// Python's BrowserToolsMixin (fetch_page).
+// Web tools: search the web and fetch a page as readable text. Mirrors
+// Python's BrowserToolsMixin (search_web and fetch_page).
 
 #pragma once
 
@@ -12,12 +12,19 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "gaia/export.h"
 #include "gaia/tool_registry.h"
 #include "gaia/types.h"
 
 namespace gaia {
+
+struct GAIA_API WebSearchResult {
+    std::string title;
+    std::string url;
+    std::string snippet;
+};
 
 /// Pages web_fetch has read, by URL without its #fragment. The owner clears it
 /// each turn; until then another look at a page (a later part, a find) is served
@@ -62,12 +69,29 @@ public:
     /// in the cache is served without asking, since nothing is sent.
     static ToolInfo webFetch(std::shared_ptr<WebPageCache> cache = nullptr);
 
+    /// web_search: query DuckDuckGo (html endpoint, falling back to lite on
+    /// rate-limit/bot-check responses) and return structured results
+    /// ({title, url, snippet}). Policy: ALLOW (matches Full-featured search_web;
+    /// still refused when internet-off or --no-web is active).
+    static ToolInfo webSearch();
+
     /// HTML to readable text: drops script/style/head, turns block tags into
     /// line breaks, decodes common entities, collapses blank runs.
     static std::string htmlToText(const std::string& html);
 
+    /// Parse DuckDuckGo html or lite search results HTML into structured hits.
+    static std::vector<WebSearchResult> parseSearchHtml(const std::string& html, int maxResults = 5);
+
+    /// Unwrap DuckDuckGo's redirect link (?uddg=...) into the target http(s) URL,
+    /// or "" for ads and non-http(s) links.
+    static std::string unwrapDuckDuckGoUrl(const std::string& href);
+
+    /// True when a 200 response from DuckDuckGo is actually an anti-bot challenge page.
+    static bool isDuckDuckGoChallenge(const std::string& html);
+
 private:
     static json doWebFetch(const json& args, const std::shared_ptr<WebPageCache>& cache);
+    static json doWebSearch(const json& args);
 };
 
 } // namespace gaia

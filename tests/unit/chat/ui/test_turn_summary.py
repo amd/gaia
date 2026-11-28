@@ -639,3 +639,45 @@ def test_batch_rows_without_an_absolute_path_are_left_out():
         },
     )
     assert ledger.indexed_documents() == []
+
+
+def test_gaiacpp_web_search_results_populate_sources_and_sites():
+    ledger = TurnLedger()
+    _call(
+        ledger,
+        "search_web",
+        {"query": "amd gaia"},
+        {
+            "status": "success",
+            "query": "amd gaia",
+            "provider": "duckduckgo",
+            "count": 2,
+            "results": [
+                {
+                    "title": "GAIA Docs",
+                    "url": "https://amd-gaia.ai/docs",
+                    "snippet": "Docs",
+                },
+                {
+                    "title": "GAIA Repo",
+                    "url": "https://github.com/amd/gaia",
+                    "snippet": "Code",
+                },
+            ],
+        },
+    )
+    summary = ledger.summary(location=LOCAL)
+    assert summary["pages"] == [
+        {
+            "url": "https://amd-gaia.ai/docs",
+            "title": "GAIA Docs",
+            "kind": "search_result",
+        },
+        {
+            "url": "https://github.com/amd/gaia",
+            "title": "GAIA Repo",
+            "kind": "search_result",
+        },
+    ]
+    assert summary["sites"] == ["duckduckgo.com"]
+    assert summary["live_data"] == {"attempted": 1, "failed": 0}

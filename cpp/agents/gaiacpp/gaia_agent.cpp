@@ -446,6 +446,7 @@ Lead with the result. Name the files you created or changed. Cite where facts ca
                       "the user it is missing.")
                 : std::string()) +
            systemContext() +
+           turnResearchBrief_ +
            (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +
            (memory_ && !memoryOff() ? "\n" + memory_->promptBlock() : std::string());
 }
@@ -660,6 +661,124 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
     std::string digits = std::to_string(tokens);
     for (int at = static_cast<int>(digits.size()) - 3; at > 0; at -= 3) digits.insert(static_cast<size_t>(at), ",");
     return "about " + digits + " tokens of text in " + std::to_string(files) + " files";
+}
+
+std::optional<std::pair<std::string, std::string>> GaiaAgent::splitResearchCommand(const std::string& text) {
+    auto trim = [](std::string s) {
+        const size_t first = s.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return std::string();
+        const size_t last = s.find_last_not_of(" \t\r\n");
+        return s.substr(first, last - first + 1);
+    };
+    size_t pos = 0;
+    size_t notesEnd = 0;
+    while (pos < text.size()) {
+        size_t p = pos;
+        while (p < text.size() && (text[p] == ' ' || text[p] == '\t' || text[p] == '\r' || text[p] == '\n')) ++p;
+        if (p >= text.size() || text[p] != '[') break;
+        const size_t nl = text.find('\n', p);
+        if (nl == std::string::npos) break;
+        size_t r = nl;
+        while (r > p && (text[r - 1] == ' ' || text[r - 1] == '\t' || text[r - 1] == '\r')) --r;
+        if (r == p || text[r - 1] != ']') break;
+        pos = nl + 1;
+        notesEnd = pos;
+    }
+    const std::string notes = trim(text.substr(0, notesEnd));
+    size_t restStart = notesEnd;
+    while (restStart < text.size() && std::isspace(static_cast<unsigned char>(text[restStart]))) ++restStart;
+    const std::string rest = text.substr(restStart);
+    std::string lowerRest = rest;
+    std::transform(lowerRest.begin(), lowerRest.end(), lowerRest.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (const char* cmd : {"/research-report", "/research"}) {
+        const size_t len = std::strlen(cmd);
+        if (lowerRest.rfind(cmd, 0) != 0) continue;
+        if (rest.size() == len || std::isspace(static_cast<unsigned char>(rest[len]))) {
+            return std::make_pair(notes, trim(rest.substr(len)));
+        }
+    }
+    return std::nullopt;
+}
+
+std::string GaiaAgent::researchMessage(const std::string& notes, const std::string& topic) {
+    const std::string body = topic.empty() ? std::string("/research") : topic;
+    return notes.empty() ? body : notes + "\n\n" + body;
+}
+
+void GaiaAgent::prepareTurnMessages(std::vector<Message>& userMessages) {
+    turnResearchBrief_.clear();
+    Message* target = nullptr;
+    for (auto it = userMessages.rbegin(); it != userMessages.rend(); ++it) {
+        if (it->role == MessageRole::USER) {
+            target = &(*it);
+            break;
+        }
+    }
+    if (!target) return;
+
+    std::string* textField = &target->content;
+    if (target->parts.has_value()) {
+        textField = nullptr;
+        for (auto& part : *target->parts) {
+            if (part.kind == ContentPart::Kind::TEXT) {
+                textField = &part.text;
+                break;
+            }
+        }
+        if (!textField) return;
+    }
+
+    auto split = splitResearchCommand(*textField);
+    if (!split) return;
+    const auto& [notes, topic] = *split;
+    if (!topic.empty()) {
+        std::vector<std::string> missing;
+        for (const char* name : {"web_search", "web_fetch"}) {
+            if (!toolRegistry().hasTool(name) || !toolRegistry().isEnabled(name)) missing.push_back(name);
+        }
+        if (!missing.empty()) {
+            std::string list;
+            for (const auto& m : missing) list += (list.empty() ? "" : ", ") + m;
+            throw std::runtime_error(
+                "Research needs web search and page reading, and this agent has no " + list +
+                " tool. Start a regular GAIA chat to research a topic.");
+        }
+        if (!skills_) {
+            throw std::runtime_error(
+                "Research needs the research-report skill, and skills are off for this run (--no-skills).");
+        }
+        skills_->refresh();
+        if (!skills_->isLoaded("research-report") && !skills_->loadSkill("research-report")) {
+            throw std::runtime_error(
+                "Research needs the research-report skill, and it could not be loaded. "
+                "Install it with `gaia skill install research-report`.");
+        }
+        turnResearchBrief_ =
+            "\n\n## Research mode\n"
+            "Research request: the user's message is the topic. Follow the research-report skill: "
+            "break the topic into the questions it really asks, search the web for each with "
+            "web_search, read the most authoritative sources with web_fetch (use web_search and "
+            "web_fetch wherever skill instructions name search_web or fetch_page), check for "
+            "developments newer than your sources, and write the report in your reply: the answer "
+            "first, a section per question, every factual claim cited inline with a Markdown link "
+            "to a page you fetched in this conversation, a brief note on what you could not "
+            "confirm, and a Sources list at the end.";
+    } else {
+        turnResearchBrief_ =
+            "\n\n## Research mode\n"
+            "The user switched on research mode without naming a topic. Ask them, in one short "
+            "sentence, what they would like researched. Do not search yet.";
+    }
+    *textField = researchMessage(notes, topic);
+    rebuildSystemPrompt();
+}
+
+void GaiaAgent::onTurnEnd() {
+    if (!turnResearchBrief_.empty()) {
+        turnResearchBrief_.clear();
+        rebuildSystemPrompt();
+    }
 }
 
 void GaiaAgent::onTurnStart() {
@@ -1643,7 +1762,7 @@ std::optional<std::string> GaiaAgent::unlookedAbsentNote(const std::string& requ
     if (asksForNoAction(request)) return std::nullopt;
     static const std::set<std::string> lookupTools = {
         "file_search", "file_read", "bash_execute", "list_skills", "query_documents",
-        "index_document", "read_mcp_resource", "list_mcp_resources", "web_fetch", "recall",
+        "index_document", "read_mcp_resource", "list_mcp_resources", "web_fetch", "web_search", "recall",
     };
     if (std::any_of(calls.begin(), calls.end(),
                     [](const CallSeen& c) { return lookupTools.count(c.name) > 0; })) {

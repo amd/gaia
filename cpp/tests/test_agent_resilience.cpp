@@ -516,6 +516,69 @@ TEST(WebToolsTest, DnsFailureUsesPlainWordingWithoutEnvVarHint) {
     EXPECT_EQ(err.find("GAIA_WEB_FETCH_ALLOW_PRIVATE"), std::string::npos) << err;
 }
 
+TEST(WebToolsTest, ParseSearchHtmlHandlesHtmlAndLiteAndDecodesEntities) {
+    const std::string ddgHtml = R"(
+<html><body>
+<div class="result result--ad">
+  <a class="result__a" href="https://duckduckgo.com/y.js?ad_domain=ads.example">Sponsored Ad</a>
+  <a class="result__snippet">Skip this ad.</a>
+</div>
+<div class="result">
+  <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa%3Fx%3D1&amp;rut=abc">
+    Alpha &amp; <b>Beta</b> &#x2014; Guide</a>
+  <a class="result__snippet">It&#39;s a <em>fast</em> guide &mdash; updated.</a>
+</div>
+<div class="result">
+  <a class="result__a" href="https://example.org/b">Second Hit</a>
+  <div class="result__snippet">Plain snippet.</div>
+</div>
+<div class="result">
+  <a class="result__a" href="https://example.org/b">Duplicate URL</a>
+  <div class="result__snippet">Ignored duplicate.</div>
+</div>
+</body></html>)";
+    const auto htmlHits = WebTools::parseSearchHtml(ddgHtml, 5);
+    ASSERT_EQ(htmlHits.size(), 2u);
+    EXPECT_EQ(htmlHits[0].title, "Alpha & Beta \xE2\x80\x94 Guide");
+    EXPECT_EQ(htmlHits[0].url, "https://example.com/a?x=1");
+    EXPECT_EQ(htmlHits[0].snippet, "It's a fast guide \xE2\x80\x94 updated.");
+    EXPECT_EQ(htmlHits[1].title, "Second Hit");
+    EXPECT_EQ(htmlHits[1].url, "https://example.org/b");
+    EXPECT_EQ(htmlHits[1].snippet, "Plain snippet.");
+
+    const std::string ddgLite = R"(
+<html><body><table>
+<tr><td>1.</td><td><a rel="nofollow" class="result-link"
+  href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Flite">Lite Hit</a></td></tr>
+<tr><td></td><td class="result-snippet">Lite snippet.</td></tr>
+<tr><td>2.</td><td><a rel="nofollow" class="result-link"
+  href="https://example.net/second">Second Lite</a></td></tr>
+</table></body></html>)";
+    const auto liteHits = WebTools::parseSearchHtml(ddgLite, 5);
+    ASSERT_EQ(liteHits.size(), 2u);
+    EXPECT_EQ(liteHits[0].title, "Lite Hit");
+    EXPECT_EQ(liteHits[0].url, "https://example.org/lite");
+    EXPECT_EQ(liteHits[0].snippet, "Lite snippet.");
+    EXPECT_EQ(liteHits[1].title, "Second Lite");
+    EXPECT_EQ(liteHits[1].url, "https://example.net/second");
+    EXPECT_EQ(liteHits[1].snippet, "");
+
+    EXPECT_EQ(WebTools::parseSearchHtml(ddgLite, 1).size(), 1u);
+}
+
+TEST(WebToolsTest, DetectsDuckDuckGoChallengePagesAndRejectsEmptyQuery) {
+    EXPECT_TRUE(WebTools::isDuckDuckGoChallenge(
+        "<html><body><div class=\"anomaly-modal__title\">Unfortunately, bots use DuckDuckGo too.</div></body></html>"));
+    EXPECT_TRUE(WebTools::isDuckDuckGoChallenge("<form id=\"challenge-form\"></form>"));
+    EXPECT_FALSE(WebTools::isDuckDuckGoChallenge("<div class=\"result\">anomaly detection</div>"));
+
+    ToolRegistry reg;
+    WebTools::registerAll(reg);
+    json r = reg.executeTool("web_search", json{{"query", "   "}});
+    EXPECT_EQ(r["status"], "error");
+    EXPECT_NE(r["error"].get<std::string>().find("empty"), std::string::npos);
+}
+
 TEST(AgentResilience, EmptyReplyIsRetriedOnce) {
     bench::MockLlmServer mock;
     mock.pushResponse(answer("<think>long reasoning cut off by max_tokens"));

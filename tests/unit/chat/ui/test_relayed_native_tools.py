@@ -397,6 +397,31 @@ class TestActivityLines:
             {"status": "success", "url": "http://x", "text": "…", "total_chars": 5000},
             "Read 5,000 characters from the page",
         ),
+        (
+            "web_search",
+            {
+                "status": "success",
+                "query": "amd gaia",
+                "results": [
+                    {
+                        "title": "GAIA",
+                        "url": "https://amd-gaia.ai",
+                        "snippet": "Local AI",
+                    },
+                    {
+                        "title": "Repo",
+                        "url": "https://github.com/amd/gaia",
+                        "snippet": "Code",
+                    },
+                ],
+            },
+            "Found 2 results",
+        ),
+        (
+            "web_search",
+            {"status": "success", "query": "zzznomatch", "results": []},
+            "No results found",
+        ),
     ],
 )
 def test_a_finished_step_reads_in_plain_words(tool, data, summary):
@@ -561,3 +586,44 @@ def test_index_document_path_arg_is_mapped_to_file_path():
         "index_document",
         python_call,
     )
+
+
+def test_web_search_relays_as_search_web_with_plain_summary_and_errors():
+    handler = _relay(
+        {
+            "type": "tool_call",
+            "tool": "web_search",
+            "args": {"query": "amd gaia", "max_results": 5},
+        },
+        {
+            "type": "tool_result",
+            "tool": "web_search",
+            "data": {
+                "status": "success",
+                "query": "amd gaia",
+                "results": [
+                    {
+                        "title": "GAIA Docs",
+                        "url": "https://amd-gaia.ai/docs",
+                        "snippet": "Docs",
+                    }
+                ],
+            },
+        },
+    )
+    start, args, result = handler.events
+    assert start["tool"] == args["tool"] == result["tool"] == "search_web"
+    assert start["detail"] == "Searching the web"
+    assert args["args"] == {"query": "amd gaia", "num_results": 5}
+    assert result["summary"] == "Found 1 result"
+    assert result["success"] is True
+
+    err_data = {
+        "status": "error",
+        "query": "amd gaia",
+        "http_status": 503,
+        "error": (
+            "DuckDuckGo turned the search away (HTTP 503), so no results were read."
+        ),
+    }
+    assert native_result_summary("web_search", err_data) == err_data["error"]

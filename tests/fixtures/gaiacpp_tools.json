@@ -32,7 +32,8 @@
     "take_screenshot",
     "transcribe_audio",
     "update_memory",
-    "web_fetch"
+    "web_fetch",
+    "web_search"
   ],
   "gated": [
     "bash_execute",

@@ -128,12 +128,16 @@ def search_hits(text: str) -> List[Dict[str, str]]:
 
 
 def _search_sources(data: Any) -> Optional[List[Any]]:
-    """A ``search_web`` result's hits, from its text or from the summary a
-    relayed turn carries instead; None when it is neither."""
+    """A ``search_web`` result's hits, from its text, from the summary a
+    relayed turn carries, or from ``gaiacpp``'s structured ``results`` list;
+    None when it is none of those."""
     if isinstance(data, str):
         return search_hits(data)
-    if isinstance(data, dict) and isinstance(data.get("sources"), list):
-        return data["sources"]
+    if isinstance(data, dict):
+        if isinstance(data.get("sources"), list):
+            return data["sources"]
+        if isinstance(data.get("results"), list):
+            return data["results"]
     return None
 
 

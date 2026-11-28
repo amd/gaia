@@ -1391,6 +1391,18 @@ bool offlineLineGoesOnline(const std::string& asked) {
 
 std::string webFetchRefusal(const ToolInfo& tool, const json& args, const std::map<std::string, std::string>& shellEnv,
                             const std::string& shellCwd) {
+    if (tool.name == "web_search") {
+        return "Web access is off for this run, so GAIA didn't run web_search. "
+               "Answer from what is on this PC, or say what you could not check.";
+    }
+    if (tool.name == "web_fetch") {
+        const std::string url = args.value("url", "");
+        if (!urlIsLocal(url)) {
+            return "Web access is off for this run, so GAIA didn't run web_fetch. "
+                   "Answer from what is on this PC, or say what you could not read.";
+        }
+        return "";
+    }
     if (tool.name != "bash_execute" || !args.is_object() || !args.contains("command") ||
         !args["command"].is_string()) {
         return "";
@@ -1420,6 +1432,9 @@ std::string internetRefusal(const ToolInfo& tool, const json& args, const std::m
     const std::string& name = tool.name;
     const std::string why = "The internet is off for this chat, so GAIA didn't run ";
     if (tool.mcpServer) return why + "the " + *tool.mcpServer + " connector. Turn the internet on to use it.";
+    if (name == "web_search") {
+        return why + "web_search. Turn the internet on to search the web.";
+    }
     if (name == "web_fetch") {
         const std::string url = args.value("url", "");
         if (!urlIsLocal(url)) return why + "web_fetch. Turn the internet on to read web pages.";

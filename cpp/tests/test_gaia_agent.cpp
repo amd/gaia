@@ -3144,6 +3144,231 @@ TEST(GaiaAgentTest, NewlyInstalledSkillIsDiscoveredOnTheNextTurn) {
     EXPECT_NE(loaded.value("instructions", "").find("FRESH_OK"), std::string::npos) << loaded.dump();
 }
 
+namespace {
+struct ScopedSearchUrl {
+    std::string prev;
+    explicit ScopedSearchUrl(const std::string& url) {
+        if (const char* v = std::getenv("GAIA_WEB_SEARCH_URL")) prev = v;
+        set(url.c_str());
+    }
+    ~ScopedSearchUrl() { set(prev.c_str()); }
+    static void set(const char* v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_WEB_SEARCH_URL", v);
+#else
+        if (*v) setenv("GAIA_WEB_SEARCH_URL", v, 1); else unsetenv("GAIA_WEB_SEARCH_URL");
+#endif
+    }
+};
+}  // namespace
+
+TEST(GaiaAgentTest, WebSearchParsesResultsFailsLoudlyAndRespectsInternetOff) {
+    httplib::Server srv;
+    std::string lastBody;
+    std::atomic<int> hits{0};
+    srv.Post("/html/", [&](const httplib::Request& req, httplib::Response& res) {
+        ++hits;
+        lastBody = req.body;
+        res.set_content(
+            R"(<html><body>
+               <div class="result">
+                 <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Famd-gaia.ai%2Fdocs">GAIA Docs</a>
+                 <a class="result__snippet">Official GAIA framework documentation.</a>
+               </div>
+               <div class="result">
+                 <a class="result__a" href="https://github.com/amd/gaia">AMD GAIA GitHub</a>
+                 <a class="result__snippet">Open-source local AI agents.</a>
+               </div>
+               </body></html>)",
+            "text/html; charset=utf-8");
+    });
+    srv.Post("/empty/", [&](const httplib::Request&, httplib::Response& res) {
+        res.set_content("<html><body>No results</body></html>", "text/html");
+    });
+    srv.Post("/err500/", [&](const httplib::Request&, httplib::Response& res) {
+        res.status = 500;
+        res.set_content("Internal Server Error", "text/plain");
+    });
+    srv.Post("/challenge/", [&](const httplib::Request&, httplib::Response& res) {
+        res.set_content("<html><body><div class=\"anomaly-modal\">Bots use DuckDuckGo too.</div></body></html>",
+                        "text/html");
+    });
+    srv.Post("/lite/", [&](const httplib::Request&, httplib::Response& res) {
+        res.set_content(
+            R"(<html><body><table>
+               <tr><td>1.</td><td><a class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Flite">Lite Fallback</a></td></tr>
+               <tr><td></td><td class="result-snippet">Served by lite endpoint.</td></tr>
+               </table></body></html>)",
+            "text/html");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    ASSERT_GT(port, 0);
+    std::thread runner([&] { srv.listen_after_bind(); });
+    struct StopServer {
+        httplib::Server& s;
+        std::thread& t;
+        ~StopServer() { s.stop(); if (t.joinable()) t.join(); }
+    } stop{srv, runner};
+
+    Workdir w;
+    bench::MockLlmServer mock;
+    AllowPrivateFetch allow;
+    GaiaAgent::Options o = optionsFor(w);
+    o.webTools = true;
+    o.internetOff = std::make_shared<std::atomic<bool>>(false);
+    GaiaAgent agent(cfgFor(mock), o);
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::DENY;
+    });
+
+    const std::string base = "http://127.0.0.1:" + std::to_string(port);
+    {
+        ScopedSearchUrl env(base + "/html/");
+        json r = agent.toolRegistry().executeTool("web_search", json{{"query", "amd gaia"}, {"num_results", 5}});
+        ASSERT_EQ(r["status"], "success") << r.dump();
+        EXPECT_EQ(asked, 0) << "web_search must not require confirmation";
+        EXPECT_EQ(lastBody, "q=amd+gaia&b=");
+        ASSERT_EQ(r["results"].size(), 2u);
+        EXPECT_EQ(r["results"][0]["title"], "GAIA Docs");
+        EXPECT_EQ(r["results"][0]["url"], "https://amd-gaia.ai/docs");
+        EXPECT_EQ(r["results"][0]["snippet"], "Official GAIA framework documentation.");
+        EXPECT_EQ(r["count"], 2);
+    }
+    {
+        ScopedSearchUrl env(base + "/empty/");
+        json r = agent.toolRegistry().executeTool("web_search", json{{"query", "zzznomatch"}});
+        ASSERT_EQ(r["status"], "success") << r.dump();
+        EXPECT_EQ(r["count"], 0);
+        EXPECT_TRUE(r["results"].empty());
+    }
+    {
+        ScopedSearchUrl env(base + "/err500/");
+        json r = agent.toolRegistry().executeTool("web_search", json{{"query", "gaia"}});
+        ASSERT_EQ(r["status"], "error") << r.dump();
+        EXPECT_EQ(r["http_status"], 500);
+        EXPECT_NE(r["error"].get<std::string>().find("HTTP 500"), std::string::npos);
+    }
+    {
+        ScopedSearchUrl env(base + "/challenge/," + base + "/lite/");
+        json r = agent.toolRegistry().executeTool("web_search", json{{"query", "gaia"}});
+        ASSERT_EQ(r["status"], "success") << r.dump();
+        ASSERT_EQ(r["results"].size(), 1u);
+        EXPECT_EQ(r["results"][0]["url"], "https://example.org/lite");
+    }
+    {
+        ScopedSearchUrl env(base + "/challenge/");
+        json r = agent.toolRegistry().executeTool("web_search", json{{"query", "gaia"}});
+        ASSERT_EQ(r["status"], "error") << r.dump();
+        EXPECT_NE(r["error"].get<std::string>().find("rate-limiting"), std::string::npos);
+    }
+    {
+        o.internetOff->store(true);
+        const int hitsBefore = hits.load();
+        ScopedSearchUrl env(base + "/html/");
+        json r = agent.toolRegistry().executeTool("web_search", json{{"query", "gaia"}});
+        EXPECT_EQ(r["status"], "error");
+        EXPECT_EQ(r["executed"], false);
+        EXPECT_NE(r["error"].get<std::string>().find("internet is off"), std::string::npos);
+        EXPECT_EQ(hits.load(), hitsBefore) << "no HTTP request when internet is off";
+    }
+}
+
+TEST(GaiaAgentTest, ResearchCommandRewritesMessageLoadsSkillAndClearsAfterTurn) {
+    auto plain = GaiaAgent::splitResearchCommand("what is RISC-V");
+    EXPECT_FALSE(plain.has_value());
+    EXPECT_FALSE(GaiaAgent::splitResearchCommand("/researcher notes").has_value());
+    EXPECT_FALSE(GaiaAgent::splitResearchCommand("please /research this").has_value());
+
+    auto basic = GaiaAgent::splitResearchCommand("/research RISC-V vector extensions");
+    ASSERT_TRUE(basic.has_value());
+    EXPECT_EQ(basic->first, "");
+    EXPECT_EQ(basic->second, "RISC-V vector extensions");
+
+    auto noted = GaiaAgent::splitResearchCommand("[This chat is working in folder X]\n/research-report AMD ROCm");
+    ASSERT_TRUE(noted.has_value());
+    EXPECT_EQ(noted->first, "[This chat is working in folder X]");
+    EXPECT_EQ(noted->second, "AMD ROCm");
+    EXPECT_EQ(GaiaAgent::researchMessage(noted->first, noted->second),
+              "[This chat is working in folder X]\n\nAMD ROCm");
+
+    auto bare = GaiaAgent::splitResearchCommand("/research   ");
+    ASSERT_TRUE(bare.has_value());
+    EXPECT_EQ(bare->second, "");
+    EXPECT_EQ(GaiaAgent::researchMessage("", ""), "/research");
+
+    Workdir w;
+    Workdir home;
+    auto putHome = [](const std::string& v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_HOME", v.c_str());
+#else
+        if (!v.empty()) setenv("GAIA_HOME", v.c_str(), 1);
+        else unsetenv("GAIA_HOME");
+#endif
+    };
+    const std::string prevHome = getEnvVar("GAIA_HOME");
+    putHome(home.path.u8string());
+    struct RestoreEnv {
+        std::string prev;
+        decltype(putHome) fn;
+        ~RestoreEnv() { fn(prev); }
+    } restore{prevHome, putHome};
+    const fs::path skillDir = home.path / "skills" / "research-report";
+    fs::create_directories(skillDir);
+    std::ofstream(skillDir / "SKILL.md")
+        << "---\nname: research-report\ndescription: Research a topic.\n---\n\nRESEARCH_SKILL_SENTINEL\n";
+
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Cited report on RISC-V."));
+    mock.pushResponse(answer("Regular reply."));
+    mock.pushResponse(answer("What topic would you like me to research?"));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.webTools = true;
+    o.skills = true;
+    GaiaAgent agent(cfgFor(mock), o);
+
+    agent.processQuery("/research RISC-V vector extensions");
+    agent.processQuery("Thanks, now a normal question");
+    agent.processQuery("/research");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 3u);
+    EXPECT_NE(bodies[0].find("## Research mode"), std::string::npos);
+    EXPECT_NE(bodies[0].find("RESEARCH_SKILL_SENTINEL"), std::string::npos);
+    EXPECT_NE(bodies[0].find("web_search"), std::string::npos);
+    EXPECT_EQ(bodies[1].find("## Research mode"), std::string::npos) << "brief must clear on next turn";
+    EXPECT_NE(bodies[2].find("without naming a topic"), std::string::npos);
+
+    const auto hist = agent.history();
+    ASSERT_GE(hist.size(), 2u);
+    EXPECT_EQ(hist[0].content, "RISC-V vector extensions") << "history keeps clean topic without /research";
+
+    GaiaAgent::Options noWeb = optionsFor(w);
+    noWeb.webTools = false;
+    noWeb.webOff = true;
+    GaiaAgent offlineAgent(cfgFor(mock), noWeb);
+    EXPECT_THROW(offlineAgent.processQuery("/research RISC-V"), std::runtime_error);
+
+    // Skills off (--no-skills) must fail loudly instead of running without the research-report skill.
+    GaiaAgent::Options noSkills = optionsFor(w);
+    noSkills.webTools = true;
+    noSkills.skills = false;
+    GaiaAgent noSkillsAgent(cfgFor(mock), noSkills);
+    EXPECT_THROW(noSkillsAgent.processQuery("/research RISC-V"), std::runtime_error);
+
+    // Missing research-report skill must also fail loudly instead of silently proceeding.
+    Workdir emptyHome;
+    putHome(emptyHome.path.u8string());
+    GaiaAgent::Options missingSkillOpts = optionsFor(w);
+    missingSkillOpts.webTools = true;
+    missingSkillOpts.skills = true;
+    GaiaAgent missingSkillAgent(cfgFor(mock), missingSkillOpts);
+    EXPECT_THROW(missingSkillAgent.processQuery("/research RISC-V"), std::runtime_error);
+}
+
 TEST(GaiaAgentTest, RanTheTestsToConfirmTheyPassIsAClaimNotAdvice) {
     // Gemma-4-E4B after one failing run and no edit: the turn ended as a success.
     const std::string failing = "..F\nFAIL: test_total\nRan 3 tests in 0.001s\n\nFAILED (failures=1)\n";

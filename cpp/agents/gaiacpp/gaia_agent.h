@@ -32,7 +32,7 @@ namespace gaia {
 class GaiaAgent : public Agent {
 public:
     struct Options {
-        bool webTools = true;  // web_fetch (still CONFIRM-gated)
+        bool webTools = true;  // web_search and web_fetch
         bool webOff = false;   // the model is told not to use the web, and shell fetches are refused
         bool skills = true;    // SKILL.md catalog, list_skills, load_skill
         // Folders the tools may touch; empty = the working directory. Ignored
@@ -99,10 +99,19 @@ protected:
 
     /// Lists the working folder once, so every model call of the turn shows it as it began.
     void onTurnStart() override;
+    void prepareTurnMessages(std::vector<Message>& userMessages) override;
+    void onTurnEnd() override;
 
     UsageStats sideUsage() const override;
 
 public:
+    /// Split a `/research` or `/research-report` turn into `{notes, topic}`,
+    /// where `notes` are leading bracketed app notes (e.g. working folder).
+    /// Returns nullopt for ordinary messages.
+    static std::optional<std::pair<std::string, std::string>> splitResearchCommand(const std::string& text);
+
+    /// The user message kept in conversation history for a `/research` turn.
+    static std::string researchMessage(const std::string& notes, const std::string& topic);
     /// Files the answer says were created or saved, as written in it.
     static std::vector<std::string> claimedFiles(const std::string& answer);
 
@@ -268,6 +277,7 @@ private:
     std::set<std::string> turnTablesPointedAt_;  // CSVs a command was sent to file_read for, once each
     std::set<std::string> turnIndexedDocsPointedAt_;  // indexed PDFs/.docx a command was sent to query_documents for, once each
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
+    std::string turnResearchBrief_;              // active per-turn /research instructions, cleared on turn end
     std::unique_ptr<SkillLibrary> skills_;
     bool skillToolsRegistered_ = false;
     std::unique_ptr<LemonadeClient> embedClient_;

@@ -269,7 +269,7 @@ std::string toolCategory(const ToolInfo& t) {
     static const std::map<std::string, std::string> known = {
         {"file_read", "file_io"}, {"file_write", "file_io"}, {"file_edit", "file_io"},
         {"file_search", "file_search"}, {"bash_execute", "shell"}, {"env_inspect", "shell"},
-        {"web_fetch", "browser"}, {"index_document", "rag"}, {"query_documents", "rag"},
+        {"web_fetch", "browser"}, {"web_search", "browser"}, {"index_document", "rag"}, {"query_documents", "rag"},
         {"list_indexed_documents", "rag"}, {"index_codebase", "code_index"}, {"search_code", "code_index"},
         {"analyze_image", "vlm"}, {"generate_image", "sd"}, {"transcribe_audio", "audio"},
         {"take_screenshot", "screenshot"}, {"list_skills", "skills"}, {"load_skill", "skills"}};
@@ -295,7 +295,7 @@ bool sameOrInside(const std::string& path, const std::string& folder) {
 
 std::string toolRisk(const std::string& tool) {
     if (tool == "bash_execute") return "execute";
-    if (tool == "web_fetch" || tool == "take_screenshot") return "read";
+    if (tool == "web_fetch" || tool == "web_search" || tool == "take_screenshot") return "read";
     return "write";
 }
 
@@ -977,6 +977,7 @@ private:
         if (action == "file_edit") return "Editing file";
         if (action == "bash_execute") return "Running a shell command";
         if (action == "web_fetch") return "Reading web page";
+        if (action == "web_search") return "Searching the web";
         if (action == "take_screenshot") return "Taking screenshot";
         if (action == "generate_image") return "Generating image";
         if (action == kPathAccessPrompt) return "Accessing a folder or file";
@@ -1405,7 +1406,7 @@ private:
                 }
                 ensureAgent(*s, server);
                 if (s->temporary) {
-                    if (s->noWeb) withheld.push_back("web_fetch");
+                    if (s->noWeb) withheld.insert(withheld.end(), {"web_fetch", "web_search"});
                     if (s->noSkills && !SkillLibrary().skills().empty()) {
                         withheld.insert(withheld.end(), {"list_skills", "load_skill"});
                     }
