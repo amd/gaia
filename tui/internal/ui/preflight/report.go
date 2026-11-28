@@ -496,6 +496,18 @@ func (r Report) FirstAttention() int {
 	return -1
 }
 
+// OpenQuestion is the index of the first row still asking the user to choose
+// (it offers `g`, the other answer), or -1. The steps below it depend on the
+// answer, so it is acted on before them.
+func (r Report) OpenQuestion() int {
+	for i, row := range r.Rows {
+		if row.NeedsAttention() && row.DeclineFix != FixNone {
+			return i
+		}
+	}
+	return -1
+}
+
 // Find returns the row with the given key.
 func (r Report) Find(key string) (Row, bool) {
 	for _, row := range r.Rows {
