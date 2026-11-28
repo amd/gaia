@@ -272,7 +272,11 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
 std::string MissingDocumentReader::remedy(const std::string& file, const std::string& program) {
     return "Can't read PDF " + file + ": this agent reads PDFs with " + program +
            ", which is not installed on this PC. Install poppler (it provides " + program +
+#ifdef _WIN32
+           ") and attach the file again, or switch to "
+#else
            "; on Debian or Ubuntu: sudo apt install poppler-utils) and attach the file again, or switch to "
+#endif
            "Full-featured (gaiapy), which reads PDFs itself (Settings > Agent & model in the GAIA app, "
            "--agent-program gaiapy in the terminal).";
 }
