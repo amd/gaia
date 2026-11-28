@@ -389,8 +389,9 @@
     .composer-chip-memory .composer-chip-label { display: none; }
 }
 
-/* On a phone it is the eye alone, so the run mode beside it stays whole; a click still opens it. */
+/* On a phone the permission and memory chips drop their arrows, so the run mode stays whole; a click still opens each. */
 @container composer-row (max-width: 400px) {
+    .composer-chip-permission > .lucide-chevron-down,
     .composer-chip-memory > .lucide-chevron-down { display: none; }
 }
 

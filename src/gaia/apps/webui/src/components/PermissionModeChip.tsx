@@ -94,7 +94,7 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
             <button
                 ref={anchor}
                 type="button"
-                className={`composer-chip${full || (unread && error) ? ' is-warning' : ''}`}
+                className={`composer-chip composer-chip-permission${full || (unread && error) ? ' is-warning' : ''}`}
                 onClick={() => { setConfirming(false); setOpen((v) => !v); }}
                 disabled={disabled}
                 aria-haspopup="dialog"
