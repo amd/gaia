@@ -3096,6 +3096,12 @@ export const enMessages = {
     'banner.download.downloading': 'Downloading…',
     'model.restore.done': 'Restored your last model.',
     'model.restore.pick': 'Pick a model',
+    'model.restore.failed': "Couldn't restore your last model, {model}: {reason}. Pick a model to continue.",
+    // Keyed by the backend's restore.reason_code.
+    'model.restore.reason.local_only': "Local only is on, so cloud models can't run",
+    'model.restore.reason.no_key': 'it has no working key',
+    'model.restore.reason.not_listed': 'the model is no longer listed',
+    'model.restore.reason.not_downloaded': 'the model is not downloaded',
     // Start-up steps, keyed by the backend's init_tasks[].step; the banner adds animated dots.
     'banner.boot.check_server': 'Checking the model server',
     'banner.boot.load_libraries': 'Getting document search ready',
