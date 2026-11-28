@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 
 #include "gaia/http_client.h"
@@ -305,9 +306,12 @@ std::string queryString(const std::vector<std::pair<std::string, std::string>>& 
 namespace {
 
 constexpr int kTimeoutSec = 15;
+// Gmail fetches up to five messages at once; one kept client each keeps its connection warm.
+constexpr std::size_t kIdleClients = 5;
 
 // Refused before sending: the mail code only ever talks to the providers over https.
-void requireHttps(const std::string& url) {
+// Returns the host, for error messages.
+std::string requireHttps(const std::string& url) {
     const std::string scheme = "https://";
     if (url.compare(0, scheme.size(), scheme) != 0) {
         throw std::invalid_argument("The mailbox transport only sends https:// requests, not " + url);
@@ -323,10 +327,58 @@ void requireHttps(const std::string& url) {
             throw std::invalid_argument("The mailbox transport got a URL with a bad port: " + url);
         }
     }
-    if (authority.substr(0, colon).empty()) {
-        throw std::invalid_argument("The mailbox transport got a URL with no host: " + url);
-    }
+    const std::string host = authority.substr(0, colon);
+    if (host.empty()) throw std::invalid_argument("The mailbox transport got a URL with no host: " + url);
+    return host;
 }
+
+// HttpClient words a lost connection for developers and names the full URL, search
+// terms included. The backends add their own remedy, so this names the host only.
+std::string describe(const HttpError& e, const std::string& host) {
+    const std::string what = e.what();
+    const auto has = [&](const char* s) { return what.find(s) != std::string::npos; };
+    const std::string secs = std::to_string(kTimeoutSec);
+    if (has("could not connect")) {
+        return "could not connect to " + host + " (no network, host unreachable, or no answer within " + secs + " s)";
+    }
+    if (has("read timeout")) {
+        return "no complete answer from " + host + " within " + secs + " s (connection dropped or too slow)";
+    }
+    if (has("could not be sent")) {
+        return "the request to " + host + " could not be sent (connection closed while writing)";
+    }
+    if (has("TLS handshake failed")) return "the TLS handshake with " + host + " failed";
+    if (has("TLS certificates could not be loaded")) return "the system's TLS certificates could not be loaded";
+    if (has("certificate verification failed")) return "the TLS certificate of " + host + " could not be verified";
+    return "transport error talking to " + host;
+}
+
+class ClientPool {
+public:
+    explicit ClientPool(HttpClientConfig config) : config_(std::move(config)) {}
+
+    std::unique_ptr<HttpClient> take() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!idle_.empty()) {
+                auto client = std::move(idle_.back());
+                idle_.pop_back();
+                return client;
+            }
+        }
+        return std::make_unique<HttpClient>(config_);
+    }
+
+    void give(std::unique_ptr<HttpClient> client) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (idle_.size() < kIdleClients) idle_.push_back(std::move(client));
+    }
+
+private:
+    const HttpClientConfig config_;
+    std::mutex mutex_;
+    std::vector<std::unique_ptr<HttpClient>> idle_;
+};
 
 }  // namespace
 
@@ -335,13 +387,22 @@ Transport httpsTransport() {
     config.timeoutSec = kTimeoutSec;
     config.connectTimeoutSec = kTimeoutSec;
     config.returnErrorStatuses = true;
-    // One client keeps each host's connection open; concurrent calls open their own.
-    auto client = std::make_shared<HttpClient>(config);
-    return [client](const HttpCall& call) -> HttpResponse {
-        requireHttps(call.url);
-        if (call.method == "GET") return client->get(call.url, call.headers);
-        if (call.method == "POST") return client->post(call.url, call.body, call.headers);
-        throw std::invalid_argument("The mailbox transport sends GET and POST only, not " + call.method);
+    auto pool = std::make_shared<ClientPool>(config);
+    return [pool](const HttpCall& call) -> HttpResponse {
+        const std::string host = requireHttps(call.url);
+        if (call.method != "GET" && call.method != "POST") {
+            throw std::invalid_argument("The mailbox transport sends GET and POST only, not " + call.method);
+        }
+        auto client = pool->take();
+        HttpResponse response;
+        try {
+            response = call.method == "GET" ? client->get(call.url, call.headers)
+                                            : client->post(call.url, call.body, call.headers);
+        } catch (const HttpError& e) {
+            throw std::runtime_error(describe(e, host));
+        }
+        pool->give(std::move(client));
+        return response;
     };
 }
 
