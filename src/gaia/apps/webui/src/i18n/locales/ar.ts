@@ -2362,6 +2362,7 @@ const messages: Messages = {
     'setup.models.line.imageCreation': 'ينشئ صورًا من وصف.',
     'setup.models.fit.ok': 'يحتاج إلى نحو {need} من الذاكرة؛ لدى هذا الجهاز {have} للنماذج.',
     'setup.models.fit.unknown': 'تعذّر على GAIA قراءة ذاكرة هذا الجهاز، لذا لا يستطيع معرفة ما إذا كان هذا النموذج مناسبًا.',
+    'setup.models.fit.unknownNeed': 'لا تعرف GAIA مقدار الذاكرة الذي يحتاجه هذا النموذج، لذا لا يمكنها معرفة ما إذا كان مناسبًا.',
     'setup.models.status.onPc': 'على هذا الجهاز',
     'setup.models.status.download': 'تنزيل {size}',
     'setup.models.status.partial': 'نُزّل جزئيًا، يتبقى {size}',
