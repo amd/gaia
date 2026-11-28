@@ -8,7 +8,8 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, type WriteStream } from 'node:fs';
+import { chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, type WriteStream } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -26,6 +27,8 @@ const FAKE_SERVER = join(REPO, 'installer', 'headless', 'fake_model_server.py');
 const PYTHON = process.env.GAIA_E2E_PYTHON || 'python';
 const UI_DIST = process.env.GAIA_E2E_UI_DIST || resolve(HERE, '..', 'dist');
 const SCREENS = process.env.GAIA_E2E_SCREENS || join(HERE, 'test-results', 'screens');
+/** A built gaiacpp for the journeys that choose it; unset, those journeys cannot run. */
+export const GAIACPP = process.env.GAIA_E2E_GAIACPP || '';
 const START_TIMEOUT_MS = 120_000;
 
 const uiToken = createRequire(import.meta.url)('../services/ui-token.cjs') as { uiTokenPath: (opts?: { env?: NodeJS.ProcessEnv }) => string };
@@ -52,6 +55,12 @@ export interface FakeOptions {
     models?: string[];
     /** `FAKE_LEMONADE_*` settings: see fake_model_server.py. */
     env?: Record<string, string>;
+    /**
+     * Run it as GAIA's own Lemonade: behind a key, and known only from the record
+     * GAIA keeps in its home. The backend then gets no address for it, so GAIA and
+     * its agents have to find it the way an installed GAIA does.
+     */
+    own?: boolean;
 }
 
 interface FakeRequest {
@@ -60,6 +69,15 @@ interface FakeRequest {
     status: number;
     model: string | null;
     body_keys: string[];
+    /** With a key set: whether the request carried it. */
+    auth?: 'ok' | 'missing' | 'wrong';
+}
+
+/** The Lemonade version this GAIA targets, which its own server's record names. */
+function lemonadeVersion(): string {
+    const found = /LEMONADE_VERSION = "([^"]+)"/.exec(readFileSync(join(REPO, 'src', 'gaia', 'version.py'), 'utf-8'));
+    if (!found) throw new Error('src/gaia/version.py has no LEMONADE_VERSION');
+    return found[1];
 }
 
 async function freePort(): Promise<number> {
@@ -98,13 +116,18 @@ class Service {
         return this.child.exitCode !== null || this.child.signalCode !== null;
     }
 
-    async waitUntilServing(url: string): Promise<void> {
+    get pid(): number {
+        if (!this.child.pid) throw new Error(`${this.name} has no pid: it did not start`);
+        return this.child.pid;
+    }
+
+    async waitUntilServing(url: string, headers: Record<string, string> = {}): Promise<void> {
         const deadline = Date.now() + START_TIMEOUT_MS;
         while (Date.now() < deadline) {
             // Checked first: another process on this port must not pass for ours.
             if (this.exited) throw new Error(`${this.name} exited:\n${tail(this.logPath)}`);
             try {
-                if ((await fetch(url, { signal: AbortSignal.timeout(3_000) })).ok) return;
+                if ((await fetch(url, { headers, signal: AbortSignal.timeout(3_000) })).ok) return;
             } catch {
                 // Not listening yet; the deadline below names the failure.
             }
@@ -162,6 +185,8 @@ export class Journey {
     private fake: Service | null = null;
     private backendPort = 0;
     private lemonadePort = 0;
+    /** Set when the fake runs as GAIA's own server: the key it requires. */
+    private ownKey = '';
     private readonly listeners: Server[] = [];
 
     constructor() {
@@ -202,6 +227,8 @@ export class Journey {
             PYTHONIOENCODING: 'utf-8',
             ...(process.env.GAIA_E2E_PYTHONPATH ? { PYTHONPATH: process.env.GAIA_E2E_PYTHONPATH } : {}),
             ...(HUB_URL ? { GAIA_HUB_URL: HUB_URL } : {}),
+            // Where GAIA looks first for gaiacpp, so the journey tests this build, not a download.
+            ...(GAIACPP ? { GAIA_GAIACPP_PATH: resolve(GAIACPP) } : {}),
             ...extra,
         };
     }
@@ -226,18 +253,42 @@ export class Journey {
         expect(run.status, `gaia init --agent-only:\n${run.error ?? ''}${run.stdout}${run.stderr}`).toBe(0);
     }
 
-    async startFake({ port, models = [], env = {} }: FakeOptions = {}): Promise<void> {
+    async startFake({ port, models = [], env = {}, own = false }: FakeOptions = {}): Promise<void> {
         this.lemonadePort = port ?? (await freePort());
         const argv = [PYTHON, FAKE_SERVER, '--catalog', '--port', String(this.lemonadePort), '--log', this.requestLog];
         for (const model of models) argv.push('--model', model);
+        if (own) {
+            this.ownKey = randomBytes(16).toString('hex');
+            argv.push('--api-key', this.ownKey);
+        }
         this.fake = new Service('the fake Lemonade', join(this.logs, 'fake.log'), argv, this.env(env), this.root);
-        await this.fake.waitUntilServing(`${this.lemonadeUrl}/health`);
+        await this.fake.waitUntilServing(`${this.lemonadeUrl}/health`, own ? { Authorization: `Bearer ${this.ownKey}` } : {});
+        if (own) this.recordOwnServer(this.fake.pid);
+    }
+
+    /**
+     * What GAIA's embedded Lemonade leaves in the home once it runs: the record of
+     * its port and key, and the unpacked server. Setup finds that server answering
+     * and takes it as its own, so it downloads and starts no Lemonade, and the
+     * `lemond` here is never run.
+     */
+    private recordOwnServer(pid: number): void {
+        const version = lemonadeVersion();
+        const lemonade = join(this.home, '.gaia', 'lemonade');
+        const dist = join(lemonade, 'dist', version);
+        mkdirSync(dist, { recursive: true });
+        const lemond = join(dist, process.platform === 'win32' ? 'lemond.exe' : 'lemond');
+        writeFileSync(lemond, '#!/bin/sh\nexit 1\n');
+        chmodSync(lemond, 0o755);
+        writeFileSync(join(lemonade, 'state.json'), JSON.stringify({ pid, port: this.lemonadePort, api_key: this.ownKey, version }));
+        writeFileSync(join(lemonade, 'last_port.json'), JSON.stringify({ port: this.lemonadePort }));
     }
 
     async startBackend(env: Record<string, string> = {}): Promise<void> {
         this.backendPort = await freePort();
         const argv = [PYTHON, '-m', 'gaia.ui.server', '--host', '127.0.0.1', '--port', String(this.backendPort), '--ui-dist', UI_DIST];
-        const lemonade = { LEMONADE_BASE_URL: this.lemonadeUrl, ...env };
+        // GAIA's own server has no address to hand over: it is found from the home.
+        const lemonade = this.ownKey ? env : { LEMONADE_BASE_URL: this.lemonadeUrl, ...env };
         this.backend = new Service('the GAIA backend', join(this.logs, 'backend.log'), argv, this.env(lemonade), this.root);
         await this.backend.waitUntilServing(`${this.url}/api/health`);
     }
@@ -281,6 +332,27 @@ export class Journey {
 
     hasGaiaFile(name: string): boolean {
         return existsSync(join(this.home, '.gaia', name));
+    }
+
+    /** The program the daemon runs as the GAIA agent, by its command line; null when none runs. */
+    agentProgram(): 'gaiapy' | 'gaiacpp' | null {
+        const sidecars = readJson(join(this.home, '.gaia', 'host', 'sidecars.json'));
+        for (const entry of Array.isArray(sidecars) ? (sidecars as Array<{ agent_id?: string; pid?: number; argv?: string[] }>) : []) {
+            if (entry.agent_id !== 'gaia' || typeof entry.pid !== 'number' || !alive(entry.pid)) continue;
+            return /(^|[\\/])gaiacpp(\.exe)?$/i.test(entry.argv?.[0] ?? '') ? 'gaiacpp' : 'gaiapy';
+        }
+        return null;
+    }
+
+    /** A stand-in gaiacpp that runs the real one where it cannot see GAIA's home. POSIX only. */
+    blindGaiacpp(): string {
+        const folder = join(this.root, 'blind');
+        mkdirSync(join(folder, 'home'), { recursive: true });
+        const wrapper = join(folder, 'gaiacpp');
+        const home = join(folder, 'home');
+        writeFileSync(wrapper, `#!/bin/sh\nHOME="${home}" GAIA_HOME="${join(home, '.gaia')}" exec "${resolve(GAIACPP)}" "$@"\n`);
+        chmodSync(wrapper, 0o755);
+        return wrapper;
     }
 
     /** The backend's and fake's logs, for a failure's report. */

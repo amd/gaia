@@ -16,6 +16,7 @@ from gaia.agents.base.call_risk import EXACT_TEXT_ARG, RISK_NOTE_ARG
 from gaia.agents.base.person_approval import visible, visible_strict
 from gaia.agents.base.tool_grants import (
     NAME_ARGS,
+    PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     GrantScope,
     grant_scope,
@@ -118,8 +119,39 @@ def auto_approve_env_enabled() -> bool:
     return (reader(AUTO_APPROVE_ENV_VAR) or "").strip().lower() in _TRUTHY_ENV_VALUES
 
 
-def unattended_denial_message(tool_name: str) -> str:
-    """Actionable denial text for a gated tool with no human to ask."""
+def cli_approval_remedy(tool_name: str) -> str:
+    """The ``gaia -p`` flag that lets *tool_name* run with nobody to ask."""
+    if tool_name == PATH_ACCESS_PROMPT_TOOL:
+        return (
+            "Re-run with --full-access to grant paths outside the current folder "
+            "for this run (it also turns the shell guardrails off)."
+        )
+    return (
+        "Re-run with --dangerously-skip-permissions to let this run use "
+        "gated tools without asking, or --full-access to also turn the shell "
+        "guardrails off."
+    )
+
+
+def cli_refusal_message(tool_name: str) -> str:
+    """How a ``gaia -p`` turn that stopped at an unapprovable tool ends."""
+    return (
+        f"I stopped before running '{tool_name}' because it needs your approval, "
+        f"and gaia -p has nobody to ask. {cli_approval_remedy(tool_name)}"
+    )
+
+
+def unattended_denial_message(tool_name: str, surface: str = "") -> str:
+    """Actionable denial text for a gated tool with no human to ask.
+
+    *surface* ``"cli"`` is ``gaia -p``, whose remedy is a flag.
+    """
+    if surface == "cli":
+        return (
+            f"'{tool_name}' requires explicit user approval and cannot run "
+            "unattended: gaia -p has nobody to ask. "
+            f"{cli_approval_remedy(tool_name)}"
+        )
     return (
         f"'{tool_name}' requires explicit user approval and cannot run "
         "unattended: this console has no interactive terminal to ask on. "
@@ -407,6 +439,9 @@ class OutputHandler(ABC):
     that would pre-approve the marked call never sees one.
     """
 
+    approval_surface: str = ""
+    """Whose remedy an unattended denial names; ``"cli"`` is ``gaia -p``."""
+
     _last_denial: Optional[Denial] = None
     _answered_prompt: Optional[str] = None
     """The most recent denial (#2210).
@@ -675,7 +710,9 @@ class OutputHandler(ABC):
             self.log_auto_approval(tool_name)
             return True
         return self.deny_tool_execution(
-            tool_name, unattended_denial_message(tool_name), unattended=True
+            tool_name,
+            unattended_denial_message(tool_name, self.approval_surface),
+            unattended=True,
         )
 
     def auto_approve_confirmations_enabled(self) -> bool:
@@ -794,7 +831,13 @@ class OutputHandler(ABC):
     ) -> bool:
         """Record and log a denial, then return False for the caller to return."""
         self._last_denial = Denial(tool_name, reason, timed_out, unattended)
-        logger.warning("Denied confirmation-gated tool '%s': %s", tool_name, reason)
+        # gaia -p ends the turn on this refusal and prints it; stderr says it once.
+        level = (
+            logging.INFO
+            if unattended and self.approval_surface == "cli"
+            else logging.WARNING
+        )
+        logger.log(level, "Denied confirmation-gated tool '%s': %s", tool_name, reason)
         return False
 
     def confirmation_denied_reason(self, tool_name: str) -> str:
@@ -819,6 +862,11 @@ class OutputHandler(ABC):
         """True when this tool's most recent denial had no person to ask."""
         recorded = self._last_denial
         return bool(recorded and recorded.tool == tool_name and recorded.unattended)
+
+    def unattended_denial(self) -> Optional[Denial]:
+        """The most recent denial when nothing could ask a person, else None."""
+        recorded = self._last_denial
+        return recorded if recorded and recorded.unattended else None
 
     def print_policy_alert(
         self,
@@ -1027,7 +1075,7 @@ class TerminalConfirmationMixin:
             return True
 
         if not terminal_is_interactive():
-            reason = unattended_denial_message(tool_name)
+            reason = unattended_denial_message(tool_name, self.approval_surface)
             # A model that keeps retrying the tool would otherwise repeat the
             # whole notice each time; the log still records every denial.
             if tool_name not in self._notified_denials():

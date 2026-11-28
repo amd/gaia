@@ -922,6 +922,91 @@ def test_remove_refuses_a_read_only_root(tmp_path):
     assert (bundled / "incident-review").is_dir()
 
 
+def _hold_open(monkeypatch, held_name):
+    """Make renames fail the way Windows fails them while *held_name* is open."""
+    import os
+
+    import gaia.skills.install as install_module
+
+    real_replace = os.replace
+
+    def refuse_folder(src, dst):
+        raise PermissionError(13, "Access is denied", str(src))
+
+    def refuse_held_file(src, dst):
+        if os.path.basename(str(src)) == held_name:
+            raise PermissionError(13, "The file is in use", str(src))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(install_module, "replace_retrying", refuse_folder)
+    monkeypatch.setattr(install_module.os, "replace", refuse_held_file)
+
+
+def test_remove_names_the_open_file_and_deletes_nothing(
+    marketplace, tmp_path, monkeypatch
+):
+    key = marketplace.keygen()
+    marketplace.trust(key)
+    marketplace.publish(_write_source(tmp_path))
+    marketplace.install("web-research")
+    installed = marketplace.skills_root / "web-research"
+    before = sorted(p.relative_to(installed) for p in installed.rglob("*"))
+    _hold_open(monkeypatch, "SKILL.md")
+
+    with pytest.raises(SkillInstallError) as raised:
+        remove_skill("web-research", manager=marketplace.manager)
+
+    message = str(raised.value)
+    assert "SKILL.md is open in another program" in message
+    assert "Nothing was deleted" in message
+    assert "try again" in message
+    assert sorted(p.relative_to(installed) for p in installed.rglob("*")) == before
+    assert "web-research" in SkillLock.load(marketplace.skills_root).entries
+
+
+def test_remove_reports_the_os_error_when_no_single_file_is_to_blame(
+    marketplace, tmp_path, monkeypatch
+):
+    key = marketplace.keygen()
+    marketplace.trust(key)
+    marketplace.publish(_write_source(tmp_path))
+    marketplace.install("web-research")
+    _hold_open(monkeypatch, "no-such-file")
+
+    with pytest.raises(SkillInstallError, match="Access is denied"):
+        remove_skill("web-research", manager=marketplace.manager)
+    assert (marketplace.skills_root / "web-research" / "SKILL.md").is_file()
+
+
+def test_remove_says_how_to_recover_when_a_probe_rename_cannot_be_undone(
+    marketplace, tmp_path, monkeypatch
+):
+    import os
+
+    import gaia.skills.install as install_module
+
+    key = marketplace.keygen()
+    marketplace.trust(key)
+    marketplace.publish(_write_source(tmp_path))
+    marketplace.install("web-research")
+    real_replace = os.replace
+
+    def refuse_folder(src, dst):
+        raise PermissionError(13, "Access is denied", str(src))
+
+    def refuse_rename_back(src, dst):
+        if str(src).endswith(".gaia-remove-probe"):
+            raise PermissionError(13, "The file is in use", str(src))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(install_module, "replace_retrying", refuse_folder)
+    monkeypatch.setattr(install_module.os, "replace", refuse_rename_back)
+
+    with pytest.raises(SkillInstallError, match="gaia-remove-probe") as raised:
+        remove_skill("web-research", manager=marketplace.manager)
+    assert "back to" in str(raised.value)
+
+
 # ---------------------------------------------------------------------------
 # A hostile bundle: the client unpacks whatever the hub served
 # ---------------------------------------------------------------------------

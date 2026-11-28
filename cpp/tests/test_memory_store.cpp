@@ -92,6 +92,25 @@ TEST(MemoryStoreTest, SensitiveEntriesStayOutOfDefaultListings) {
     EXPECT_EQ(m.recall("dentist", "", 10, true).size(), 1u);
 }
 
+TEST(MemoryStoreTest, ASearchFindsASensitiveFactButAListingLeavesItOut) {
+    MemoryStore m(":memory:");
+    ToolRegistry reg;
+    m.registerTools(reg);
+    reg.executeTool("remember", json{{"fact", "My bike lock code is 4471"}, {"sensitive", true}});
+    const json found = reg.executeTool("recall", json{{"query", "bike lock code"}});
+    ASSERT_EQ(found["count"], 1);
+    EXPECT_NE(found["memories"][0]["content"].get<std::string>().find("4471"), std::string::npos);
+    EXPECT_EQ(reg.executeTool("recall", json::object())["count"], 0);
+    EXPECT_EQ(reg.executeTool("recall", json{{"query", " ?! "}})["count"], 0) << "no words is a listing";
+    EXPECT_EQ(reg.executeTool("recall", json{{"include_sensitive", true}})["count"], 1);
+}
+
+TEST(MemoryStoreTest, FactsWithoutPreferencesStillPointAtRecall) {
+    MemoryStore m(":memory:");
+    m.remember("My bike lock code is 4471", "fact", "", "", true);
+    EXPECT_NE(m.promptBlock().find("recall"), std::string::npos);
+}
+
 TEST(MemoryStoreTest, PunctuationIsNotFtsSyntax) {
     MemoryStore m(":memory:");
     m.remember("Deploys go out on Tuesdays");

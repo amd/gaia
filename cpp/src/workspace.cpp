@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/workspace.h"
+#include "lower_ascii.h"
 
 #include <algorithm>
 #include <cctype>
@@ -334,7 +335,8 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
     return judgeCommand(command, posixShell).refusal;
 }
 
-Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posixShell) const {
+Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posixShell,
+                                           const std::string& cwd) const {
     const auto refused = [](std::string why) { return Outside{std::move(why), ""}; };
     const std::vector<std::string> roots = this->roots();
     if (command.size() > kMaxCommandBytes) {
@@ -467,6 +469,35 @@ Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posi
         if (at > 0 && kBefore.find(command[at - 1]) == std::string::npos) continue;
         const size_t end = (std::min)(command.find_first_of(kEnds, at + 2), command.size());
         if (end > at + 2) return refused(refusal(command.substr(at, end - at)));
+    }
+    // A relative `cd` out of the folders: every later relative name would be read from there.
+    {
+        std::error_code startError;
+        fs::path at = cwd.empty() ? fs::current_path(startError) : fs::u8path(fromShellPath(cwd));
+        for (size_t from = 0; !startError && from < command.size();) {
+            const size_t to = (std::min)(command.find_first_of(";|&\n()", from), command.size());
+            std::istringstream segment(command.substr(from, to - from));
+            from = to + 1;
+            std::string program, word;
+            if (!(segment >> program >> word)) continue;
+            program = detail::lowerAscii(program);
+            if (program != "cd" && program != "chdir" && program != "pushd") continue;
+            if (!posixShell && detail::lowerAscii(word) == "/d" && !(segment >> word)) continue;
+            if (word.size() >= 2 && (word.front() == '"' || word.front() == '\'') && word.back() == word.front()) {
+                word = word.substr(1, word.size() - 2);
+            }
+            const fs::path dest = fs::u8path(fromShellPath(word));
+            // An absolute or ~ destination is judged above as a path word.
+            if (word.empty() || word[0] == '-' || word[0] == '~' || dest.has_root_directory() || dest.has_root_name()) {
+                continue;
+            }
+            at /= dest;
+            const std::string abs = normalized(at);
+            if (abs.empty() || contains(abs) || inSystemDir(abs) || !attachedFileFolder(abs).empty()) continue;
+            return Outside{outsideRefusal(word, "Changing folder there would leave them, and every later command "
+                                                "would run outside."),
+                           abs};
+        }
     }
     // A relative name that exists here but resolves elsewhere is a link out of the folder.
     static const std::string kBreaks = " \t\r\n'\"`;|&()<>=,";
@@ -735,12 +766,14 @@ ToolInfo Workspace::confine(ToolInfo tool, std::shared_ptr<const Workspace> ws,
 
 ToolInfo Workspace::confineShell(ToolInfo tool, std::shared_ptr<const Workspace> ws,
                                  std::string commandArg, bool posixShell,
-                                 std::function<bool(const json&)> provenInside) {
+                                 std::function<bool(const json&)> provenInside,
+                                 std::function<std::string()> shellCwd) {
     ToolCallback inner = std::move(tool.callback);
-    tool.callback = [inner, ws, commandArg, posixShell, provenInside](const json& args) -> json {
+    tool.callback = [inner, ws, commandArg, posixShell, provenInside, shellCwd](const json& args) -> json {
         if (args.contains(commandArg) && args[commandArg].is_string() && !(provenInside && provenInside(args))) {
-            const std::string why =
-                ws->checkCommand(args[commandArg].get<std::string>(), posixShell);
+            const std::string why = ws->judgeCommand(args[commandArg].get<std::string>(), posixShell,
+                                                     shellCwd ? shellCwd() : "")
+                                        .refusal;
             if (!why.empty()) return json{{"status", "error"}, {"error", why}};
         }
         return inner(args);

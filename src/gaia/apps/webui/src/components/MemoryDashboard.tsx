@@ -2924,8 +2924,8 @@ export function MemoryDashboard() {
                                                     <span className={`mem-goal-status-dot status-${goal.status.replace('_','-')}`} />
                                                     <bdi className="mem-goal-title">{goal.title}</bdi>
                                                     <span className={`mem-goal-priority mem-priority-${goal.priority}`}><Code value={goal.priority} keys={PRIORITY_KEYS} /></span>
-                                                    {goal.status === 'cancelled' && (
-                                                        <span className="mem-goal-priority mem-goal-cancelled-label">{t(STATUS_KEYS.cancelled)}</span>
+                                                    {(goal.status === 'cancelled' || goal.status === 'failed') && (
+                                                        <span className={`mem-goal-priority mem-goal-${goal.status}-label`}>{t(STATUS_KEYS[goal.status])}</span>
                                                     )}
                                                     {goal.source !== 'user' && (
                                                         <span className="mem-goal-source-badge">
@@ -2945,6 +2945,15 @@ export function MemoryDashboard() {
                                                                 runGoalAction(() => memoryApi.cancelGoal(goal.id), 'mem.goals.cancelFailed');
                                                             }}>
                                                             {t('mem.cancel')}
+                                                        </button>
+                                                    )}
+                                                    {goal.status === 'failed' && (
+                                                        <button className="mem-goal-action-btn mem-goal-retry-btn"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                runGoalAction(() => memoryApi.retryGoal(goal.id), 'mem.goals.retryFailed');
+                                                            }}>
+                                                            {t('mem.goals.retry')}
                                                         </button>
                                                     )}
                                                     {confirmGoalDeleteId === goal.id ? (

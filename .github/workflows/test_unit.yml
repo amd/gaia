@@ -44,6 +44,7 @@ on:
       - '.github/dependabot.yml'
       # C++ files the gaiacpp release, model-table, hidden-text and CI-coverage tests read.
       - 'cpp/CMakeLists.txt'
+      - 'cpp/agents/gaiacpp/gaia-agent.yaml'
       - 'cpp/agents/gaiacpp/main.cpp'
       - 'cpp/agents/gaiacpp/stdio_server.cpp'
       - 'cpp/src/model_registry.cpp'
@@ -130,6 +131,7 @@ on:
       - '.github/dependabot.yml'
       # C++ files the gaiacpp release, model-table, hidden-text and CI-coverage tests read.
       - 'cpp/CMakeLists.txt'
+      - 'cpp/agents/gaiacpp/gaia-agent.yaml'
       - 'cpp/agents/gaiacpp/main.cpp'
       - 'cpp/agents/gaiacpp/stdio_server.cpp'
       - 'cpp/src/model_registry.cpp'

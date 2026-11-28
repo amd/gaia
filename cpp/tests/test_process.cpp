@@ -824,6 +824,22 @@ TEST_F(ShellSessionTest, CommandsRunWhenTheTempFolderNameHoldsAnAmpersand) {
     }
 }
 
+#ifdef _WIN32
+TEST_F(ShellSessionTest, AFolderGitBashRenamesIsReportedByItsWindowsPath) {
+    for (const std::string& shell : sessionShells()) {
+        if (!posixSyntax(shell)) continue;
+        // Git Bash calls %TEMP% /tmp, which is no folder to Windows.
+        const fs::path base = freshDir("gaia-tmp-mount-");
+        fs::create_directories(base / "sub");
+        ShellSession session(base.u8string(), shell);
+        ASSERT_EQ(session.run("cd sub", 30000).exitCode, 0) << shell;
+        std::error_code ec;
+        EXPECT_TRUE(fs::is_directory(fs::u8path(session.cwd()), ec)) << shell << ": " << session.cwd();
+        EXPECT_TRUE(fs::equivalent(fs::u8path(session.cwd()), base / "sub", ec)) << shell << ": " << session.cwd();
+    }
+}
+#endif
+
 TEST_F(ShellSessionTest, CommandsRunInFoldersWithNonAsciiNames) {
     for (const std::string& shell : sessionShells()) {
         const fs::path base = freshDir("gaia-utf8-");

@@ -122,7 +122,7 @@ void GaiaAgent::registerTools() {
         // Such a read runs without a card, and its `cd` to an attached file's folder isn't refused.
         const auto proven = [check = readStaysInside](const json& args) { return check(args.value("command", "")); };
         ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
-                                              !BashTools::detectShell().empty(), proven);
+                                              !BashTools::detectShell().empty(), proven, shellFolder);
         // A command approved unread (a script, an interpreter) can leave the shell outside the folders.
         ToolCallback runShell = std::move(sh.callback);
         sh.callback = [ws, shell, runShell](const json& args) -> json {
@@ -184,7 +184,8 @@ void GaiaAgent::registerTools() {
                 if (!askPathAccess_(asked)) {
                     return "Refused: the user did not allow GAIA to use " + asked +
                            ". Don't ask again or reach it another way this turn. Tell the user what you "
-                           "could not do without it.";
+                           "could not do without it. That no is for this turn only: if the user asks for it "
+                           "again in a later message, try again so they can be asked.";
                 }
                 ws->addRoot(asked);
                 std::lock_guard<std::mutex> lock(turnListingMu_);
@@ -201,7 +202,8 @@ void GaiaAgent::registerTools() {
                 if (!beside.empty()) why = openOutside([&] { return ws->judgePath(beside); });
                 if (why.empty()) {
                     why = openOutside([&] {
-                        return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty());
+                        return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty(),
+                                                shellFolder ? shellFolder() : "");
                     });
                 }
                 // What the command reaches once the shell has expanded and resolved its words.
@@ -369,13 +371,13 @@ void GaiaAgent::setPathAccessPrompt(std::function<bool(const std::string& path)>
 }
 
 std::string GaiaAgent::getSystemPrompt() const {
-    return R"(You are GAIA, an AI agent running locally on the user's PC. You do real work for the user: you read and write files, analyze documents and data, write and fix code, and run programs. You work in the current directory unless the user names another place.
+    return R"(You are GAIA, an AI agent running locally on the user's PC. You do real work for the user: you read and write files, analyze documents and data, write and fix code, and run programs. You work in the current directory unless the user names another place. You also talk and write for the user: a question, an explanation, an essay, a poem or a draft of any length is answered in your reply, with no tool, when nothing has to be read or saved.
 
 ## How to work
 1. Look before you answer. If the request names files or a folder, list and read them first. Never say a file or fact does not exist without checking.
 2. Use tools to do the work, not to describe it. A request to create, fix, convert or save a file is done only when the file exists on disk; write it with file_write or a program, then confirm it is there. Writing for the user to read (a story, poem, essay, letter or explanation) goes in your reply, not in a file, unless they ask for a file or name a place to save it.
 3. For formats you cannot read as text (PDF, Word, Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with pypdf/pdfplumber, python-docx, openpyxl/pandas or python-pptx, or pdftotext. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
-4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source.
+4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source. A sum the user states outright, with no file or data behind it (17 times 23), is not data work: answer it yourself, with no tool.
 5. Verify. After a change, re-read the file, run the test or the program, and look at the output.
 6. Keep going until the task is finished or you are truly blocked, then answer.
 
@@ -445,6 +447,17 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
 }
 
 namespace {
+// The user's profile folder, "" when the environment names none.
+std::string userHomeFolder() {
+#ifdef _WIN32
+    // Read wide: the narrow environment is in the code page, not UTF-8.
+    const wchar_t* profile = _wgetenv(L"USERPROFILE");
+    return profile ? fs::path(profile).u8string() : std::string();
+#else
+    return getEnvVar("HOME");
+#endif
+}
+
 // What is in `dir`, two levels deep, for the prompt. Empty for the home folder
 // or a drive root: those names are the user's business until they ask.
 std::string folderListing(const fs::path& dir) {
@@ -653,6 +666,11 @@ std::string GaiaAgent::systemContext() const {
     std::error_code ec;
     // UTF-8, not the code page: the prompt goes into a JSON request body.
     out << "- Working directory: " << fs::current_path(ec).u8string() << "\n";
+    if (const std::string home = userHomeFolder(); !home.empty()) {
+        out << "- The user's own folders (Documents, Desktop, Downloads) are under " << home
+            << ". When the user names one of them, use its full path there, not the working directory, even "
+               "when that has a similar name.\n";
+    }
     // A small model guesses at file names and concludes a file is missing; this shows it what is there.
     std::optional<std::string> listing;
     {
@@ -678,6 +696,10 @@ std::string GaiaAgent::systemContext() const {
         out << "- Folders you may use:";
         if (options_.workspaceRoots.empty()) out << " " << fs::current_path(ec).u8string();
         for (const auto& r : options_.workspaceRoots) out << " " << r;
+        {
+            std::lock_guard<std::mutex> lock(turnListingMu_);
+            for (const auto& opened : openedFolders_) out << " " << opened << " (the user allowed it in this chat)";
+        }
         out << ". Tools refuse other locations, so don't search the whole disk or the home "
                "folder. If a file the user needs isn't in these folders, say so.\n";
     }
@@ -2772,6 +2794,11 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         if (path.is_absolute()) return fs::exists(path, ec) ? std::optional<fs::path>(path) : std::nullopt;
         const std::string name = path.filename().string();
         for (const auto& root : roots) {
+            // A file the user allowed by itself is its own root.
+            if (root.filename() == path.filename() && fs::is_regular_file(root, ec) &&
+                (!path.has_parent_path() || fs::equivalent(fs::current_path(ec) / path, root, ec))) {
+                return root;
+            }
             if (fs::exists(root / path, ec)) return root / path;
             fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
             int budget = 20000;

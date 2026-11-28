@@ -462,6 +462,9 @@ class _StubConsole:
     silence_final_answer = False
     auto_approve_gated_tools = None
 
+    def unattended_denial(self):
+        return None
+
 
 class _StubAgent:
     """Records its config and returns whatever the test sets as the result."""
@@ -1788,6 +1791,88 @@ def test_a_refusal_that_is_the_answer_prints_once(stub_env, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.count(refusal) == 1
+
+
+class _GatedToolAgent(_StubAgent):
+    """Asks its real console for write_file, then answers as if it had coped."""
+
+    def __init__(self, config):
+        from gaia.agents.base.console import SilentConsole
+
+        super().__init__(config)
+        self.console = SilentConsole()
+
+    def process_query(self, text):
+        self.queries.append(text)
+        self.approved = self.console.confirm_tool_execution(
+            "write_file", {"file_path": "p_out.txt", "content": "hello"}
+        )
+        self.told_model = self.console.confirmation_denied_reason("write_file")
+        return {"status": "success", "result": f"I could not: {self.told_model}"}
+
+
+@pytest.fixture
+def gated_env(stub_env, monkeypatch):
+    sys.modules["gaiapy.agent"].GaiaAgent = _GatedToolAgent
+    monkeypatch.setattr(
+        "gaia.agents.base.console.auto_approve_env_enabled", lambda: False
+    )
+    monkeypatch.setattr(
+        "gaia.agents.base.console.terminal_is_interactive", lambda: False
+    )
+    return stub_env
+
+
+def test_an_unapprovable_tool_tells_the_model_the_p_flag(gated_env):
+    print_mode.run("Create p_out.txt", model="m", output_format="json")
+    agent = _agent()
+    assert agent.approved is False
+    assert "--dangerously-skip-permissions" in agent.told_model
+    assert "GAIA_AUTO_APPROVE_TOOLS" not in agent.told_model
+
+
+def test_an_unapprovable_tool_fails_the_turn_naming_the_flag(gated_env, capsys):
+    from gaia.agents.base.console import cli_refusal_message
+
+    assert print_mode.run("Create p_out.txt", model="m", output_format="json") == 1
+    out, err = capsys.readouterr()
+    record = json.loads(out)
+    refusal = cli_refusal_message("write_file")
+    assert record["is_error"] is True and record["status"] == "error"
+    assert record["error"] == refusal and record["result"] == refusal
+    assert "--dangerously-skip-permissions" in err
+    assert "GAIA_AUTO_APPROVE_TOOLS" not in out + err
+
+
+def test_an_unapprovable_tool_prints_its_refusal_once_in_text_mode(gated_env, capsys):
+    from gaia.agents.base.console import cli_refusal_message
+
+    assert print_mode.run("Create p_out.txt", model="m") == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count(cli_refusal_message("write_file")) == 1
+
+
+def test_the_p_denial_is_logged_below_the_stderr_level(gated_env, caplog):
+    # The console handler prints WARNING and up; the refusal line already says it.
+    with caplog.at_level("INFO", logger="gaia.agents.base.console"):
+        print_mode.run("Create p_out.txt", model="m")
+    denials = [r for r in caplog.records if "Denied confirmation-gated" in r.message]
+    assert [r.levelname for r in denials] == ["INFO"]
+
+
+def test_skip_permissions_runs_the_gated_tool_and_succeeds(gated_env):
+    assert print_mode.run("Create p_out.txt", model="m", skip_permissions=True) == 0
+    assert _agent().approved is True
+
+
+def test_the_cli_refusal_for_a_path_names_full_access():
+    from gaia.agents.base.console import cli_refusal_message
+    from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+
+    refusal = cli_refusal_message(PATH_ACCESS_PROMPT_TOOL)
+    assert "--full-access" in refusal
+    assert "--dangerously-skip-permissions" not in refusal
 
 
 def test_json_error_record_carries_the_reason(stub_env, capsys):

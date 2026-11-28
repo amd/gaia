@@ -590,6 +590,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.focus = 0
 		}
+		// An unanswered question outranks the steps below it: they need its answer.
+		if q := m.rep.OpenQuestion(); q >= 0 && q < m.focus {
+			m.focus = q
+		}
 		if started, cmd, ok := m.autoStart(); ok {
 			return started, cmd
 		}
@@ -790,6 +794,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.Busy() {
 			return m, nil
 		}
+		if note := m.unansweredAbove(m.focus + 1); note != "" && m.rep.Blocked() {
+			m.note = note
+			return m, nil
+		}
 		// On a first run, enter is the one way forward: it starts the step.
 		if row, ok := m.focusedRow(); ok && row.FirstRun && row.Fix != FixNone {
 			return m.applyFix()
@@ -804,6 +812,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "f":
 		if m.Busy() {
+			return m, nil
+		}
+		if note := m.unansweredAbove(m.focus); note != "" {
+			m.note = note
 			return m, nil
 		}
 		return m.applyFix()
@@ -834,6 +846,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.quickFixCmd(row.Key, row.DeclineFix, startTimeout), m.spin.Tick)
 	}
 	return m, nil
+}
+
+// unansweredAbove is the line refusing a step while a row above index before
+// still asks a question, "" when none does. The step would run against a
+// server nobody chose; the choice stays the user's.
+func (m Model) unansweredAbove(before int) string {
+	q := m.rep.OpenQuestion()
+	if q < 0 || q >= before {
+		return ""
+	}
+	row := m.rep.Rows[q]
+	keys := "press g to " + row.DeclineFix.Label()
+	if row.Fix != FixNone {
+		keys = "press f to " + row.Fix.Label() + ", or g to " + row.DeclineFix.Label()
+	}
+	if q != m.focus {
+		keys = "move up to it, then " + keys
+	}
+	return fmt.Sprintf("Answer the %s row first: %s. The steps below depend on that choice.", row.Label, keys)
 }
 
 func (m Model) applyFix() (tea.Model, tea.Cmd) {

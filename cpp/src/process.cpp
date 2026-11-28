@@ -1089,7 +1089,13 @@ struct ShellSession::Impl {
             s << "__gaia_rc=$?\n";
             // awk's ENVIRON gives NUL-delimited records; `env` output cannot
             // be parsed unambiguously (see parseEnvRecordsNul).
-            s << "{ pwd; printf '%s\\n' " << posixQuote(kEnvMarker)
+#ifdef _WIN32
+            // Git Bash names some folders its own way (%TEMP% is /tmp); -W gives the Windows path.
+            const char* where = "{ pwd -W 2>/dev/null || pwd; }";
+#else
+            const char* where = "pwd";
+#endif
+            s << "{ " << where << "; printf '%s\\n' " << posixQuote(kEnvMarker)
               << "; awk 'BEGIN { for (k in ENVIRON) printf \"%s=%s%c\", k, "
                  "ENVIRON[k], 0 }'; } > "
               << posixQuote(genericPath(stateFile)) << " 2>/dev/null\n";
