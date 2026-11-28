@@ -1894,6 +1894,20 @@ TEST(GaiaAgentTest, FiguresFromADataFileWithNoProgramAreSentBack) {
         {"query_documents", {{"query", "total budget"}}}};
     EXPECT_FALSE(GaiaAgent::uncomputedFiguresNote("The total is $48,200.", indexedAndQueriedXlsx))
         << "native .xlsx indexing + query_documents should not push back to Python";
+    const std::vector<GaiaAgent::CallSeen> scopedXlsxQuery = {
+        {"index_document", {{"path", "budget.xlsx"}}},
+        {"query_documents", {{"query", "total"}, {"file", "budget.xlsx"}}}};
+    EXPECT_FALSE(GaiaAgent::uncomputedFiguresNote("The total is $48,200.", scopedXlsxQuery))
+        << "query_documents scoped to an .xlsx file should not push back to Python";
+    const std::vector<GaiaAgent::CallSeen> folderIndexedScopedXlsx = {
+        {"index_document", {{"path", "data/"}}},
+        {"query_documents", {{"query", "total"}, {"file", "budget.xlsx"}}}};
+    EXPECT_FALSE(GaiaAgent::uncomputedFiguresNote("The total is $48,200.", folderIndexedScopedXlsx))
+        << "folder-indexed .xlsx queried by file name should not push back to Python";
+    const std::vector<GaiaAgent::CallSeen> scopedCsvQuery = {
+        {"query_documents", {{"query", "total"}, {"file", "sales.csv"}}}};
+    EXPECT_TRUE(GaiaAgent::uncomputedFiguresNote("Total revenue was $1,234,500.", scopedCsvQuery))
+        << "CSV queried without computation should still push back";
     const std::vector<GaiaAgent::CallSeen> indexedOnlyXlsx = {
         {"index_document", {{"path", "budget.xlsx"}}}};
     EXPECT_TRUE(GaiaAgent::uncomputedFiguresNote("The total is $48,200.", indexedOnlyXlsx))

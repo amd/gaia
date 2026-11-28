@@ -2747,7 +2747,10 @@ std::optional<std::string> GaiaAgent::uncomputedFiguresNote(const std::string& a
         // A program that names a data file or a script ran, or the read itself totalled the file.
         if (c.name == "bash_execute" && std::regex_search(argsText(c), ranOnData)) return std::nullopt;
         if (c.name == "file_read" && c.output.find("\"summary\"") != std::string::npos) return std::nullopt;
-        if (c.name == "query_documents") queriedDocs = true;
+        if (c.name == "query_documents") {
+            queriedDocs = true;
+            if (std::regex_search(argsText(c), xlsxFile)) continue;
+        }
         if (c.name == "index_document" && std::regex_search(argsText(c), xlsxFile)) {
             indexedXlsx = true;
             continue;
