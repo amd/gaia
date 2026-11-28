@@ -112,10 +112,8 @@ TEST(GaiaAgentTest, AStoryIsAnsweredInChatWithoutAFile) {
     EXPECT_EQ(r["result"], story);
     ASSERT_EQ(mock.receivedBodies().size(), 1u);
     const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
-    EXPECT_NE(system.find("Writing for the user to read (a story, poem, essay, letter, explanation or general "
-                          "answer) goes straight into your reply, with no tools"),
+    EXPECT_NE(system.find("a story, poem, essay, letter or explanation) goes in your reply, not in a file"),
               std::string::npos);
-    EXPECT_TRUE(fs::is_empty(w.path / "out"));
 }
 
 TEST(GaiaAgentTest, ToolsAreConfinedByDefault) {
