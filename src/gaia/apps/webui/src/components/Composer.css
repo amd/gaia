@@ -389,6 +389,11 @@
     .composer-chip-memory .composer-chip-label { display: none; }
 }
 
+/* On a phone it is the eye alone, so the run mode beside it stays whole; a click still opens it. */
+@container composer-row (max-width: 400px) {
+    .composer-chip-memory > .lucide-chevron-down { display: none; }
+}
+
 /* Beside the Research chip it gives up that chip's width, so the model name keeps its room. */
 .composer-row-left:has(.composer-chip-research) .composer-chip-memory .composer-chip-label {
     max-width: 11.75rem;
