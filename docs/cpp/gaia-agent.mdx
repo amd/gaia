@@ -284,7 +284,7 @@ Set `GAIA_TURN_LOG` to a file path and every `-p` run also appends one JSON line
 
 Set `GAIA_STEP_LOG` to a file path to get one line per model call and tool call (with the call's arguments, shortened to 300 characters, so treat the file like the commands it records), written as each one finishes. A run that is killed or times out before the turn ends still leaves those lines, and a failed model call is recorded with its error. A helper's model and tool calls are written too, each with a `helper` number, and a `helper` line records how each one ended.
 
-With `-p` and no prompt argument, the prompt is read from stdin until it closes.
+With `-p` and no prompt argument, the prompt is read from stdin until it closes. Pass `--` before a flag-shaped prompt (such as `--help`), and pass either an inline prompt or `--prompt-file`, not both.
 
 ## MCP server mode
 
