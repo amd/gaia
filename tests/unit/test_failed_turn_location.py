@@ -50,10 +50,12 @@ def registry(tmp_path, monkeypatch):
     return registry
 
 
-def _saved_location(monkeypatch, registry, model: str):
+def _saved_location(monkeypatch, registry, model: str, route: dict | None = None):
     """The location recorded on a relayed turn that failed before replying."""
 
     def fail_before_replying(sse_handler, *_args, **_kwargs):
+        if route is not None:
+            sse_handler.relayed_route = route
         sse_handler.print_error(NOT_CONNECTED)
 
     async def no_title(**_kwargs):
@@ -89,3 +91,25 @@ def test_a_cloud_turn_that_failed_is_saved_as_remote(monkeypatch, registry):
 def test_a_local_turn_that_failed_is_saved_as_local(monkeypatch, registry):
     where = _saved_location(monkeypatch, registry, "Gemma-4-E4B-it-GGUF")
     assert where is not None and where["remote"] is False
+
+
+def test_a_hybrid_turn_that_routed_to_the_cloud_and_failed_is_saved_as_remote(
+    monkeypatch, registry
+):
+    import gaia.llm.hybrid as hybrid
+
+    real_start = hybrid.start_model
+    monkeypatch.setattr(
+        hybrid,
+        "start_model",
+        lambda m, config=None: (
+            "Gemma-4-E4B-it-GGUF" if hybrid.is_hybrid_model(m) else real_start(m)
+        ),
+    )
+    where = _saved_location(
+        monkeypatch,
+        registry,
+        "hybrid",
+        route={"model": "fireworks.deepseek-v4p1-flash"},
+    )
+    assert where is not None and where["remote"] is True

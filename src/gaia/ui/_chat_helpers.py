@@ -6100,7 +6100,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     result_holder.get("agent"),
                     request.message,
                     None,
-                    relayed_location=_turn_location(model_id) if model_id else None,
+                    relayed_location=(
+                        _turn_location(
+                            _ran_on(
+                                model_id,
+                                result_holder.get("route")
+                                or _turn_route(result_holder.get("result")),
+                                result_holder.get("agent"),
+                            )
+                        )
+                        if model_id
+                        else None
+                    ),
                 )
                 # No reply text: spending leaves this turn out.
                 spending.mark_no_reply(turn_summary)
