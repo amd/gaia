@@ -744,11 +744,15 @@ void GaiaAgent::prepareTurnMessages(std::vector<Message>& userMessages) {
                 "Research needs web search and page reading, and this agent has no " + list +
                 " tool. Start a regular GAIA chat to research a topic.");
         }
-        if (skills_) {
-            skills_->refresh();
-            if (skills_->skills().count("research-report") > 0 && !skills_->isLoaded("research-report")) {
-                skills_->loadSkill("research-report");
-            }
+        if (!skills_) {
+            throw std::runtime_error(
+                "Research needs the research-report skill, and skills are off for this run (--no-skills).");
+        }
+        skills_->refresh();
+        if (!skills_->isLoaded("research-report") && !skills_->loadSkill("research-report")) {
+            throw std::runtime_error(
+                "Research needs the research-report skill, and it could not be loaded. "
+                "Install it with `gaia skill install research-report`.");
         }
         turnResearchBrief_ =
             "\n\n## Research mode\n"

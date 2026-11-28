@@ -3351,4 +3351,20 @@ TEST(GaiaAgentTest, ResearchCommandRewritesMessageLoadsSkillAndClearsAfterTurn) 
     noWeb.webOff = true;
     GaiaAgent offlineAgent(cfgFor(mock), noWeb);
     EXPECT_THROW(offlineAgent.processQuery("/research RISC-V"), std::runtime_error);
+
+    // Skills off (--no-skills) must fail loudly instead of running without the research-report skill.
+    GaiaAgent::Options noSkills = optionsFor(w);
+    noSkills.webTools = true;
+    noSkills.skills = false;
+    GaiaAgent noSkillsAgent(cfgFor(mock), noSkills);
+    EXPECT_THROW(noSkillsAgent.processQuery("/research RISC-V"), std::runtime_error);
+
+    // Missing research-report skill must also fail loudly instead of silently proceeding.
+    Workdir emptyHome;
+    putHome(emptyHome.path.u8string());
+    GaiaAgent::Options missingSkillOpts = optionsFor(w);
+    missingSkillOpts.webTools = true;
+    missingSkillOpts.skills = true;
+    GaiaAgent missingSkillAgent(cfgFor(mock), missingSkillOpts);
+    EXPECT_THROW(missingSkillAgent.processQuery("/research RISC-V"), std::runtime_error);
 }

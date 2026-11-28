@@ -721,7 +721,7 @@ json WebTools::doWebSearch(const json& args) {
         cfg.connectTimeoutSec = 15;
         if (!checkedAddress.empty()) cfg.hostAddresses[host] = checkedAddress;
         cfg.defaultHeaders = {
-            {"User-Agent", "GAIA-Agent/0.15 (https://github.com/amd/gaia)"},
+            {"User-Agent", "GAIA-Agent (https://github.com/amd/gaia)"},
             {"Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
             {"Accept-Language", "en-US,en;q=0.5"},
         };

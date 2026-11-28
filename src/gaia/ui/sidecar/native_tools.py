@@ -29,6 +29,7 @@ _TWINS: Dict[str, Tuple[str, Dict[str, str]]] = {
         },
     ),
     "web_fetch": ("fetch_page", {}),
+    # Fallback rename in case a model emits max_results instead of num_results.
     "web_search": ("search_web", {"max_results": "num_results"}),
     "transcribe_audio": ("transcribe_media", {"path": "file_path"}),
     "search_code": ("search_code_index", {}),
