@@ -670,6 +670,7 @@ export const enMessages = {
     'modelMenu.addFromLinkNote': 'Any GGUF chat model on Hugging Face',
     'modelMenu.providers': 'Providers and keys…',
     'modelMenu.downloadModel': 'Download {name}',
+    'modelMenu.aboutModel': 'About {name}',
     'modelMenu.ready': 'Ready',
     'media.showFull': 'Show full size',
     'media.showSmaller': 'Show smaller',
@@ -2129,6 +2130,7 @@ export const enMessages = {
     'settings.automations.cancel': 'Cancel',
     'settings.automations.removeTitle': 'Remove “{name}”?',
     'settings.automations.removeBody': 'GAIA stops running it. To get it back, ask GAIA in chat to set it up again.',
+    'settings.automations.removeBodyNative': 'GAIA stops running it. Fast and light can’t set it up again; switch to Full-featured under Agent & model to recreate it in chat.',
     'modelNeeded.dialog': 'Download a model',
     'modelNeeded.title.chat': 'Chatting needs a model',
     'modelNeeded.title.vision': 'Reading this image needs a vision model',
@@ -3168,6 +3170,9 @@ export const enMessages = {
     // The model chip's status icons
     'modelChip.notDownloaded': 'Not downloaded',
     'modelChip.switchFailed': 'Model switch failed',
+    'modelChip.next': 'next',
+    'modelChip.queuedTitle': '{model} is used from your next message.',
+    'modelChip.notDownloadedTitle': "{name} isn't downloaded yet. Open the list to download it.",
 
     // The update chip
 

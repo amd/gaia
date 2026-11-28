@@ -956,6 +956,20 @@ private:
         });
     }
 
+    // Plain-English action names for agent_ui unattended refusals, matching relay.py's labels.
+    static std::string unattendedActionLabel(const std::string& action) {
+        if (action == "file_write") return "Writing file";
+        if (action == "file_edit") return "Editing file";
+        if (action == "bash_execute") return "Running a shell command";
+        if (action == "web_fetch") return "Reading web page";
+        if (action == "take_screenshot") return "Taking screenshot";
+        if (action == "generate_image") return "Generating image";
+        if (action == kPathAccessPrompt) return "Accessing a folder or file";
+        std::string label = action;
+        std::replace(label.begin(), label.end(), '_', ' ');
+        return label.empty() ? "tool" : label;
+    }
+
     // The turn's last word when it stopped at a gated tool nobody could approve.
     static json unattendedRefusal(const Run& run) {
         const bool path = run.refusedAction == kPathAccessPrompt;
@@ -969,6 +983,13 @@ private:
                        "asking, or --full-access to also turn the shell guardrails off.";
             answer = "I stopped before running '" + run.refusedAction +
                      "' because it needs your approval, and gaia -p has nobody to ask. " + remedy;
+        } else if (run.surface == "agent_ui") {
+            // Worded as relay.py's _unattended_approval_text() words it for the Python agent.
+            answer = "GAIA stopped this unattended run at \"" + unattendedActionLabel(run.refusedAction) +
+                     "\": that step needs your approval, and nobody is there to give it. "
+                     "Unattended runs, such as scheduled tasks and autonomous goals, "
+                     "can't use steps that ask first, such as writing files or running commands. "
+                     "Ask GAIA in a chat instead, where you can approve it.";
         } else {
             answer = "I stopped before running '" + run.refusedAction +
                      "' because it needs your explicit approval, and this request has nobody to ask: it "
