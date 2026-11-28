@@ -1230,14 +1230,16 @@ bool hasLookupTarget(const std::string& request, const std::string& answer) {
         R"(|\b(?:read|open|check|inspect|search|list|summarize|summarise|total|sum|parse|load|scan|grep|find|edit|update|fix|delete|remove|show)\s+(?:[\w-]+\s+){0,2}?the\s+(?:[\w-]+\s+){0,2}?(?:files?|documents?|docs?|spreadsheets?|sheets?|reports?|notes?|logs?|configs?|configurations?|scripts?|datasets?|tables?|invoices?|receipts?|contracts?|leases?|budgets?|resumes?|csvs?|pdfs?)\b)"
         R"(|\b(?:my|the|this|installed|available|loaded|gaia)\s+skills?\b|\b(?:list|load|run|use)\s+(?:the\s+)?(?:[\w-]+\s+)?skills?\b|\bskills?\s+(?:are\s+)?(?:installed|available|loaded)\b)"
         R"(|\b(?:do\s+you\s+remember|what\s+do\s+you\s+remember|did\s+i\s+(?:tell|ask)\s+you\s+to\s+remember|saved\s+in\s+memory|in\s+(?:your|my)\s+memory|memory\s+store|recall)\b)"
-        R"(|\bmcp\b)",
+        R"(|\bmcp\b)"
+        R"(|\ba\s+file\s+(?:called|named)\b|\bin\s+here\b|\bwhere\s+(?:is|are)\s+my\b)",
         std::regex::icase);
     if (std::regex_search(request, requestTarget)) return true;
 
-    // Even on a brief request, claiming absence inside the user's local folder/workspace needs a check.
+    // Even on a brief request, claiming absence in the user's folder, or of the user's own things, needs a check.
     static const std::regex localAbsence(
         R"(\b(?:in|under|inside|from)\s+(?:the|this|your|our)\s+(?:working\s+|current\s+|project\s+)?(?:folder|directory|workspace|repo(?:sitory)?|project)\b)"
-        R"(|\b(?:the|this|your)\s+(?:working\s+|current\s+)?(?:folder|directory|workspace)\s+(?:does(?:n't| not)\s+(?:have|contain)|has\s+no|is\s+empty)\b)",
+        R"(|\b(?:the|this|your)\s+(?:working\s+|current\s+)?(?:folder|directory|workspace)\s+(?:does(?:n't| not)\s+(?:have|contain)|has\s+no|is\s+empty)\b)"
+        R"(|\bcould(?:n't| not)\s+find\s+(?:any\s+)?(?:of\s+)?your\b)",
         std::regex::icase);
     return std::regex_search(answer, localAbsence);
 }

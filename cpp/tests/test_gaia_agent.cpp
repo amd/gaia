@@ -2574,6 +2574,9 @@ TEST(GaiaAgentTest, UnlookedWorkspaceAbsenceIsStillSentBack) {
              {"Fetch https://example.com/status", "That page was not found."},
              {"What is the early termination fee?", "I couldn't find an early termination fee in your folder."},
              {"Open the invoice and sum the totals.", "The invoice is missing."},
+             {"Is there a file called todo in here?", "No, it doesn't exist."},
+             {"Where are my tax returns?", "I couldn't find them."},
+             {"Any luck?", "I couldn't find your tax returns."},
          }) {
         Workdir w;
         bench::MockLlmServer mock;
