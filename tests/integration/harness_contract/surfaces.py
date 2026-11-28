@@ -37,6 +37,8 @@ INSTALLED_GAIA = [
 
 #: The tool each harness writes a file with, and the argument naming the file.
 WRITE_TOOL = {"gaiapy": ("write_file", "file_path"), "gaiacpp": ("file_write", "path")}
+#: The tool each harness withholds for ``--no-web``.
+WEB_TOOL = {"gaiapy": "search_web", "gaiacpp": "web_fetch"}
 
 #: How long one turn may take against a model server that answers at once.
 TURN_TIMEOUT_S = 60

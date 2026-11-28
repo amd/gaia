@@ -36,6 +36,8 @@ import pytest
 
 from tests.integration.harness_contract.surfaces import (
     SURFACES,
+    WEB_TOOL,
+    WRITE_TOOL,
     StdioAgent,
     Turn,
     ask_cli,
@@ -74,14 +76,6 @@ ANSWER = "Hello from the fake model server"
 #: between the two by which is loaded, so for it either is right.
 MODEL_SENT = {"ui": None, "cli": LAST_MODEL, "stdio": SAVED_MODEL}
 
-#: The flags `gaia -p` hands to a run on the background service.
-RUN_FLAGS = (
-    "--dangerously-skip-permissions",
-    "--time-limit",
-    "--no-web",
-    "--disallowed-tools",
-)
-
 
 @dataclass(frozen=True)
 class Difference:
@@ -99,14 +93,6 @@ class Difference:
 #: Every difference the tests below allow. One the docs don't state is a bug:
 #: add it here only with the sentence that documents it.
 EXPECTED_DIFFERENCES = (
-    Difference(
-        "print_flags",
-        "cli",
-        "gaiacpp",
-        "refuses the run-scoped flags before the run starts, naming them",
-        "docs/reference/cli.mdx",
-        "is `gaiacpp`, or the installed agent predates these flags, `gaia -p` refuses",
-    ),
     Difference(
         "restart",
         "stdio",
@@ -376,7 +362,7 @@ def test_write_outside_folder_asks_for_the_folder(world, ask, surface, answer):
 
 
 def test_print_flags_take_effect_through_the_daemon(world):
-    """#8495: `gaia -p` flags reach the agent the service runs, or the run is refused."""
+    """#8495: `gaia -p` flags reach the agent the service runs, on either agent."""
     target = world.work / "flagged.txt"
     said = _marker("write-inside")
     world.play(
@@ -389,40 +375,26 @@ def test_print_flags_take_effect_through_the_daemon(world):
             {"when": "slow-answer", "then": "Too late.", "delay": 8},
         ]
     )
-    since = _settle(world)
-    if difference("print_flags", "cli", world.harness):
-        turn = ask_cli(
-            world,
-            f"{said} please",
-            "--dangerously-skip-permissions",
-            "--no-web",
-            *("--time-limit", "30"),
-            *("--disallowed-tools", "web_fetch"),
-        )
-        assert turn.exit_code == 1
-        missing = [flag for flag in RUN_FLAGS if flag not in turn.error]
-        assert not missing, f"the refusal does not name {missing}: {turn.error}"
-        assert "gaia config set flagship_agent gaiapy" in turn.error
-        assert not world.chats(since), "the run was refused, yet the model was asked"
-        assert not target.exists()
-        return
+    _settle(world)
 
     allowed = ask_cli(
         world, f"{said} please", "--dangerously-skip-permissions", "--no-web"
     )
     assert allowed.exit_code == 0, allowed.said
     assert target.read_text(encoding="utf-8") == "written"
-    assert "search_web" in allowed.record.get("withheld_tools", []), allowed.record
+    web_tool = WEB_TOOL[world.harness]
+    assert web_tool in allowed.record.get("withheld_tools", []), allowed.record
 
     target.unlink()
+    write_tool = WRITE_TOOL[world.harness][0]
     withheld = ask_cli(
         world,
         f"{said} again",
         "--dangerously-skip-permissions",
-        *("--disallowed-tools", "write_file"),
+        *("--disallowed-tools", write_tool),
     )
-    assert not target.exists(), "write_file ran although --disallowed-tools named it"
-    assert "write_file" in withheld.record.get("withheld_tools", []), withheld.record
+    assert not target.exists(), f"{write_tool} ran although --disallowed-tools named it"
+    assert write_tool in withheld.record.get("withheld_tools", []), withheld.record
 
     limited = ask_cli(world, "slow-answer please", "--time-limit", "2")
     assert limited.exit_code != 0 and "Too late." not in limited.answer, limited.record

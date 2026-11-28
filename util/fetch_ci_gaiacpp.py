@@ -36,7 +36,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 API = "https://api.github.com"
 WORKFLOW = "build_agents.yml"
@@ -119,9 +119,10 @@ def _json(url: str, token: str) -> dict:
         return json.load(reply)
 
 
-def latest_green_run(repo: str, branch: str, token: str) -> dict:
+def green_runs(repo: str, branch: str, token: str, count: int = 10) -> List[dict]:
+    """The last *count* successful push runs on *branch*, newest first."""
     query = urllib.parse.urlencode(
-        {"branch": branch, "event": "push", "status": "success", "per_page": 1}
+        {"branch": branch, "event": "push", "status": "success", "per_page": count}
     )
     runs = _json(
         f"{API}/repos/{repo}/actions/workflows/{WORKFLOW}/runs?{query}", token
@@ -132,23 +133,38 @@ def latest_green_run(repo: str, branch: str, token: str) -> dict:
             f"is no gaiacpp to fetch. Dispatch {WORKFLOW} on {branch} and run this "
             "again."
         )
-    return runs[0]
+    return runs
 
 
-def _artifact_zip(repo: str, run: dict, name: str, token: str) -> bytes:
+def _live_artifact(repo: str, run: dict, name: str, token: str) -> Optional[dict]:
     listing = _json(
         f"{API}/repos/{repo}/actions/runs/{run['id']}/artifacts?"
         + urllib.parse.urlencode({"name": name}),
         token,
     )
     live = [a for a in listing.get("artifacts", []) if not a.get("expired")]
-    if not live:
-        raise FetchError(
-            f"run {run['id']} of {WORKFLOW} has no {name} artifact left (they "
-            f"expire). Dispatch {WORKFLOW} on main and run this again."
-        )
+    return live[0] if live else None
+
+
+def newest_with_artifact(
+    repo: str, branch: str, name: str, token: str
+) -> Tuple[dict, dict]:
+    """The newest green run that still keeps *name*, and that artifact."""
+    runs = green_runs(repo, branch, token)
+    for run in runs:
+        artifact = _live_artifact(repo, run, name, token)
+        if artifact:
+            return run, artifact
+    raise FetchError(
+        f"none of the last {len(runs)} green {WORKFLOW} runs on {branch} keeps a "
+        f"{name} artifact (they expire). Dispatch {WORKFLOW} on {branch} and run "
+        "this again."
+    )
+
+
+def _artifact_zip(artifact: dict, name: str, token: str) -> bytes:
     # The download is a redirect to storage that refuses GitHub's token.
-    redirect = _get(live[0]["archive_download_url"], token, follow=False)
+    redirect = _get(artifact["archive_download_url"], token, follow=False)
     location = redirect.headers.get("Location")
     if not location:
         raise FetchError(
@@ -163,10 +179,10 @@ def _artifact_zip(repo: str, run: dict, name: str, token: str) -> bytes:
 
 def fetch(out: Path, platform_id: str, repo: str, branch: str = "main") -> Path:
     token = _token()
-    run = latest_green_run(repo, branch, token)
     artifact = f"cpp-agents-{platform_id}"
+    run, found = newest_with_artifact(repo, branch, artifact, token)
     member = f"gaia/{packaged_name(platform_id)}"
-    with zipfile.ZipFile(io.BytesIO(_artifact_zip(repo, run, artifact, token))) as zf:
+    with zipfile.ZipFile(io.BytesIO(_artifact_zip(found, artifact, token))) as zf:
         if member not in zf.namelist():
             raise FetchError(
                 f"run {run['id']}'s {artifact} artifact has no {member}; it holds "

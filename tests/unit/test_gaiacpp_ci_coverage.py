@@ -291,3 +291,31 @@ def test_the_fetched_gaiacpp_is_the_one_build_agents_packages(fetch):
         assert manifest["cpp"]["binaries"][platform_id] == fetch.packaged_name(
             platform_id
         )
+
+
+def test_an_expired_artifact_on_the_newest_run_falls_back_to_an_older_run(
+    fetch, monkeypatch
+):
+    runs = [{"id": 3}, {"id": 2}, {"id": 1}]
+    listings = {
+        3: [{"expired": True, "archive_download_url": "u3"}],
+        2: [],
+        1: [{"expired": False, "archive_download_url": "u1"}],
+    }
+
+    def fake_json(url, token):
+        if "/workflows/" in url:
+            assert "per_page=10" in url
+            return {"workflow_runs": runs}
+        run_id = int(url.split("/runs/")[1].split("/")[0])
+        return {"artifacts": listings[run_id]}
+
+    monkeypatch.setattr(fetch, "_json", fake_json)
+    run, artifact = fetch.newest_with_artifact(
+        "amd/gaia", "main", "cpp-agents-linux-x64", "t"
+    )
+    assert run["id"] == 1 and artifact["archive_download_url"] == "u1"
+
+    listings[1] = []
+    with pytest.raises(fetch.FetchError, match="none of the last 3 green"):
+        fetch.newest_with_artifact("amd/gaia", "main", "cpp-agents-linux-x64", "t")
