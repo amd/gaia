@@ -819,6 +819,13 @@
     text-decoration: underline;
 }
 
+.skill-row-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 6px;
+}
+
+.skill-row-actions > button,
 .model-row > button,
 .skill-row > button {
     flex-shrink: 0;
