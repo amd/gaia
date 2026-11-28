@@ -365,11 +365,11 @@ describe('TurnChanges on gaiacpp', () => {
         expect(asked).not.toHaveBeenCalled();
     });
 
-    it('counts only write and shell tools that ran', () => {
+    it('counts only write and shell tools that ran and succeeded', () => {
         const step = (over: Partial<AgentStep>): AgentStep => ({ id: 1, type: 'tool', label: '', timestamp: 0, ...over } as AgentStep);
         expect(ranChangingTool([step({ tool: 'write_file', success: true })])).toBe(true);
-        expect(ranChangingTool([step({ tool: 'edit_file' })])).toBe(true);
-        expect(ranChangingTool([step({ tool: 'run_shell_command' })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'edit_file', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', success: true })])).toBe(true);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: touch a.txt', success: true })])).toBe(true);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: echo hi > a.txt', success: true })])).toBe(true);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: find . -delete', success: true })])).toBe(true);
@@ -380,12 +380,15 @@ describe('TurnChanges on gaiacpp', () => {
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: pwd', success: true })])).toBe(false);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: git status', success: true })])).toBe(false);
         expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: ls -la | head -n 5', success: true })])).toBe(false);
-        expect(ranChangingTool([step({ tool: 'read_file' })])).toBe(false);
-        expect(ranChangingTool([step({ tool: 'write_file', declined: true })])).toBe(false);
-        expect(ranChangingTool([step({ tool: 'write_file', refused: true })])).toBe(false);
-        expect(ranChangingTool([step({ tool: 'write_file', timedOut: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'read_file', success: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', active: false })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', active: true, success: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', declined: true, success: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', autoDeclined: true, success: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', refused: true, success: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'write_file', timedOut: true, success: true })])).toBe(false);
         expect(ranChangingTool([step({ tool: 'write_file', success: false })])).toBe(false);
-        expect(ranChangingTool([step({ type: 'status', label: 'write_file' })])).toBe(false);
+        expect(ranChangingTool([step({ type: 'status', label: 'write_file', success: true })])).toBe(false);
         expect(ranChangingTool(undefined)).toBe(false);
     });
 
