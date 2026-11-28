@@ -8,6 +8,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **`gaia -p` flags work on an installed GAIA (contract 2.32).** There the
+  turn runs on this sidecar, which had no way to take a time limit, a tool
+  restriction or a permission override, so `gaia -p` refused them and a
+  headless run could not write a file at all. `/query` now takes
+  `time_limit`, `disallowed_tools`, `no_web`, `no_skills`, `skip_permissions`
+  and `full_access` for a one-shot run: they are a `422` beside a
+  `session_id`, so no chat inherits them, and the permission fields need a
+  caller token. `final` adds `time_limit_reached` and `withheld_tools`. A
+  gated tool refused on a `surface: "cli"` run now names the flag that allows
+  it, not "a surface that supports confirmation".
+- **The same `gaia -p` flags work when the agent is `gaiacpp`.** Before, with
+  `flagship_agent` set to `gaiacpp`, `gaia -p` refused every one of them, and
+  its remedy (switch the setting to `gaiapy`) left the running agent on
+  `gaiacpp`, so the next run was refused again. `gaiacpp`'s `/query` now takes
+  the six fields with the same rules and `final` fields. It still reports
+  contract 2.27 and lists them on `/version` as `capabilities.one_shot_fields`,
+  which `gaia -p` reads. On `gaiacpp` the time limit stops the turn without
+  warning the model first, and an unmatched `disallowed_tools` glob is an
+  in-stream `error` of `status` 400.
 - **Running the program it just wrote counts as testing it.** An answer that
   said "tested" was sent back unless a test runner had run, so on work with
   no test suite the agent re-ran its program and the answer still ended with

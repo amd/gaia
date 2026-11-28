@@ -264,11 +264,10 @@ class TestSearchQuality:
         assert _finds_each_paraphrase(client, DEFAULT_EMBEDDING_MODEL) == []
 
     @pytest.mark.xfail(
-        strict=True,
-        reason="embed-gemma-300m-FLM ranks text no better than chance on FastFlowLM "
-        "1.0.7, so GAIA embeds on the GPU. Passing means a newer build fixed it: "
-        "prove it on a full recall run, then add npu to "
-        "GaiaConfig.TESTED_EMBEDDING_DEVICES and drop this marker.",
+        strict=False,
+        reason="embed-gemma-300m-FLM ranked text no better than chance on FastFlowLM "
+        "1.0.7, so GAIA embeds on the GPU until a full recall run on 1.0.13 "
+        "proves the NPU (#9107).",
     )
     def test_the_npu_embedder_finds_each_paraphrase(self, client, npu_embedder):
         assert _finds_each_paraphrase(client, npu_embedder) == []

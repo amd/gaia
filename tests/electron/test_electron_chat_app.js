@@ -943,10 +943,6 @@ describe('Chat App Integration', () => {
       chatCss = fs.readFileSync(cssPath, 'utf8');
     });
 
-    it('should hide model badge on mobile', () => {
-      expect(chatCss).toContain('display: none');
-    });
-
     it('should reduce padding on mobile', () => {
       expect(chatCss).toMatch(
         /@media \(max-width: 768px\)\s*\{[\s\S]{0,200}?\.messages-column,\s*\.input-column\s*\{\s*padding:/

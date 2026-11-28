@@ -222,6 +222,9 @@ class AgentSidecarManager:
         # comparing "is a re-ensure asking for a different mode than what's
         # already running" must compare against this, not a moving target.
         self.resolved_mode: Optional[str] = None
+        # True while the spawned program has no dev/user variant (gaiacpp), so a
+        # re-ensure's mode cannot conflict with it.
+        self.mode_agnostic = False
         # Per-session caller-auth token handed to the sidecar on spawn (#1706).
         # Generated once per manager instance; the proxy replays it as a bearer
         # token on every request. Delivered via a 0600 file (#2149).
@@ -375,6 +378,7 @@ class AgentSidecarManager:
             ) from e
         # A binary of its own: the dev-mode source launch does not apply to it.
         self.resolved_mode = "user"
+        self.mode_agnostic = True
         return [str(binary), "--host", self.host, "--port", str(port)], {}
 
     def build_spawn_command(self, *, port: int):
@@ -850,6 +854,7 @@ class AgentSidecarManager:
         # Captured once per spawn attempt sequence — NOT re-read from the live
         # (env-driven) `mode` property afterward.
         self.resolved_mode = self.mode
+        self.mode_agnostic = False
         last_exit_err: Optional[SidecarSpawnError] = None
         for attempt in range(1, max_attempts + 1):
             self.port = find_free_port(self.host)

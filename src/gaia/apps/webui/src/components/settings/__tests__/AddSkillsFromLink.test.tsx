@@ -35,11 +35,11 @@ beforeEach(() => {
     mockedApi.addSkillsFromLink.mockResolvedValue({ added: [{ name: 'deslop', updated: false, verdict: 'ALLOW', has_code: false, findings: [] }], failed: {} });
 });
 
-async function readLink() {
+async function readLink(first = 'deslop') {
     render(<AddSkillsFromLink onAdded={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Link to a skill or skills library'), { target: { value: LINK } });
     fireEvent.click(screen.getByRole('button', { name: 'Read' }));
-    await screen.findByText('deslop');
+    await screen.findByText(first);
 }
 
 describe('AddSkillsFromLink', () => {
@@ -136,9 +136,36 @@ describe('AddSkillsFromLink', () => {
         await screen.findByText('Reading…');
         expect(box).not.toBeDisabled();
         expect(box).toHaveFocus();
+        expect(box).toHaveAttribute('aria-busy', 'true');
+        // A paste while reading neither changes the link nor starts a second read.
+        fireEvent.paste(box, { clipboardData: { getData: () => 'owner/other' } });
+        expect(box).toHaveValue('owner/missing');
+        expect(mockedApi.previewSkillLink).toHaveBeenCalledTimes(1);
         fail(new Error('Nothing found at the link'));
         await screen.findByRole('alert');
         expect(box).toHaveFocus();
         expect(box).not.toHaveAttribute('readonly');
+        expect(box).toHaveAttribute('aria-busy', 'false');
+    });
+
+    it('lets you read a cut-off description before adding the skill', async () => {
+        const full = 'Draft a weekly meal plan from what is in the fridge, then list what is missing and group it by shop aisle.';
+        mockedApi.previewSkillLink.mockResolvedValue({
+            link: LINK, source: 'owner/library', pin: 'commit:abc', warning: 'w',
+            skills: [found('meal-planner', { description: full })],
+        });
+        const scroll = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(80);
+        const client = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(18);
+        await readLink('meal-planner');
+        const more = screen.getByRole('button', { name: 'Show more' });
+        fireEvent.click(more);
+        expect(screen.getByText(full).parentElement).toHaveClass('is-open');
+        expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
+        // Opening the text does not tick the skill's checkbox.
+        expect(screen.getByLabelText('Add meal-planner')).toBeChecked();
+        fireEvent.click(screen.getByText(full));
+        expect(screen.getByLabelText('Add meal-planner')).toBeChecked();
+        scroll.mockRestore();
+        client.mockRestore();
     });
 });

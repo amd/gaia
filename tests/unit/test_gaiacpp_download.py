@@ -645,3 +645,119 @@ def test_a_download_over_mobile_access_is_refused(client, release, tmp_path, hea
     assert r.status_code == 403
     assert not _target(tmp_path).exists()
     assert agent_programs._job["state"] == "idle"
+
+
+# ---------------------------------------------------------------- a copy from another release
+
+
+def _older_copy_on_path(tmp_path, monkeypatch, printed="0.26.0-rc.8"):
+    """A gaiacpp an older installer left on PATH: no download record beside it."""
+    old = tmp_path / "usr-local-bin" / fetch.native_flagship_executable_name()
+    old.parent.mkdir()
+    _place(old, b"an older release's gaiacpp")
+    monkeypatch.setattr(
+        fetch,
+        "native_flagship_candidates",
+        lambda: [_target(tmp_path), old],
+    )
+    monkeypatch.setattr(
+        fetch,
+        "native_flagship_stamp",
+        lambda path: printed if path == old else "0.26.1",
+    )
+    return old
+
+
+def test_a_gaiacpp_from_an_older_install_with_no_record_is_out_of_date(
+    client, release, tmp_path, monkeypatch
+):
+    """The rc8 .pkg's /usr/local/bin/gaiacpp under an rc10 app ran with no notice."""
+    old = _older_copy_on_path(tmp_path, monkeypatch)
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert gaiacpp["installed"] is True
+    assert gaiacpp["update_available"] is True and gaiacpp["can_download"] is True
+    assert gaiacpp["version"] == "0.26.0-rc.8"
+    assert gaiacpp["release_version"] == "0.26.1"
+
+    assert client.post("/api/agent-programs/gaiacpp/download").status_code == 202
+    assert _wait(client, {"done", "failed"})["state"] == "done"
+    # This release's copy lands in GAIA's bin dir, which is looked in first.
+    assert fetch.native_flagship() == _target(tmp_path)
+    assert old.read_bytes() == b"an older release's gaiacpp"
+    after = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert after["update_available"] is False and after["version"] == "0.26.1"
+
+
+def test_a_recordless_gaiacpp_of_this_release_is_not_flagged(
+    client, release, tmp_path, monkeypatch
+):
+    _older_copy_on_path(tmp_path, monkeypatch, printed="0.26.1")
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert gaiacpp["update_available"] is False and gaiacpp["can_download"] is False
+    assert client.post("/api/agent-programs/gaiacpp/download").status_code == 409
+
+
+def test_a_development_build_of_gaia_never_calls_gaiacpp_out_of_date(
+    tmp_path, monkeypatch
+):
+    """No release to compare with: the copy runs as it is, unflagged."""
+    old = _older_copy_on_path(tmp_path, monkeypatch)
+
+    def _dev(core=None):
+        raise PlatformError("GAIA 0.27.0.dev1 is a development build")
+
+    monkeypatch.setattr(gaiacpp_fetch, "release_tag", _dev)
+    assert gaiacpp_fetch.release_version() is None
+    assert gaiacpp_fetch.update_available(old) is False
+
+
+def test_a_build_named_by_the_environment_is_never_out_of_date(tmp_path, monkeypatch):
+    old = _older_copy_on_path(tmp_path, monkeypatch)
+    monkeypatch.setattr(gaiacpp_fetch, "release_tag", lambda core=None: "v0.26.1")
+    assert gaiacpp_fetch.update_available(old) is True
+    monkeypatch.setenv(fetch.NATIVE_FLAGSHIP_PATH_ENV, str(old))
+    assert gaiacpp_fetch.update_available(old) is False
+
+
+def test_the_version_a_copy_prints_is_asked_once_per_file(tmp_path, monkeypatch):
+    old = _older_copy_on_path(tmp_path, monkeypatch)
+    asked = []
+    monkeypatch.setattr(
+        fetch,
+        "native_flagship_stamp",
+        lambda path: asked.append(path) or "0.26.0-rc.8",
+    )
+    monkeypatch.setattr(gaiacpp_fetch, "release_tag", lambda core=None: "v0.26.1")
+    assert gaiacpp_fetch.update_available(old) is True
+    assert gaiacpp_fetch.update_available(old) is True
+    assert asked == [old]
+
+
+def test_a_copy_that_cannot_say_its_version_is_not_flagged(tmp_path, monkeypatch):
+    old = _older_copy_on_path(tmp_path, monkeypatch)
+
+    def _silent(path):
+        raise PlatformError(f"{path} --version did not print a version")
+
+    monkeypatch.setattr(fetch, "native_flagship_stamp", _silent)
+    monkeypatch.setattr(gaiacpp_fetch, "release_tag", lambda core=None: "v0.26.1")
+    assert gaiacpp_fetch.update_available(old) is False
+    assert agent_programs._installed_version(old) is None
+
+
+def test_a_copy_whose_version_fails_is_run_once_per_file(tmp_path, monkeypatch):
+    """A hung --version costs up to 20 s; a listing must not pay it twice."""
+    old = _older_copy_on_path(tmp_path, monkeypatch)
+    asked = []
+
+    def _silent(path):
+        asked.append(path)
+        raise PlatformError(f"{path} --version did not print a version")
+
+    monkeypatch.setattr(fetch, "native_flagship_stamp", _silent)
+    monkeypatch.setattr(gaiacpp_fetch, "release_tag", lambda core=None: "v0.26.1")
+    assert gaiacpp_fetch.update_available(old) is False
+    assert agent_programs._installed_version(old) is None
+    with pytest.raises(PlatformError, match="did not print a version"):
+        gaiacpp_fetch.installed_version(old)
+    assert asked == [old]

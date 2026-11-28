@@ -178,6 +178,9 @@ function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
     return words ? named(words, Wrench) : DEFAULT_TOOL_META;
 }
 
+/** Steps GAIA takes itself, not the model: their own label is in the UI's language, unlike a narration. */
+const GAIA_WRITTEN_TOOLS = new Set(['index_documents']);
+
 /** The fallback line for a tool row that arrived without a narration (older saved turns). */
 function toolFallbackLabel(step: AgentStep, t: Translate): string {
     const meta = getToolMeta(step.tool, step);
@@ -199,6 +202,7 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
     // GAIA writes this row itself, so it can say it in the UI's language.
     if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: visibleName(step.detail) });
+    if (GAIA_WRITTEN_TOOLS.has(step.tool ?? '')) return toolFallbackLabel(step, t);
     // A present-tense narration would read as if a call that never ran had run.
     if ((step.declined || step.timedOut || step.refused || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
     return step.narration ? compactNarration(markStrayDirection(step.narration)) : toolFallbackLabel(step, t);

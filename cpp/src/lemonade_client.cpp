@@ -243,7 +243,10 @@ LemonadeHealth LemonadeClient::healthCheck() {
         // the chat model, in any order: report this client's model when it is
         // loaded, else the server's current chat model.
         const json* entry = loadedModel(h.raw, model_);
-        if (!entry) entry = loadedModel(h.raw, h.raw.value("model_loaded", ""));
+        // Null until the server's first load.
+        if (!entry && h.raw.contains("model_loaded") && h.raw["model_loaded"].is_string()) {
+            entry = loadedModel(h.raw, h.raw["model_loaded"].get<std::string>());
+        }
         if (!entry && h.raw.contains("all_models_loaded") && h.raw["all_models_loaded"].is_array() &&
             !h.raw["all_models_loaded"].empty()) {
             entry = &h.raw["all_models_loaded"][0];
@@ -254,6 +257,11 @@ LemonadeHealth LemonadeClient::healthCheck() {
         }
     } catch (const json::exception&) {
         h.running = false;
+    } catch (const HttpError& e) {
+        h.running = false;
+        h.error = e.what();
+        h.errorStatus = e.status();
+        h.errorBody = e.body();
     } catch (const std::exception& e) {
         h.running = false;
         h.error = e.what();
@@ -604,6 +612,7 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
     if (!body.contains("stream_options")) body["stream_options"] = {{"include_usage", true}};
 
     SseParser parser(onToken);
+    if (reasoningCallback_) parser.setReasoningCallback(reasoningCallback_);
     std::string rawBytes;
 
     httpPostStreaming(
