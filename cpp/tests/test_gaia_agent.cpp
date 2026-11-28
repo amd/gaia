@@ -2596,3 +2596,51 @@ TEST(GaiaAgentTest, ShellAttemptOnIndexedPdfRedirectsToQueryDocumentsBeforeAskin
     const json second = agent.toolRegistry().executeTool("bash_execute", cmd);
     EXPECT_EQ(asked, 1) << second.dump();
 }
+
+TEST(GaiaAgentTest, IndexedPdfRedirectMatchesTheWholeFileNameOnly) {
+    Workdir w;
+    const fs::path pdf = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "northwind_annual_report.pdf";
+    ASSERT_TRUE(fs::exists(pdf)) << pdf;
+    fs::copy_file(pdf, w.path / "report.pdf");
+
+    bench::MockLlmServer mock;
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    ASSERT_NE(agent.documents(), nullptr);
+    ASSERT_GT(agent.documents()->indexFile((w.path / "report.pdf").string()), 0u);
+
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+    for (const char* other : {"annual_report.pdf", "report.pdf.bak", "old-report.pdf"}) {
+        const json cmd = {{"command", std::string("python3 -c \"print('") + other + "')\""}};
+        const json r = agent.toolRegistry().executeTool("bash_execute", cmd);
+        EXPECT_EQ(r.value("error", "").find("is already indexed"), std::string::npos) << other << ": " << r.dump();
+    }
+    EXPECT_EQ(asked, 3) << "a different file whose name contains report.pdf goes to approval, not the redirect";
+}
+
+TEST(GaiaAgentTest, PromptListsAtMostTwentyIndexedDocuments) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    ASSERT_NE(agent.documents(), nullptr);
+    for (int i = 0; i < 23; ++i) {
+        const fs::path f = w.path / ("note_" + std::to_string(100 + i) + ".txt");
+        std::ofstream(f) << "Note number " << i << " says the meeting is on day " << i << ".";
+        ASSERT_GT(agent.documents()->indexFile(f.string()), 0u);
+    }
+    agent.rebuildSystemPrompt();
+    agent.processQuery("hello");
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(system.find("and 3 more"), std::string::npos) << system;
+    const size_t start = system.find("- Indexed documents");
+    ASSERT_NE(start, std::string::npos) << system;
+    const std::string line = system.substr(start, system.find('\n', start) - start);
+    size_t listed = 0;
+    for (size_t at = line.find("note_1"); at != std::string::npos; at = line.find("note_1", at + 1)) ++listed;
+    EXPECT_EQ(listed, 20u) << line;
+}
