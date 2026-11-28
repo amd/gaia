@@ -125,6 +125,29 @@ describe('AddSkillsFromLink', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent('Nothing found at the link');
     });
 
+    it('keeps the cursor in the link box while it reads, so a wrong link can be fixed', async () => {
+        let fail: (e: Error) => void = () => {};
+        mockedApi.previewSkillLink.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+        render(<AddSkillsFromLink onAdded={vi.fn()} />);
+        const box = screen.getByLabelText('Link to a skill or skills library');
+        box.focus();
+        fireEvent.change(box, { target: { value: 'owner/missing' } });
+        fireEvent.submit(box.closest('form')!);
+        await screen.findByText('Reading…');
+        expect(box).not.toBeDisabled();
+        expect(box).toHaveFocus();
+        expect(box).toHaveAttribute('aria-busy', 'true');
+        // A paste while reading neither changes the link nor starts a second read.
+        fireEvent.paste(box, { clipboardData: { getData: () => 'owner/other' } });
+        expect(box).toHaveValue('owner/missing');
+        expect(mockedApi.previewSkillLink).toHaveBeenCalledTimes(1);
+        fail(new Error('Nothing found at the link'));
+        await screen.findByRole('alert');
+        expect(box).toHaveFocus();
+        expect(box).not.toHaveAttribute('readonly');
+        expect(box).toHaveAttribute('aria-busy', 'false');
+    });
+
     it('lets you read a cut-off description before adding the skill', async () => {
         const full = 'Draft a weekly meal plan from what is in the fridge, then list what is missing and group it by shop aisle.';
         mockedApi.previewSkillLink.mockResolvedValue({
