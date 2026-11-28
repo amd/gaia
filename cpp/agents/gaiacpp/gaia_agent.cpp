@@ -2800,8 +2800,9 @@ std::optional<std::string> GaiaAgent::unrunCommandNote(const std::string& reques
         R"(\s+(?:it|them)\b(?!\s+(?:by|past|through|over|into|out)\b)))",
         std::regex::icase);
     static const std::regex commandRequest(
-        R"(\b(?:run|execute|tests?|pytest|scripts?|commands?|builds?|lint(?:er)?|compile|migrations?)\b)"
-        R"(|`[^`\n]+`|[\w./\\~-]+\.(?:py|sh|bash|zsh|ps1|bat|cmd|js|ts|mjs|cjs|rb|pl|php|exe|out|sql)\b)",
+        R"(\b(?:run|execute|tests?|pytest|scripts?|commands?|builds?|lint(?:er)?|compil(?:e|es|ed|ing|ation)|migrations?)\b)"
+        R"(|`[^`\n]+`|[\w./\\~-]+\.(?:py|sh|bash|zsh|ps1|bat|cmd|js|jsx|ts|tsx|mjs|cjs|rb|pl|php|exe|out|sql|)"
+        R"(c|cc|cpp|cxx|h|hpp|go|rs|java|kt|cs|swift)\b)",
         std::regex::icase);
     static const std::regex negationOrConditional(
         R"(n't\b|\b(?:not|never|without|if|unless|would|could|should|might|before|once|suppose|imagine)\b)",

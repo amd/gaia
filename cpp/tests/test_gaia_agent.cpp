@@ -2601,6 +2601,8 @@ TEST(GaiaAgentTest, OrdinaryProseIRanIsNotACommandClaim) {
              {"Run the build", "I have run the build."},
              {"Run stats.py", "I ran it and got 42."},
              {"Run the migration", "Executed the migration script."},
+             {"Check whether main.c compiles", "I ran it and it compiled cleanly."},
+             {"Does main.go work?", "I ran it and it printed 42."},
          }) {
         Workdir w;
         bench::MockLlmServer mock;
