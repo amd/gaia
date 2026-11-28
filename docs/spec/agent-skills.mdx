@@ -622,7 +622,8 @@ Other models get them loadable by name but unlisted. Other `.claude/skills`
 imports (`claude-import`: `~/.claude/skills`, or a working directory that is
 not a known project) are loadable by name but not listed.
 
-A `claude-project` skill is parsed the way Claude Code parses it. One GAIA's
+A `claude-project` or `claude-import` skill is parsed the way Claude Code
+parses it, since it is Claude Code's file, not GAIA's. One GAIA's
 schema rejects still loads, with a warning naming the reason: its name is
 lowercased and hyphenated (`Deploy_Helper` → `deploy-helper`) and need not match
 its folder, a missing `description` is the body's first paragraph, the

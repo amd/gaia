@@ -132,10 +132,7 @@ def test_list_warns_on_a_broken_claude_import_without_failing(
     copy_fixture("bare-standard", skills_dir)
     broken = tmp_path / "fake-home" / ".claude" / "skills" / "theirs"
     broken.mkdir(parents=True)
-    (broken / "SKILL.md").write_text(
-        "---\nname: theirs\ndescription: x\nversion: '1.0'\n---\nbody\n",
-        encoding="utf-8",
-    )
+    (broken / "SKILL.md").write_text("---\nname: theirs\n---\n", encoding="utf-8")
 
     rc, out, err = run("list")
     assert rc == 0
