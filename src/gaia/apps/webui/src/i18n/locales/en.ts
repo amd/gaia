@@ -284,6 +284,7 @@ export const enMessages = {
     'composer.skillsTitle': 'Skills',
     'composer.skillsLoading': 'Loading skills…',
     'composer.skillsFailed': "Couldn't load your skills: {error}",
+    'skillMention.kind': 'Skill',
     'composer.attach': 'Attach files',
     'composer.queue': 'Queue message',
     'composer.queueTitle': 'Queue it to send when this reply ends (Enter)',

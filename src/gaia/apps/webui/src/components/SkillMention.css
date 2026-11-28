@@ -1,0 +1,54 @@
+/* A skill command, marked alike in the composer and in a sent message. */
+.skill-word {
+    color: var(--accent);
+    background: var(--accent-dim);
+    border-radius: 4px;
+}
+
+.skill-mention { cursor: default; }
+
+.skill-mention:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 1px;
+}
+
+.skill-tip {
+    position: fixed;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-inline-size: min(340px, calc(100vw - 16px));
+    padding-block: 8px;
+    padding-inline: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    color: var(--text-primary);
+    font-size: var(--fs-label);
+    line-height: 1.45;
+    pointer-events: none;
+}
+
+.skill-tip-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.skill-tip-kind { color: var(--text-muted); }
+
+.skill-tip-name {
+    font-weight: 500;
+    color: var(--accent);
+}
+
+/* Descriptions are written for models and run long. */
+.skill-tip-desc {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 5;
+    overflow: hidden;
+    color: var(--text-secondary);
+}

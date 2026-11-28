@@ -1,6 +1,9 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { installedSkills } from './installedSkills';
+import { findSkillCommand, namesASkill } from './skillCommand';
+
 /**
  * Research mode: a turn sent as `/research <topic>`.
  *
@@ -23,41 +26,26 @@ export function isResearchMessage(text: string): boolean {
     });
 }
 
-/** `/<name>` at the start, followed by space or the end: the shape the agent reads as a skill command, in any case. */
-const SKILL_COMMAND = /^\/((?:[a-z0-9]+(?:-[a-z0-9]+)*:)?[a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/i;
+type InstalledNames = ReadonlySet<string> | ReadonlyMap<string, unknown>;
 
-/** null until the list has been read: an unread list is not "no skills". */
-let installedSkills: ReadonlySet<string> | null = null;
-
-/** Record the installed skills, so research mode leaves their `/<name>` commands alone. */
-export function rememberInstalledSkills(names: Iterable<string>): void {
-    installedSkills = new Set(Array.from(names, (name) => name.toLowerCase()));
+/** *text* with the skill command it runs in the lowercase the agent reads; null when it names no installed skill. */
+function asSkillCommand(text: string, skills: InstalledNames): string | null {
+    const word = findSkillCommand(text, skills);
+    if (word === null) return null;
+    return `${text.slice(0, word.start)}/${word.name}${text.slice(word.end)}`;
 }
 
-/** Back to "not read yet", for tests. */
-export function forgetInstalledSkills(): void {
-    installedSkills = null;
-}
-
-/** *text* with its `/<name>` in the lowercase the agent reads, when *name* is an installed skill; else null. */
-function asSkillCommand(text: string, skills: ReadonlySet<string>): string | null {
-    const trimmed = text.trimStart();
-    const name = SKILL_COMMAND.exec(trimmed)?.[1];
-    if (name === undefined || !skills.has(name.toLowerCase())) return null;
-    return `/${name.toLowerCase()}${trimmed.slice(name.length + 1)}`;
-}
-
-/** True when *text* starts with `/<name>` and *name* is an installed skill. */
-export function isSkillCommand(text: string, skills: ReadonlySet<string>): boolean {
+/** True when *text* names an installed skill as `/<name>`, at the start or later on. */
+export function isSkillCommand(text: string, skills: InstalledNames): boolean {
     return asSkillCommand(text, skills) !== null;
 }
 
 /**
  * True when sending *text* has to read the installed skills first: research
- * mode is on, the text is shaped like a skill command, and the list is unread.
+ * mode is on, the text names something shaped like a skill, and the list is unread.
  */
 export function needsInstalledSkills(text: string, researchOn: boolean): boolean {
-    return researchOn && installedSkills === null && !isResearchMessage(text) && SKILL_COMMAND.test(text.trimStart());
+    return researchOn && installedSkills() === null && !isResearchMessage(text) && namesASkill(text);
 }
 
 /**
@@ -67,7 +55,7 @@ export function needsInstalledSkills(text: string, researchOn: boolean): boolean
 export function withResearchCommand(
     text: string,
     researchOn: boolean,
-    skills: ReadonlySet<string> = installedSkills ?? new Set(),
+    skills: InstalledNames = installedSkills() ?? new Set(),
 ): string {
     if (!researchOn || !text.trim() || isResearchMessage(text)) return text;
     return asSkillCommand(text, skills) ?? `${RESEARCH_COMMAND} ${text}`;

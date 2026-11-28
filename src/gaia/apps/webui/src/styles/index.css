@@ -349,7 +349,8 @@ a:hover { text-decoration: underline; }
     --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', 'Segoe UI', 'Noto Sans Arabic', 'Noto Naskh Arabic', Tahoma, monospace;
 }
 .md-content :is(.md-p, .md-li, .md-blockquote, td, th):dir(rtl),
-.composer-input:dir(rtl) {
+.composer-input:dir(rtl),
+.composer-mirror:dir(rtl) {
     line-height: 1.85;
 }
 

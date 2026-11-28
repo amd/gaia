@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import {
-    forgetInstalledSkills, isResearchMessage, isSkillCommand, needsInstalledSkills, rememberInstalledSkills, withResearchCommand,
-} from '../research';
+import type { SkillInfo } from '../../types';
+import { forgetInstalledSkills, rememberInstalledSkills } from '../installedSkills';
+import { isResearchMessage, isSkillCommand, needsInstalledSkills, withResearchCommand } from '../research';
+
+const skillList = (...names: string[]) => names.map((name) => ({ name, description: '' }) as SkillInfo);
 
 beforeEach(() => forgetInstalledSkills());
 
@@ -39,7 +41,7 @@ describe('research mode', () => {
         expect(withResearchCommand('/docx.txt notes', true, skills)).toBe('/research /docx.txt notes');
         expect(withResearchCommand('plain question', true, skills)).toBe('/research plain question');
         expect(withResearchCommand('/docx\nthe memo', true, skills)).toBe('/docx\nthe memo');
-        for (const text of ['/docx-pro memo','/docx/notes', 'see /docx memo']) {
+        for (const text of ['/docx-pro memo', '/docx/notes', 'see https://x.test/docx', 'and/docx']) {
             expect(withResearchCommand(text, true, skills)).toBe(`/research ${text}`);
         }
         expect(withResearchCommand('/docx memo', false, skills)).toBe('/docx memo');
@@ -48,13 +50,21 @@ describe('research mode', () => {
         expect(withResearchCommand('/garden-kit:plant-care my fern', true, plugin)).toBe('/garden-kit:plant-care my fern');
     });
 
+    it('leaves a message alone when it names an installed skill later on', () => {
+        const skills = new Set(['docx']);
+        expect(withResearchCommand('see /docx memo', true, skills)).toBe('see /docx memo');
+        expect(withResearchCommand('turn this into a memo with /DOCX.', true, skills)).toBe('turn this into a memo with /docx.');
+        expect(withResearchCommand('use /docs then /docx', true, skills)).toBe('use /docs then /docx');
+        expect(isSkillCommand('اكتب مذكرة بـ /docx؟', skills)).toBe(true);
+    });
+
     it('runs a skill typed in any case, sent in the lowercase the agent reads', () => {
         const skills = new Set(['docx', 'research-report']);
         expect(withResearchCommand('/Docx draft a memo', true, skills)).toBe('/docx draft a memo');
         expect(withResearchCommand('/DOCX', true, skills)).toBe('/docx');
         expect(withResearchCommand('/DOCX\nThe Memo', true, skills)).toBe('/docx\nThe Memo');
         expect(withResearchCommand('/Docs draft a memo', true, skills)).toBe('/research /Docs draft a memo');
-        rememberInstalledSkills(['Docx']);
+        rememberInstalledSkills(skillList('Docx'));
         expect(withResearchCommand('/docx memo', true)).toBe('/docx memo');
     });
 
@@ -65,6 +75,7 @@ describe('research mode', () => {
         expect(needsInstalledSkills('plain question', true)).toBe(false);
         expect(needsInstalledSkills('/tmp/notes.txt', true)).toBe(false);
         expect(needsInstalledSkills('/research jwst', true)).toBe(false);
+        expect(needsInstalledSkills('write it with /docx', true)).toBe(true);
         rememberInstalledSkills([]);
         expect(needsInstalledSkills('/docx draft a memo', true)).toBe(false);
     });

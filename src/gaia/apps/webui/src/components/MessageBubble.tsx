@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import React, { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState, useEffect, useMemo } from 'react';
-import type { Components } from 'react-markdown';
+import type { Components, Options as MarkdownOptions } from 'react-markdown';
 import { Copy, Check, AlertCircle, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
@@ -12,6 +12,10 @@ import temml from 'temml';
 import 'temml/dist/Temml-Local.css';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
+import { remarkSkillCommand } from '../utils/remarkSkillCommand';
+import { useInstalledSkills } from '../utils/installedSkills';
+import { namesASkill } from '../utils/skillCommand';
+import { SkillMention } from './SkillMention';
 import { normalizeMathDelimiters } from '../utils/mathDelimiters';
 import { remarkNumericColumns } from '../utils/remarkNumericColumns';
 import { AgentActivity } from './AgentActivity';
@@ -24,7 +28,7 @@ import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
-import type { Message, AgentStep, RenderCardData } from '../types';
+import type { Message, AgentStep, RenderCardData, SkillInfo } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
@@ -650,6 +654,10 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         },
         [message.content, userParts, isStreaming, cutOff, endedBy],
     );
+    // What the user typed marks the skill command it ran; an answer is left as written.
+    const namesSkill = userParts !== null && namesASkill(userParts.text);
+    const installed = useInstalledSkills(namesSkill);
+    const userSkills = namesSkill ? installed : null;
     const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
@@ -847,7 +855,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                     id={userBodyId}
                                     className={`msg-collapsible${userExpanded ? '' : ' is-collapsed'}`}
                                 >
-                                    <RenderedContent content={cleanedContent} />
+                                    <RenderedContent content={cleanedContent} skills={userSkills} />
                                 </div>
                             )}
                             <ExpandToggle
@@ -868,7 +876,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             </details>
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} skills={userSkills} />
                     )}
                     {!editing && userParts && <ImageThumbs images={userParts.images} />}
                     {pendingDrop && !isStreaming && (
@@ -1402,15 +1410,36 @@ const MARKDOWN_COMPONENTS: Components = {
     },
 };
 
+type PluggableList = NonNullable<MarkdownOptions['remarkPlugins']>;
+
+/** A user message's markdown, with the skill command that ran marked (remarkSkillCommand). */
+const USER_MARKDOWN_COMPONENTS = {
+    ...MARKDOWN_COMPONENTS,
+    'gaia-skill': ({ name, description, children }: { name: string; description: string; children?: React.ReactNode }) => (
+        <SkillMention name={name} description={description}>{children}</SkillMention>
+    ),
+} as Components;
+
 const NO_WRITTEN_FILES: readonly string[] = [];
 
 // Single dollars are money ("$5 and $10"); normalizeMathDelimiters turns real maths into `$$`.
 const REMARK_MATH: [typeof remarkMath, { singleDollarTextMath: boolean }] = [remarkMath, { singleDollarTextMath: false }];
 
-export function RenderedContent({ content, showCursor, isStreaming = false, writtenFiles = NO_WRITTEN_FILES }: { content: string; showCursor?: boolean; isStreaming?: boolean; writtenFiles?: readonly string[] }) {
+export function RenderedContent({ content, showCursor, isStreaming = false, writtenFiles = NO_WRITTEN_FILES, skills = null }: {
+    content: string;
+    showCursor?: boolean;
+    isStreaming?: boolean;
+    writtenFiles?: readonly string[];
+    /** For what the user typed: marks the skill command that ran. */
+    skills?: ReadonlyMap<string, SkillInfo> | null;
+}) {
     const documents = useChatStore((s) => s.documents);
     const citations = useMemo(() => buildCitationIndex(documents), [documents]);
     const markdown = useMemo(() => normalizeMathDelimiters(content), [content]);
+    const remarkPlugins = useMemo(() => {
+        const base = [remarkGfm, REMARK_MATH, remarkNumericColumns, remarkWindowsPaths, remarkSoftBreaks] as PluggableList;
+        return skills ? [...base, [remarkSkillCommand, { skills }]] as PluggableList : base;
+    }, [skills]);
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 
@@ -1420,10 +1449,10 @@ export function RenderedContent({ content, showCursor, isStreaming = false, writ
         <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm, REMARK_MATH, remarkNumericColumns, remarkWindowsPaths, remarkSoftBreaks]}
+                remarkPlugins={remarkPlugins}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
-                components={MARKDOWN_COMPONENTS}
+                components={skills ? USER_MARKDOWN_COMPONENTS : MARKDOWN_COMPONENTS}
             >
                 {markdown}
             </ReactMarkdown>

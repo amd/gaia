@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readSkillsForResearch, ResearchChip, withResearch } from '../ResearchChip';
 import { NEW_CHAT_RESEARCH, researchOn, useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
-import { forgetInstalledSkills } from '../../utils/research';
+import { forgetInstalledSkills } from '../../utils/installedSkills';
 
 vi.mock('../../services/api', () => ({ listSkills: vi.fn() }));
 const listSkills = vi.mocked(api.listSkills);

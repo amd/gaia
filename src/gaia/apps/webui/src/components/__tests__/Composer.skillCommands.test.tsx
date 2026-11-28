@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Composer } from '../Composer';
@@ -36,6 +36,12 @@ function box() {
 
 function type(text: string) {
     fireEvent.change(box(), { target: { value: text } });
+}
+
+/** Moves the caret, as a click or an arrow key would. */
+function caretAt(at: number) {
+    box().setSelectionRange(at, at);
+    fireEvent.select(box());
 }
 
 beforeEach(() => {
@@ -115,14 +121,60 @@ describe('Composer "/" skill commands', () => {
         expect(box().value).toBe('/garden-kit:plant-care ');
     });
 
-    it('stays shut for paths and ordinary text', async () => {
+    it('stays shut for paths, links, words glued to text and unknown names', async () => {
         render(<Harness />);
-        type('/tmp/notes.txt');
-        type('summarize /pdf');
-        type('/zzz');
-        await Promise.resolve();
+        for (const text of ['/tmp/notes.txt', 'open /tmp/', 'see https://x.test/p', 'and/p', '/zzz', 'say /pdf ']) {
+            type(text);
+            await Promise.resolve();
+            expect(screen.queryByRole('listbox'), text).toBeNull();
+        }
+    });
+
+    it('opens on a / typed later in a sentence and fills in just that word', async () => {
+        const onSubmit = vi.fn();
+        render(<Harness onSubmit={onSubmit} />);
+        type('summarize this with /p');
+
+        const options = await screen.findAllByRole('option');
+        expect(options.map((o) => o.textContent)).toEqual(['/pdfMake and edit PDF files.', '/pptxBuild slide decks.']);
+        fireEvent.keyDown(box(), { key: 'ArrowDown' });
+        fireEvent.keyDown(box(), { key: 'Tab' });
+
+        expect(box().value).toBe('summarize this with /pptx ');
+        expect(box().selectionStart).toBe('summarize this with /pptx '.length);
+        expect(screen.queryByRole('listbox')).toBeNull();
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('replaces only the word at the caret and leaves the caret after it and a space', async () => {
+        render(<Harness />);
+        type('use /we for the sources');
+        caretAt('use /we'.length);
+        fireEvent.click(await screen.findByText('/web-research'));
+
+        expect(box().value).toBe('use /web-research for the sources');
+        expect(box().selectionStart).toBe('use /web-research '.length);
+    });
+
+    it('closes when the caret leaves the / word', async () => {
+        render(<Harness />);
+        type('use /p now');
+        caretAt('use /p'.length);
+        await screen.findAllByRole('option');
+        caretAt('use /p now'.length);
 
         expect(screen.queryByRole('listbox')).toBeNull();
+    });
+
+    it('sends on Enter when the name mid-sentence is typed in full', async () => {
+        const onSubmit = vi.fn();
+        render(<Harness onSubmit={onSubmit} />);
+        type('make this a report with /pdf');
+        await screen.findAllByRole('option');
+
+        fireEvent.keyDown(box(), { key: 'Enter' });
+
+        expect(onSubmit).toHaveBeenCalledTimes(1);
     });
 
     describe('stays inside the window', () => {
@@ -217,5 +269,54 @@ describe('Composer "/" skill commands', () => {
         type('/');
 
         expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load your skills: GAIA is not running");
+    });
+});
+
+describe('Composer marks the skill command', () => {
+    function mirror() {
+        return document.querySelector('.composer-mirror');
+    }
+
+    it('marks an installed skill wherever it is typed, and only the one that runs', async () => {
+        render(<Harness />);
+        type('make it plain with /zzz and /Pdf, then /pptx');
+
+        await waitFor(() => expect(mirror()?.querySelector('.skill-word')).toHaveTextContent('/Pdf'));
+        expect(mirror()?.querySelectorAll('.skill-word')).toHaveLength(1);
+        expect(mirror()?.textContent).toBe('make it plain with /zzz and /Pdf, then /pptx');
+        expect(box()).toHaveClass('has-skill-word');
+    });
+
+    it('draws the text box as usual when no installed skill is named', async () => {
+        render(<Harness />);
+        type('/pd');
+        await screen.findAllByRole('option');
+        expect(mirror()).toBeNull();
+        expect(box()).not.toHaveClass('has-skill-word');
+        type('see /tmp/x.txt and /zzz');
+        expect(mirror()).toBeNull();
+    });
+
+    it('keeps the last empty line of the text in the marked copy', async () => {
+        render(<Harness />);
+        type('/pdf\n');
+        await waitFor(() => expect(mirror()).not.toBeNull());
+        expect(mirror()?.textContent).toBe('/pdf\n ');
+    });
+
+    it("shows the skill's description while the pointer is over the word", async () => {
+        render(<Harness />);
+        type('write it up with /pdf');
+        await waitFor(() => expect(mirror()?.querySelector('.skill-word')).not.toBeNull());
+        const word = mirror()!.querySelector('.skill-word')!;
+        vi.spyOn(word, 'getClientRects').mockReturnValue([{ left: 100, right: 130, top: 10, bottom: 30 }] as unknown as DOMRectList);
+
+        fireEvent.mouseMove(box(), { clientX: 110, clientY: 20 });
+        const tip = await screen.findByRole('tooltip');
+        expect(tip).toHaveTextContent('/pdf');
+        expect(tip).toHaveTextContent('Make and edit PDF files. Use when the user asks for a PDF.');
+
+        fireEvent.mouseMove(box(), { clientX: 10, clientY: 20 });
+        expect(screen.queryByRole('tooltip')).toBeNull();
     });
 });

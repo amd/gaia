@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowUp, FileAudio, FileText, FileVideo, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
 import { ElementChips, useElementChipsBlock } from './browser-pane/ElementChip';
@@ -11,6 +11,9 @@ import { isVideoFile } from '../utils/mediaFiles';
 import { isEditLastKey } from '../utils/editLast';
 import { useSkillCommands } from '../hooks/useSkillCommands';
 import { SKILL_MENU_ID, SkillCommandMenu, skillOptionId } from './SkillCommandMenu';
+import { SkillTip, useCloseOnScroll, type TipAnchor } from './SkillMention';
+import { useInstalledSkills } from '../utils/installedSkills';
+import { findSkillCommand, namesASkill } from '../utils/skillCommand';
 import type { Attachment } from '../types';
 import './Composer.css';
 
@@ -69,11 +72,39 @@ export function Composer({
     const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !refusedNames && !chipsBlock;
 
     const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
-    const skillMenu = useSkillCommands(disabled ? '' : value);
+    // The caret, or null while a range is selected: the `/` menu follows the word it is in.
+    const [caret, setCaret] = useState<number | null>(null);
+    const readCaret = useCallback((el: HTMLTextAreaElement) => {
+        setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null);
+    }, []);
+    const skillMenu = useSkillCommands(disabled ? '' : value, caret);
+    const placeCaret = useRef<number | null>(null);
     const pickSkill = useCallback((name: string) => {
-        onChange(`/${name} `);
+        const word = skillMenu.word;
+        if (!word) return;
+        const rest = value.slice(word.end);
+        placeCaret.current = word.start + name.length + 2;
+        onChange(`${value.slice(0, word.start)}/${name} ${rest.startsWith(' ') ? rest.slice(1) : rest}`);
         textareaRef.current?.focus();
-    }, [onChange, textareaRef]);
+    }, [onChange, textareaRef, value, skillMenu.word]);
+
+    // The skill that runs on send, marked in the text like Claude Code marks it.
+    const skills = useInstalledSkills(namesASkill(value));
+    const command = useMemo(() => (skills ? findSkillCommand(value, skills) : null), [value, skills]);
+    const commandSkill = command ? skills?.get(command.name) : undefined;
+    const mirrorRef = useRef<HTMLDivElement>(null);
+    const [tipAt, setTipAt] = useState<TipAnchor | null>(null);
+    const hideTip = useCallback(() => setTipAt(null), []);
+    useCloseOnScroll(tipAt !== null, hideTip);
+    const hoverWord = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
+        const word = mirrorRef.current?.querySelector('.skill-word');
+        const hit = word ? Array.from(word.getClientRects()).find((r) =>
+            e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) : undefined;
+        setTipAt((was) => {
+            if (!hit) return null;
+            return was && was.left === hit.left && was.top === hit.top ? was : { left: hit.left, right: hit.right, top: hit.top, bottom: hit.bottom };
+        });
+    }, []);
 
     // Grow with the text, up to a cap; shrink back when it is cleared.
     // Chrome counts the placeholder in scrollHeight, and a narrow first layout
@@ -97,6 +128,22 @@ export function Composer({
         return () => observer.disconnect();
     }, [value, shownPlaceholder, textareaRef]);
 
+    // The caret after any change to the text; after a pick, just past the name and its space.
+    useLayoutEffect(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        const at = placeCaret.current;
+        if (at !== null) el.setSelectionRange(at, at);
+        placeCaret.current = null;
+        readCaret(el);
+    }, [value, textareaRef, readCaret]);
+
+    // The marked copy behind the text scrolls with it.
+    useLayoutEffect(() => {
+        const el = textareaRef.current;
+        if (el && mirrorRef.current) mirrorRef.current.scrollTop = el.scrollTop;
+    });
+
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (skillMenu.open && !e.nativeEvent.isComposing) {
             const { matches, selected } = skillMenu;
@@ -113,7 +160,9 @@ export function Composer({
             }
             // Tab or Enter fills in the name; Enter on a name typed in full sends it.
             const name = matches[selected]?.name;
-            const typedInFull = name !== undefined && value.toLowerCase() === `/${name}`;
+            const word = skillMenu.word;
+            const typedInFull = name !== undefined && word !== null
+                && value.slice(word.start, word.end).toLowerCase() === `/${name}`.toLowerCase();
             if (name && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !typedInFull))) {
                 e.preventDefault();
                 pickSkill(name);
@@ -178,24 +227,42 @@ export function Composer({
                 </ul>
             )}
             <SkillCommandMenu menu={skillMenu} onPick={pickSkill} />
-            <textarea
-                ref={textareaRef}
-                className="composer-input"
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onPaste={(e) => { attachments.handlePaste(e); }}
-                placeholder={shownPlaceholder}
-                rows={1}
-                disabled={disabled}
-                autoFocus={autoFocus}
-                aria-label={t('composer.message')}
-                aria-autocomplete="list"
-                aria-expanded={skillMenu.open && skillMenu.matches.length > 0}
-                aria-controls={skillMenu.open && skillMenu.matches.length > 0 ? SKILL_MENU_ID : undefined}
-                aria-activedescendant={skillMenu.open && skillMenu.matches.length > 0 ? skillOptionId(skillMenu.selected) : undefined}
-                dir="auto"
-            />
+            <div className="composer-field">
+                {command && (
+                    <div ref={mirrorRef} className="composer-mirror" aria-hidden="true" dir="auto">
+                        {value.slice(0, command.start)}
+                        <span className="skill-word">{value.slice(command.start, command.end)}</span>
+                        {value.slice(command.end)}
+                        {/* A last empty line still takes a line, as in the text box. */}
+                        {value.endsWith('\n') ? ' ' : null}
+                    </div>
+                )}
+                <textarea
+                    ref={textareaRef}
+                    className={`composer-input${command ? ' has-skill-word' : ''}`}
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    onSelect={(e) => readCaret(e.currentTarget)}
+                    onScroll={(e) => { if (mirrorRef.current) mirrorRef.current.scrollTop = e.currentTarget.scrollTop; }}
+                    onMouseMove={command ? hoverWord : undefined}
+                    onMouseLeave={hideTip}
+                    onKeyDown={handleKeyDown}
+                    onPaste={(e) => { attachments.handlePaste(e); }}
+                    placeholder={shownPlaceholder}
+                    rows={1}
+                    disabled={disabled}
+                    autoFocus={autoFocus}
+                    aria-label={t('composer.message')}
+                    aria-autocomplete="list"
+                    aria-expanded={skillMenu.open && skillMenu.matches.length > 0}
+                    aria-controls={skillMenu.open && skillMenu.matches.length > 0 ? SKILL_MENU_ID : undefined}
+                    aria-activedescendant={skillMenu.open && skillMenu.matches.length > 0 ? skillOptionId(skillMenu.selected) : undefined}
+                    dir="auto"
+                />
+            </div>
+            {tipAt && commandSkill && command && (
+                <SkillTip anchor={tipAt} name={commandSkill.name} description={commandSkill.description} />
+            )}
             {tooLong && (
                 <p className="composer-limit-error" role="alert">
                     {t('composer.tooLong', { sent: sentLength.toLocaleString(), max: MAX_MESSAGE_CHARS.toLocaleString() })}

@@ -634,6 +634,96 @@ for (const locale of ['en', 'ar']) {
     }
 }
 
+async function withSkillList(p: Page): Promise<void> {
+    await p.route((url) => url.pathname === '/api/skills', (route) => route.fulfill({ json: { skills: SKILL_LIST, invalid: {} } }));
+}
+
+/** Whether a tip sits wholly above or below the word it describes. */
+const clearOf = (tip: { y: number; height: number }, word: { y: number; height: number }) =>
+    tip.y + tip.height <= word.y + 1 || tip.y >= word.y + word.height - 1;
+
+/** Everything the marked copy behind the message box must share with it, or its glyphs drift off the caret. */
+async function mirrorDrift(page: Page): Promise<string[]> {
+    return page.locator('.new-chat .composer-field').first().evaluate((field) => {
+        const box = field.querySelector('textarea')!;
+        const copy = field.querySelector<HTMLElement>('.composer-mirror')!;
+        const [a, b] = [getComputedStyle(box), getComputedStyle(copy)];
+        const drift = ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'paddingTop', 'paddingInlineStart', 'paddingInlineEnd', 'whiteSpace', 'overflowWrap', 'direction', 'unicodeBidi']
+            .filter((key) => a[key as never] !== b[key as never])
+            .map((key) => `${key}: ${a[key as never]} vs ${b[key as never]}`);
+        if (box.clientWidth !== copy.clientWidth) drift.push(`width ${box.clientWidth} vs ${copy.clientWidth}`);
+        if (box.scrollHeight !== copy.scrollHeight) drift.push(`height ${box.scrollHeight} vs ${copy.scrollHeight}`);
+        if (box.scrollTop !== copy.scrollTop) drift.push(`scroll ${box.scrollTop} vs ${copy.scrollTop}`);
+        return drift;
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    const sentence = locale === 'ar'
+        ? 'حوّل ملاحظات اجتماع الحديقة المجتمعية إلى تقرير قصير مع /pdf من فضلك، وأضف قائمة بالمهام لكل متطوع في نهايته.'
+        : 'Turn the community garden meeting notes into a short report with /pdf please, and add a task list for each volunteer at the end.';
+    const at = sentence.indexOf('/pdf');
+
+    test(`a skill named mid-sentence is offered, then marked with its description on hover (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withSkillList);
+        const box = page.locator('.new-chat textarea').first();
+        await box.fill(sentence.slice(0, at + 3));
+        const menu = page.locator('.skill-menu');
+        await expect(menu.getByRole('option')).toHaveCount(1);
+        await expect(menu.getByRole('option')).toHaveText(/^\/pdf/);
+        await shot(page, `slash-mid-${locale}`);
+
+        await box.press('Tab');
+        await expect(box).toHaveValue(`${sentence.slice(0, at)}/pdf `);
+        await box.pressSequentially(sentence.slice(at + 5));
+        await expect(box).toHaveValue(sentence);
+        await expect(menu).toHaveCount(0);
+
+        // The word that runs is drawn in the accent colour, and the rest as usual, from a copy
+        // laid out exactly as the box; the box itself draws only the caret.
+        const word = page.locator('.new-chat .composer-mirror .skill-word');
+        await expect(word).toHaveText('/pdf');
+        expect(await mirrorDrift(page)).toEqual([]);
+        expect(await box.evaluate((el) => getComputedStyle(el).color)).toBe('rgba(0, 0, 0, 0)');
+        const [wordColor, textColor] = await word.evaluate((el) => [getComputedStyle(el).color, getComputedStyle(el.parentElement!).color]);
+        expect(wordColor, 'the skill word looks like the rest of the text').not.toBe(textColor);
+        const [wordBox, fieldBox] = [(await word.boundingBox())!, (await page.locator('.new-chat .composer-field').boundingBox())!];
+        expect(wordBox.x >= fieldBox.x - 1 && wordBox.x + wordBox.width <= fieldBox.x + fieldBox.width + 1, 'the word sits outside the box').toBe(true);
+
+        await page.mouse.move(wordBox.x + wordBox.width / 2, wordBox.y + wordBox.height / 2);
+        const tip = page.getByRole('tooltip');
+        await expect(tip).toContainText('/pdf');
+        await expect(tip).toContainText('Make and edit PDF files.');
+        const tipBox = (await tip.boundingBox())!;
+        expect(clearOf(tipBox, wordBox), 'the description covers the word').toBe(true);
+        expect(tipBox.x, 'the description runs off the window').toBeGreaterThanOrEqual(0);
+        await shot(page, `slash-composer-${locale}`);
+        expect(await audit(page)).toEqual([]);
+
+        await page.mouse.move(5, 5);
+        await expect(tip).toHaveCount(0);
+    });
+
+    test(`a sent message marks the skill it ran, with its description on hover (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withSkillList(p);
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: { ...MESSAGES, messages: [{ ...MESSAGES.messages[0], content: sentence }, ...MESSAGES.messages.slice(1)] },
+            }));
+        });
+        const mark = page.locator('.msg-user .skill-mention');
+        await expect(mark).toHaveText('/pdf');
+        await expect(page.locator('.msg-assistant .skill-mention')).toHaveCount(0);
+        await mark.hover();
+        const tip = page.getByRole('tooltip');
+        await expect(tip).toContainText('Make and edit PDF files.');
+        const [tipBox, markBox] = [(await tip.boundingBox())!, (await mark.boundingBox())!];
+        expect(clearOf(tipBox, markBox), 'the description covers the word').toBe(true);
+        await shot(page, `slash-chat-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
     id: `lib-${i}`, filename: `meeting-notes-${i}.txt`, filepath: `C:/library/meeting-notes-${i}.txt`, file_size: 512,
     chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0,

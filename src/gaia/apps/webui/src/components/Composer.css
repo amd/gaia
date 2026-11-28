@@ -38,6 +38,43 @@
     line-height: 1.5;
 }
 
+/* The text box and, behind it, a copy that marks the skill command it holds. */
+.composer-field { position: relative; }
+
+/* Block, as it was as the composer's own flex item: an inline box leaves a gap under it. */
+.composer-field .composer-input {
+    position: relative;
+    display: block;
+}
+
+/* Typeset exactly as the text box, so each glyph lands under its caret position. */
+.composer-mirror {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    scrollbar-color: transparent transparent;
+    padding: 4px 0;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--fs-prose);
+    font-weight: normal;
+    line-height: 1.5;
+    letter-spacing: normal;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    unicode-bidi: plaintext;
+    text-align: start;
+    pointer-events: none;
+}
+
+/* The copy draws the text; the box keeps the caret and the selection. */
+.composer-input.has-skill-word { color: transparent; caret-color: var(--text-primary); }
+
+.composer-input.has-skill-word::selection {
+    color: transparent;
+    background: var(--accent-selection);
+}
+
 .composer-input::placeholder {
     color: var(--text-muted);
 }
