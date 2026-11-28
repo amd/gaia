@@ -20,17 +20,20 @@ namespace gaia::idna {
 
 namespace {
 
+// Strings are offsets into kPool rather than pointers: a table of pointers costs a
+// relocation per row in every object file and shared library.
 struct IdnaMap {
     char32_t start;
     char status;
-    const char32_t* replacement;
+    uint16_t offset;
+    uint8_t length;
 };
 struct IdnaRange {
     char32_t low, high;
 };
 struct IdnaBidi {
     char32_t low, high;
-    const char* cls;
+    uint8_t cls;  // index into kBidiClasses
 };
 struct IdnaCcc {
     char32_t low, high;
@@ -38,7 +41,8 @@ struct IdnaCcc {
 };
 struct IdnaDecomposition {
     char32_t cp;
-    const char32_t* nfd;
+    uint16_t offset;
+    uint8_t length;
 };
 struct IdnaComposition {
     char32_t first, second, composed;
@@ -60,7 +64,7 @@ std::string bidi(char32_t cp) {
     const auto it = std::upper_bound(std::begin(kBidi), std::end(kBidi), cp,
                                      [](char32_t c, const IdnaBidi& r) { return c < r.low; });
     if (it == std::begin(kBidi) || cp > std::prev(it)->high) return "";
-    return std::prev(it)->cls;
+    return kBidiClasses[std::prev(it)->cls];
 }
 
 int combining(char32_t cp) {
@@ -97,7 +101,7 @@ void decompose(char32_t cp, std::u32string& out) {
     const auto it = std::lower_bound(std::begin(kDecompositions), std::end(kDecompositions), cp,
                                      [](const IdnaDecomposition& d, char32_t c) { return d.cp < c; });
     if (it != std::end(kDecompositions) && it->cp == cp) {
-        out += it->nfd;
+        out.append(kPool + it->offset, it->length);
     } else {
         out += cp;
     }
@@ -480,7 +484,7 @@ std::u32string uts46Remap(const std::u32string& domain) {
                 out += cp;
                 break;
             case 'M':
-                out += row.replacement;
+                out.append(kPool + row.offset, row.length);
                 break;
             case 'I':
                 break;

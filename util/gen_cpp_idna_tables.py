@@ -48,8 +48,32 @@ def header() -> str:
     )
 
 
-def u32(text: str) -> str:
-    return 'U"' + "".join(f"\\U{ord(c):08X}" for c in text) + '"'
+class Pool:
+    """Every replacement string in one array, so the tables hold offsets, not pointers."""
+
+    def __init__(self) -> None:
+        self.text = ""
+        self.at: Dict[str, int] = {}
+
+    def add(self, text: str) -> str:
+        if text not in self.at:
+            self.at[text] = len(self.text)
+            self.text += text
+        offset = self.at[text]
+        assert offset < 0x10000 and len(text) < 0x100, "pool offsets are 16 bits, lengths 8"
+        return f"{offset}, {len(text)}"
+
+    def table(self) -> str:
+        rows = "".join(
+            "    "
+            + ", ".join(f"0x{ord(c):X}" for c in self.text[i : i + 12])
+            + ",\n"
+            for i in range(0, len(self.text), 12)
+        )
+        return (
+            "// The replacement and decomposition strings, which kUts46 and kDecompositions index.\n"
+            "constexpr char32_t kPool[] = {\n" + rows + "};\n\n"
+        )
 
 
 def runs(points: List[int]) -> List[Tuple[int, int]]:
@@ -83,16 +107,22 @@ def valued_runs(value_of) -> List[Tuple[int, int, object]]:
 
 
 def tables() -> str:
+    pool = Pool()
     parts = [header(), "\n"]
 
     rows = []
+    previous = None
     for start, status, replacement in zip(
         uts46data.uts46_starts, uts46data.uts46_statuses, uts46data.uts46_replacements
     ):
-        text = "nullptr" if replacement is None else u32(replacement)
+        # A row with no mapping and the same status as the one before adds nothing.
+        if replacement is None and previous == (status, None):
+            continue
+        previous = (status, replacement)
+        text = "0, 0" if replacement is None else pool.add(replacement)
         rows.append(f"    {{0x{start:X}, '{chr(status)}', {text}}},\n")
-    parts.append(
-        "// idna.uts46data: from each start, status V/M/D/I/X and the mapping.\n"
+    uts46 = (
+        "// idna.uts46data: from each start, status V/M/D/I/X and the mapping in kPool.\n"
         "constexpr IdnaMap kUts46[] = {\n" + "".join(rows) + "};\n\n"
     )
 
@@ -143,11 +173,16 @@ def tables() -> str:
     )
 
     bidi = valued_runs(lambda cp: unicodedata.bidirectional(chr(cp)))
+    classes = sorted({value for _, _, value in bidi if value})
+    names = "".join(f'    "{name}",\n' for name in classes)
     rows = "".join(
-        f'    {{0x{lo:X}, 0x{hi:X}, "{value}"}},\n' for lo, hi, value in bidi if value
+        f"    {{0x{lo:X}, 0x{hi:X}, {classes.index(value)}}},\n"
+        for lo, hi, value in bidi
+        if value
     )
     parts.append(
         "// unicodedata.bidirectional; a code point in no row has none ('').\n"
+        "constexpr const char* kBidiClasses[] = {\n" + names + "};\n"
         "constexpr IdnaBidi kBidi[] = {\n" + rows + "};\n\n"
     )
 
@@ -167,11 +202,12 @@ def tables() -> str:
             continue
         nfd = unicodedata.normalize("NFD", chr(cp))
         if nfd != chr(cp):
-            rows.append(f"    {{0x{cp:X}, {u32(nfd)}}},\n")
-    parts.append(
-        "// unicodedata.normalize('NFD', c) where it changes c, Hangul syllables aside.\n"
+            rows.append(f"    {{0x{cp:X}, {pool.add(nfd)}}},\n")
+    decompositions = (
+        "// unicodedata.normalize('NFD', c) where it changes c, Hangul syllables aside, in kPool.\n"
         "constexpr IdnaDecomposition kDecompositions[] = {\n" + "".join(rows) + "};\n\n"
     )
+    parts += [pool.table(), uts46, decompositions]
 
     pairs: List[Tuple[int, int, int]] = []
     for cp in ALL:

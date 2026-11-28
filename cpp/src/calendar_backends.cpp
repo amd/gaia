@@ -19,12 +19,12 @@ using mail::detail::Params;
 using mail::detail::percentEncode;
 using mail::detail::truthy;
 
-constexpr const char* kGoogle = "google";
-constexpr const char* kMicrosoft = "microsoft";
+constexpr const char* kGoogleProvider = "google";
+constexpr const char* kMicrosoftProvider = "microsoft";
 
 std::string str(const json& v) { return v.is_string() ? v.get<std::string>() : ""; }
 
-std::string repr(const json& v) { return mail::text::pyRepr(v); }
+std::string jsonRepr(const json& v) { return mail::text::pyRepr(v); }
 
 std::optional<std::string> optStr(const json& v) {
     const std::string s = str(v);
@@ -38,7 +38,7 @@ json parsedBody(const HttpResponse& response) {
 
 std::string eventPathSegment(const std::string& eventId) {
     if (eventId == "." || eventId == "..") {
-        throw CalendarError(repr(json(eventId)) + " is not an event id. Use the id from list_calendar_events.");
+        throw CalendarError(jsonRepr(json(eventId)) + " is not an event id. Use the id from list_calendar_events.");
     }
     return percentEncode(eventId);
 }
@@ -203,7 +203,7 @@ private:
             throw CalendarAuthError(
                 "Google Calendar rejected the access token (401), so the Google connection needs reconnecting. "
                 "(request: " + where + ")",
-                {kGoogle}, {kGoogle});
+                {kGoogleProvider}, {kGoogleProvider});
         }
         if (code == 404) throw CalendarEventNotFound("Google Calendar found no event (" + where + ").");
         if (code == 410) throw CalendarEventGone("Google Calendar deleted this event (" + where + ").");
@@ -216,7 +216,7 @@ private:
             throw CalendarAuthError(
                 "Google refused the calendar request because the connection lacks calendar access, so it needs "
                 "reconnecting with calendar access ticked. (request: " + where + ")",
-                {kGoogle}, {kGoogle});
+                {kGoogleProvider}, {kGoogleProvider});
         }
         const std::string lowered = mail::text::lower(reason);
         const std::string suffix = "ratelimitexceeded";
@@ -263,7 +263,7 @@ std::string graphCode(const HttpResponse& response) {
     return str(field(field(parsedBody(response), "error"), "code"));
 }
 
-std::string reprOrNone(const json& v) { return v.is_null() ? "None" : repr(v); }
+std::string reprOrNone(const json& v) { return v.is_null() ? "None" : jsonRepr(v); }
 
 std::string graphUtcValue(const json& endpointRaw, const std::string& eventId) {
     const json endpoint = truthy(endpointRaw) ? endpointRaw : json::object();
@@ -472,14 +472,14 @@ private:
             throw CalendarAuthError(
                 "Microsoft Graph rejected the access token (401), so the Microsoft connection needs reconnecting. "
                 "(request: " + where + ")",
-                {kMicrosoft}, {kMicrosoft});
+                {kMicrosoftProvider}, {kMicrosoftProvider});
         }
         if (code == 403) {
             throw CalendarAuthError(
                 "Microsoft Graph refused the calendar request (403). The connection may lack calendar access, so it "
                 "needs reconnecting with calendar access ticked. (request: " + where + "; code: " +
                     (detail.empty() ? "forbidden" : detail) + ")",
-                {kMicrosoft}, {kMicrosoft});
+                {kMicrosoftProvider}, {kMicrosoftProvider});
         }
         if (code == 404) throw CalendarEventNotFound("Outlook found no event (" + where + ").");
         if (code == 410) throw CalendarEventGone("Outlook deleted this event (" + where + ").");

@@ -306,13 +306,16 @@ add_library(gaia_core
     src/calendar_tools.cpp
 )
 
-# The mail sources compile as one unit: each would otherwise carry its own copy of
+# The mail sources compile as one unit, and the calendar's as another: each would otherwise carry its own copy of
 # the json templates, which roughly doubles their share of the static library.
 # Unity groups need CMake 3.18; older versions build the sources one by one.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
     set(GAIA_MAIL_SOURCES src/mail_text.cpp src/mail_phishing.cpp src/mail_waiting.cpp src/mail_http.cpp
         src/mail_gmail.cpp src/connectors.cpp src/mail_graph.cpp src/connect_card.cpp src/email_tools.cpp)
     set_source_files_properties(${GAIA_MAIL_SOURCES} PROPERTIES UNITY_GROUP mail)
+    set(GAIA_CALENDAR_SOURCES src/person_approval.cpp src/idna.cpp src/calendar_model.cpp
+        src/calendar_backends.cpp src/calendar_tools.cpp)
+    set_source_files_properties(${GAIA_CALENDAR_SOURCES} PROPERTIES UNITY_GROUP calendar)
     set_target_properties(gaia_core PROPERTIES UNITY_BUILD ON UNITY_BUILD_MODE GROUP)
 endif()
 
