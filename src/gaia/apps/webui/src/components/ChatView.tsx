@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Activity, Edit3, Download, Upload, ArrowDown, FolderSearch, Clock } from 'lucide-react';
 import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent } from './MessageBubble';
@@ -344,7 +344,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
     // is never missed.  Only fires when the user hasn't scrolled away.
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (!isNearBottomRef.current) return;
 
         const now = Date.now();
@@ -359,15 +359,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
         };
 
-        if (elapsed >= THROTTLE_MS) {
-            // Enough time passed — scroll immediately
-            doScroll();
-        }
+        // A loaded history lands on its end before it paints; only streaming chunks wait.
+        if (!isStreaming || elapsed >= THROTTLE_MS) doScroll();
 
         // Always schedule a trailing scroll so the very last update is caught
         if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
         scrollTimerRef.current = setTimeout(doScroll, THROTTLE_MS);
-    }, [messages, streamingContent, agentSteps]);
+    }, [messages, streamingContent, agentSteps, isStreaming]);
 
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
@@ -1623,10 +1621,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (e.dataTransfer.files.length === 0) return;
 
         const dropped = Array.from(e.dataTransfer.files);
-        // A recording is transcribed by the agent, not indexed as a document.
-        const recordings = dropped.filter((file) => isMediaFile(file.name));
-        if (recordings.length > 0) attach.addFiles(recordings);
-        const documents = dropped.filter((file) => !isMediaFile(file.name));
+        // Recordings and photos ride with the message, as on the message box; the rest are indexed.
+        const isAttachment = (file: File) => isMediaFile(file.name) || file.type.startsWith('image/');
+        const attachments = dropped.filter(isAttachment);
+        if (attachments.length > 0) attach.addFiles(attachments);
+        const documents = dropped.filter((file) => !isAttachment(file));
         if (documents.length === 0) return;
 
         if (!(await ensureModel('embedding'))) return;
@@ -1679,7 +1678,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDropCapture={() => setIsDragOver(false)}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            aria-label={shownTitle(session?.title) || 'Chat'}
+            aria-label={shownTitle(t, session) || 'Chat'}
         >
             <TurnAnnouncer busy={busy} />
             <header className="task-header">
@@ -1702,7 +1701,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         />
                     ) : (
                         <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
-                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(session?.title)}</span>
+                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(t, session)}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}

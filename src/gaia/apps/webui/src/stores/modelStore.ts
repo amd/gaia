@@ -10,6 +10,7 @@ import { useChatStore } from './chatStore';
 import { log } from '../utils/logger';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import type { ActiveModel, Session, WarmUpStatus } from '../types';
+import type { RestoreFailure } from '../utils/restoreNotice';
 
 /** Why a pick's load failed: the backend's own reason, or a translated one when GAIA lost track. */
 export interface PickLoadError {
@@ -28,7 +29,7 @@ interface ModelState {
     active: ActiveModel | null;
     error: string | null;
     /** One-line notice about restoring the last model, shown once per launch. */
-    restoreNotice: { ok: boolean; message: string } | null;
+    restoreNotice: ({ ok: boolean } & RestoreFailure) | null;
     /** A model picked while a reply was running; applied when that reply ends. */
     queued: string | null;
     /** Why applying the queued model failed, shown on the chip. */
@@ -156,7 +157,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 active,
                 error: null,
                 ...(r && r.status !== 'none' && r.message
-                    ? { restoreNotice: { ok: r.status === 'restored', message: r.message } }
+                    ? { restoreNotice: { ok: r.status === 'restored', message: r.message, model: r.model, reason: r.reason, reasonCode: r.reason_code } }
                     : recovered ? { restoreNotice: null } : {}),
             });
         } catch (err) {

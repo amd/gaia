@@ -346,7 +346,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         setPreviewLoading(true);
         try {
             const data = await api.previewFile(path);
-            setPreviewFile(data as FilePreview);
+            setPreviewFile({ ...data, size_display: formatSize(data.size) } as FilePreview);
         } catch (err) {
             log.ui.error('Preview failed', err);
         } finally {
@@ -430,6 +430,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
 
     // A second click can land before the re-render that disables the button.
     const askingRef = useRef(false);
+    const crumbsRef = useRef<HTMLDivElement>(null);
     const handleAskAgent = useCallback(async () => {
         if (selectedFiles.size === 0 || askingRef.current) return;
         askingRef.current = true;
@@ -517,6 +518,12 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         : showHidden ? entries : visibleEntries;
     const hiddenCount = entries.length - visibleEntries.length;
 
+    // A long path scrolls, so keep its last folder in view.
+    useEffect(() => {
+        const strip = crumbsRef.current;
+        if (strip) strip.scrollLeft = getComputedStyle(strip).direction === 'rtl' ? -strip.scrollWidth : strip.scrollWidth;
+    }, [currentPath, searchResults]);
+
     // Nothing the user can't see gets indexed: covers Show hidden turned off and leaving a search.
     useEffect(() => {
         if (showHidden || searchResults) return;
@@ -598,7 +605,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                     {/* Breadcrumb */}
                     {!searchResults && (
                         <div className="fb-pathbar">
-                            <div className="fb-breadcrumb">
+                            <div className="fb-breadcrumb" ref={crumbsRef}>
                                 <button className="fb-crumb" onClick={() => loadDirectory('/')}>
                                     <HardDrive size={12} />
                                 </button>
@@ -610,16 +617,16 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         </button>
                                     </span>
                                 ))}
-                                {parentPath && (
-                                    <button
-                                        className="fb-up-btn"
-                                        onClick={() => loadDirectory(parentPath)}
-                                        title={t('fileBrowser.goUp')}
-                                    >
-                                        <ArrowUp size={14} />
-                                    </button>
-                                )}
                             </div>
+                            {parentPath && (
+                                <button
+                                    className="fb-up-btn"
+                                    onClick={() => loadDirectory(parentPath)}
+                                    title={t('fileBrowser.goUp')}
+                                >
+                                    <ArrowUp size={14} />
+                                </button>
+                            )}
                             <label className="fb-hidden-toggle">
                                 <input
                                     type="checkbox"
@@ -699,7 +706,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         aria-label={t('fileBrowser.selectAria', { name: visibleName(entry.name) })}
                                     />
                                     <span className="fb-entry-icon">{getFileIcon(entry)}</span>
-                                    <span className="fb-entry-name" title={visibleName(entry.path)}>{visibleName(entry.name)}</span>
+                                    <span className="fb-entry-name" title={visibleName(entry.path)} dir="auto">{visibleName(entry.name)}</span>
                                     {fileUnsupported && (
                                         <span className="fb-unsupported-badge">
                                             {t('fileBrowser.notIndexable')}
@@ -716,7 +723,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                             <Eye size={14} />
                                         </button>
                                     )}
-                                    <span className="fb-entry-size">{entry.type === 'file' ? formatSize(entry.size) : ''}</span>
+                                    <span className="fb-entry-size">{entry.type === 'file' ? <bdi dir="ltr">{formatSize(entry.size)}</bdi> : ''}</span>
                                     <span className="fb-entry-date">{formatDate(entry.modified, t)}</span>
                                 </div>
                                 );
@@ -727,14 +734,14 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                         {previewFile && (
                             <div className="fb-preview">
                                 <div className="fb-preview-header">
-                                    <span className="fb-preview-name">{visibleName(previewFile.name)}</span>
+                                    <span className="fb-preview-name" dir="auto">{visibleName(previewFile.name)}</span>
                                     <button className="btn-icon-sm" onClick={() => setPreviewFile(null)} aria-label={t('fileBrowser.closePreview')}>
                                         <X size={14} />
                                     </button>
                                 </div>
                                 <div className="fb-preview-meta">
                                     <span>{previewFile.size_display}</span>
-                                    {previewFile.total_lines && <span>{t('fileBrowser.lines', { n: previewFile.total_lines })}</span>}
+                                    {previewFile.total_lines ? <span>{t('fileBrowser.lines', { n: previewFile.total_lines })}</span> : null}
                                     {previewFile.columns && <span>{t('fileBrowser.columnCount', { n: previewFile.columns.length })}</span>}
                                     {previewFile.row_count !== null && <span>{t('fileBrowser.rows', { n: previewFile.row_count })}</span>}
                                 </div>
@@ -750,7 +757,9 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         {markStrayDirection(previewFile.preview_lines.slice(0, 30).join('\n'))}
                                     </pre>
                                 ) : (
-                                    <div className="fb-preview-binary">{t('fileBrowser.binary')}</div>
+                                    <div className="fb-preview-binary">
+                                        {t(previewFile.is_text ? 'fileBrowser.emptyFile' : 'fileBrowser.binary')}
+                                    </div>
                                 )}
                             </div>
                         )}

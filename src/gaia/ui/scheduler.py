@@ -710,6 +710,23 @@ def _at_local(
     ).astimezone(timezone.utc)
 
 
+def _same_timing(old: ScheduleConfig, new: ScheduleConfig) -> bool:
+    """True when both configs fire at the same times, whatever their wording."""
+
+    def timing(c: ScheduleConfig) -> tuple:
+        zone = resolve_zone(c.timezone).key if _is_wall_clock(c) else None
+        return (
+            c.interval_seconds,
+            c.time_of_day,
+            c.start_hour,
+            c.end_hour,
+            tuple(c.days_of_week or ()),
+            zone,
+        )
+
+    return timing(old) == timing(new)
+
+
 def compute_next_run(config: ScheduleConfig, after: datetime = None) -> datetime:
     """Compute the next run time based on schedule config.
 
@@ -1198,8 +1215,8 @@ class Scheduler:
     ) -> Dict[str, Any]:
         """Change when a task runs and what it asks, keeping its name, chat and history.
 
-        An active task's next run is worked out again from the new schedule;
-        a paused one stays paused.
+        An active task's next run is worked out again when its schedule
+        changes and kept when only the prompt does; a paused one stays paused.
 
         Raises:
             KeyError: If task not found.
@@ -1232,10 +1249,13 @@ class Scheduler:
                     pass
                 task._timer_task = None
 
+            retimed = not _same_timing(
+                ScheduleConfig.from_json(task.schedule_config), config
+            )
             task.prompt = prompt
             task.interval_seconds = config.interval_seconds
             task.schedule_config = config.to_json()
-            if task.status == "active":
+            if task.status == "active" and (retimed or not task.next_run_at):
                 task.next_run_at = compute_next_run(
                     config, after=datetime.now(timezone.utc)
                 ).isoformat()

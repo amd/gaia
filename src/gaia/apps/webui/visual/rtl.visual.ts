@@ -600,6 +600,15 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the empty new-chat message box reads in the interface direction, so its placeholder starts on the right in Arabic (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const box = page.locator('.new-chat textarea').first();
+        await expect(box).toBeVisible();
+        expect(await box.evaluate((el) => getComputedStyle(el).direction)).toBe(locale === 'ar' ? 'rtl' : 'ltr');
+    });
+}
+
 const SKILL_LIST = [
     { name: 'pdf', description: 'Make and edit PDF files. Use when the user asks for a report.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
     { name: 'pptx', description: 'ابنِ عروض الشرائح من ملاحظاتك. استخدمها عند طلب عرض.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
@@ -1065,6 +1074,9 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
         await expect(page.locator('.render-calc')).toBeVisible();
         expect(await audit(page)).toEqual([]);
+        const boxDrop = await page.locator('.render-calc__field').evaluateAll((fields) =>
+            fields.map((f) => Math.round(f.querySelector('.render-calc__box')!.getBoundingClientRect().top - f.getBoundingClientRect().top)));
+        expect(new Set(boxDrop).size, `every field puts its box in the same place, got ${boxDrop}`).toBe(1);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
     });
@@ -2613,6 +2625,25 @@ for (const locale of ['ar', 'en']) {
         for (let i = 0; i < 10; i++) await page.mouse.wheel(0, 200);
         await expect(ask).toBeInViewport({ ratio: 1 });
         await shot(page, `files-${locale}-zoomed`);
+    });
+
+    // A long path scrolls inside the path bar; the open folder and Go up stayed out of reach.
+    test(`the file browser keeps the open folder and Go up in view four folders deep (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 600 });
+        const deep = 'C:\\Shared Projects\\quarterly-financial-reports\\design-review-meeting-notes\\final-archive-2026-edition';
+        await open(page, '', locale, async (p) => {
+            await withOldFile(p);
+            await p.route('**/api/files/browse**', (route) => route.fulfill({
+                json: { current_path: deep, parent_path: 'C:\\Shared Projects\\quarterly-financial-reports\\design-review-meeting-notes', quick_links: [], entries: [] },
+            }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await page.getByRole('button', { name: /Browse files/ }).click();
+        await expect(page.locator('.fb-crumb').last()).toHaveText('final-archive-2026-edition');
+        // Chromium rounds the scroll end to whole pixels, so right-to-left can clip a fraction of the button's padding.
+        await expect(page.locator('.fb-crumb').last()).toBeInViewport({ ratio: 0.95 });
+        await expect(page.locator('.fb-up-btn')).toBeInViewport({ ratio: 1 });
+        await shot(page, `files-${locale}-deep-path`);
     });
 
     test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
@@ -4793,6 +4824,13 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `schedules-${locale}-long-prompt`);
         });
 
+        test('the info line moves whole items to a new line instead of squeezing them into columns', async ({ page }) => {
+            await openSchedules(page);
+            const meta = page.locator('.schedule-card-meta').first();
+            await expect(meta).toBeVisible();
+            expect(await meta.evaluate((el) => getComputedStyle(el).flexWrap)).toBe('wrap');
+        });
+
         test('new schedule, nothing typed yet', async ({ page }) => {
             await openSchedules(page, []);
             await page.locator('.schedule-modal .btn-primary').click();
@@ -6944,6 +6982,19 @@ test('composer chips stay whole at phone width', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    test(`a narrow new chat keeps the model name readable beside the memory chip (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 600 });
+        await open(page, '', locale);
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(full);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 820, height: 640 });
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
@@ -7730,7 +7781,7 @@ const CRASHES: Record<'main' | 'sidebar' | 'window', { hash: string; before: (pa
     window: {
         hash: '',
         before: (page) => page.route((url) => url.pathname === '/api/providers/active', (route) =>
-            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN } } })),
+            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN, model: BROKEN, reason: 'it has no working key' } } })),
     },
 };
 
