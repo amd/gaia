@@ -58,6 +58,39 @@ std::string normalizedModelId(const std::string& modelId) {
 
 } // namespace
 
+std::optional<nlohmann::json> knownSampling(const std::string& modelId) {
+    // Mirrors MODEL_SAMPLING_PROFILES in Python: {id, thinks by default, thinking, non-thinking}.
+    // A reasoning model sampled near greedy loops in its reasoning until the reply limit.
+    struct Row {
+        const char* id;
+        bool thinksByDefault;
+        const char* thinking;
+        const char* nonThinking;
+    };
+    static const std::vector<Row> kSampling = {
+        {"Qwen3-30B-A3B-Instruct-2507-GGUF", false, nullptr, R"({"temperature":0.7,"top_p":0.8,"top_k":20,"min_p":0.0,"presence_penalty":1.0})"},
+        {"user.ggml-gpt-oss-20b-MXFP4-GGUF", true, R"({"temperature":1.0,"top_p":1.0,"min_p":0.0})", nullptr},
+        {"gpt-oss-20b-GGUF", true, R"({"temperature":1.0,"top_p":1.0,"min_p":0.0})", nullptr},
+        {"gpt-oss-120b-mxfp-GGUF", true, R"({"temperature":1.0,"top_p":1.0,"min_p":0.0})", nullptr},
+        {"gpt-oss-120b-GGUF", true, R"({"temperature":1.0,"top_p":1.0,"min_p":0.0})", nullptr},
+        {"Qwen3.5-4B-GGUF", true, R"({"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repeat_penalty":1.0})", R"({"temperature":0.7,"top_p":0.8,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repeat_penalty":1.0})"},
+        {"Qwen3.5-2B-GGUF", false, R"({"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repeat_penalty":1.0})", R"({"temperature":0.7,"top_p":0.8,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repeat_penalty":1.0})"},
+        {"Qwen3.6-35B-A3B-GGUF", true, R"({"temperature":0.6,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repeat_penalty":1.0})", R"({"temperature":0.7,"top_p":0.8,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repeat_penalty":1.0})"},
+        {"Qwen3.6-35B-A3B-MTP-GGUF", true, R"({"temperature":0.6,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repeat_penalty":1.0})", R"({"temperature":0.7,"top_p":0.8,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repeat_penalty":1.0})"},
+        {"user.Qwen3.8-Flash-Next-GGUF", true, R"({"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0})", R"({"temperature":0.7,"top_p":0.8,"top_k":20,"min_p":0.0,"presence_penalty":1.5})"},
+        {"Muse-Glimmer-30B-GGUF", true, R"({"temperature":1.0,"top_p":0.95,"top_k":64,"min_p":0.0})", nullptr},
+    };
+    const std::string wanted = normalizedModelId(modelId);
+    for (const auto& row : kSampling) {
+        if (normalizedModelId(row.id) != wanted) continue;
+        const bool thinks = knownThinking(modelId).value_or(row.thinksByDefault);
+        const char* chosen = thinks ? row.thinking : row.nonThinking;
+        if (!chosen) chosen = row.thinking ? row.thinking : row.nonThinking;
+        return nlohmann::json::parse(chosen);
+    }
+    return std::nullopt;
+}
+
 std::optional<bool> knownThinking(const std::string& modelId) {
     // Mirrors ``thinking`` in Python's MODELS. Qwen3.5's template thinks unless told
     // not to, and the small ones then spend the whole reply budget reasoning.

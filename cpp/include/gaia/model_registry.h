@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "gaia/export.h"
 
 namespace gaia {
@@ -55,6 +57,12 @@ GAIA_API std::optional<bool> knownToolCalling(const std::string& modelId);
 /// case-insensitive, with or without a ``user.`` prefix. Nothing for a model
 /// whose template has no such switch, so the request carries none.
 GAIA_API std::optional<bool> knownThinking(const std::string& modelId);
+
+/// The sampling ``modelId``'s card publishes for the mode it runs in (temperature,
+/// top_p, top_k, min_p and penalties), or nothing for a model without a profile.
+/// Mirrors ``MODEL_SAMPLING_PROFILES`` in Python and picks the mode the way
+/// ``CardSampling.select`` does: the ``knownThinking`` choice, else the model's default.
+GAIA_API std::optional<nlohmann::json> knownSampling(const std::string& modelId);
 
 /// True for a small model that gets the compact feature set: fewer tools and no
 /// prose copy of the tool list, so every step re-reads a shorter prompt. Mirrors

@@ -446,6 +446,9 @@ struct AgentConfig {
                                     // even during streaming. Used by JsonEventOutputHandler
                                     // so the TUI/WebUI gets both stream tokens AND agent events.
     double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
+    /// Send the model card's own sampling (knownSampling) in place of `temperature` when
+    /// the model has one. gaiacpp turns it on unless the user chose a temperature.
+    bool cardSampling = false;
 
     /// Reply shape requested on the prompt-JSON path. Ignored under native
     /// tool calling.
