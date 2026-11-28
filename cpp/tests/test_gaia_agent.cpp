@@ -2524,3 +2524,92 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
     }
     EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
 }
+
+TEST(GaiaAgentTest, OrdinaryProseGreenIsNotATestClaim) {
+    struct Case {
+        const char* request;
+        const char* reply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"Write one short sentence: 'Spring has arrived in the park and everything is green.'",
+              "Spring has arrived in the park and everything is green."},
+             {"Describe Ireland in April.", "The hills are all green in April."},
+             {"Describe the traffic on your commute.", "Lucky morning - the traffic lights were all green."},
+             {"Fix the grammar in 'spring came and everything is green'.",
+              "Spring came, and everything is green."},
+             {"Describe the birds outside.", "3 passed by the window."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer(tc.reply));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << tc.request << " -> " << tc.reply;
+        EXPECT_EQ(r["status"], "success") << tc.request;
+        EXPECT_EQ(r["result"], tc.reply) << tc.request;
+    }
+
+    // Shorthand test claims in coding/test requests are still caught even with no tool calls.
+    for (const auto& tc : std::vector<Case>{
+             {"Run the tests", "All green."},
+             {"Fix the bug in stats.py", "Everything is green."},
+             {"How did the tests go?", "All tests pass."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("I did not run the tests."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        ASSERT_EQ(mock.receivedBodies().size(), 2u) << tc.request << " -> " << tc.reply;
+        EXPECT_NE(mock.receivedBodies()[1].find("no tests were run this turn"), std::string::npos) << tc.request;
+        EXPECT_EQ(r["status"], "success") << tc.request;
+    }
+}
+
+TEST(GaiaAgentTest, OrdinaryProseIRanIsNotACommandClaim) {
+    struct Case {
+        const char* request;
+        const char* reply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"Write a 2-sentence first-person story about a morning jog. Start with 'I ran'.",
+              "I ran before the sun had cleared the rooftops. My breath fogged in the cold air."},
+             {"What happened while reading the notes?", "I ran into an interesting contradiction in the text."},
+             {"Why did you stop?", "I've run out of examples to share."},
+             {"Describe the ballet performance.", "The dancer executed the turn cleanly."},
+             {"Write a story about a 5K race.", "I ran it in twenty minutes."},
+             {"How did you check the proposal?", "I ran it by the team."},
+             {"What if you ran the script?", "If I ran the script, it would overwrite the output."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("unexpected retry"));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << tc.request << " -> " << tc.reply;
+        EXPECT_EQ(r["result"], tc.reply) << tc.request;
+    }
+
+    // Genuine unrun command claims are still sent back when no bash_execute succeeded.
+    for (const auto& tc : std::vector<Case>{
+             {"Check stats.py", "I ran `python stats.py` and got 42."},
+             {"Check the script", "I ran the script and it worked."},
+             {"Check the tests", "I've run pytest and checked the log."},
+             {"Run the build", "I have run the build."},
+             {"Run stats.py", "I ran it and got 42."},
+             {"Run the migration", "Executed the migration script."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("I did not run it yet."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        ASSERT_EQ(mock.receivedBodies().size(), 2u) << tc.request << " -> " << tc.reply;
+        EXPECT_NE(mock.receivedBodies()[1].find("no command ran successfully"), std::string::npos) << tc.request;
+        EXPECT_EQ(r["result"], "I did not run it yet.") << tc.request;
+    }
+}
