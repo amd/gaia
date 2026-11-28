@@ -9,7 +9,10 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
+
+#include <nlohmann/json.hpp>
 
 #include "gaia/export.h"
 
@@ -47,6 +50,14 @@ GAIA_API bool hasUnseen(const std::string& text);
 /// person_approval.sendable_address: `address` as it goes on the wire, an
 /// international domain in its ASCII (punycode) form. Throws
 /// std::invalid_argument naming `field` in Python's words.
+/// What a front end shows a person for a call of `tool`, from its prompt arguments.
+/// A tool registers its own wording, so the front ends don't link against it.
+using Summary = std::function<std::string(const nlohmann::json& shownArgs)>;
+GAIA_API void setSummary(const std::string& tool, Summary summary);
+
+/// The registered wording for `tool`, or empty when it has none.
+GAIA_API std::string summaryOf(const std::string& tool, const nlohmann::json& shownArgs);
+
 GAIA_API std::string sendableAddress(const std::string& address, const std::string& field);
 
 }  // namespace gaia::approval

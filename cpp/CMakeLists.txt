@@ -304,6 +304,7 @@ add_library(gaia_core
     src/mail_outgoing.cpp
     src/send_email_tools.cpp
     src/person_approval.cpp
+    src/person_address.cpp
     src/idna.cpp
     src/calendar_model.cpp
     src/calendar_backends.cpp
@@ -318,7 +319,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
         src/mail_gmail.cpp src/connectors.cpp src/mail_graph.cpp src/connect_card.cpp src/email_tools.cpp
         src/mail_html.cpp src/mail_mime.cpp src/mail_outgoing.cpp src/send_email_tools.cpp)
     set_source_files_properties(${GAIA_MAIL_SOURCES} PROPERTIES UNITY_GROUP mail)
-    set(GAIA_CALENDAR_SOURCES src/person_approval.cpp src/idna.cpp src/calendar_model.cpp
+    set(GAIA_CALENDAR_SOURCES src/person_address.cpp src/idna.cpp src/calendar_model.cpp
         src/calendar_backends.cpp src/calendar_tools.cpp)
     set_source_files_properties(${GAIA_CALENDAR_SOURCES} PROPERTIES UNITY_GROUP calendar)
     set_target_properties(gaia_core PROPERTIES UNITY_BUILD ON UNITY_BUILD_MODE GROUP)
