@@ -35,6 +35,23 @@ on:
       - 'src/gaia/ui/sse_translation.py'
       - 'tests/integration/conftest.py'
       - 'tests/unit/conftest.py'
+      # The harness contract suite: both agents behind the real daemon.
+      - 'tests/integration/test_harness_surface_contract.py'
+      - 'tests/integration/harness_contract/**'
+      - 'installer/headless/fake_model_server.py'
+      - 'util/fetch_ci_gaiacpp.py'
+      - 'hub/agents/gaia/python/gaiapy/**'
+      - 'src/gaia/print_mode.py'
+      - 'src/gaia/llm/lemonade_*.py'
+      - 'src/gaia/ui/sidecar/**'
+      - 'src/gaia/ui/_chat_helpers.py'
+      - 'src/gaia/ui/sse_handler.py'
+      - 'src/gaia/ui/routers/chat.py'
+      - 'src/gaia/ui/routers/system.py'
+      - 'src/gaia/ui/routers/agent_programs.py'
+      - 'src/gaia/ui/local_models.py'
+      - 'src/gaia/version.py'
+      - 'docs/cpp/gaia-agent.mdx'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review, labeled]
@@ -55,6 +72,23 @@ on:
       - 'src/gaia/ui/sse_translation.py'
       - 'tests/integration/conftest.py'
       - 'tests/unit/conftest.py'
+      # The harness contract suite: both agents behind the real daemon.
+      - 'tests/integration/test_harness_surface_contract.py'
+      - 'tests/integration/harness_contract/**'
+      - 'installer/headless/fake_model_server.py'
+      - 'util/fetch_ci_gaiacpp.py'
+      - 'hub/agents/gaia/python/gaiapy/**'
+      - 'src/gaia/print_mode.py'
+      - 'src/gaia/llm/lemonade_*.py'
+      - 'src/gaia/ui/sidecar/**'
+      - 'src/gaia/ui/_chat_helpers.py'
+      - 'src/gaia/ui/sse_handler.py'
+      - 'src/gaia/ui/routers/chat.py'
+      - 'src/gaia/ui/routers/system.py'
+      - 'src/gaia/ui/routers/agent_programs.py'
+      - 'src/gaia/ui/local_models.py'
+      - 'src/gaia/version.py'
+      - 'docs/cpp/gaia-agent.mdx'
   merge_group:
   workflow_dispatch:
 
@@ -64,6 +98,8 @@ concurrency:
 
 permissions:
   contents: read
+  # The contract suite fetches main's gaiacpp from build_agents.yml's artifacts.
+  actions: read
 
 jobs:
   distributed-seams:
@@ -109,3 +145,42 @@ jobs:
           # distributed_seams marker) so the job never scans the whole tree.
           python -m pytest tests/integration/test_distributed_seams.py \
             -m distributed_seams -v -rs --tb=short
+
+      # The seam itself, with nothing faked on GAIA's side: the real daemon
+      # starts the real agents, which find GAIA's own model server from ~/.gaia.
+      # gaiacpp is the one main's last green build_agents.yml run produced; a
+      # pull request that changes cpp/ is judged on its own gaiacpp there, so
+      # here it runs the Python agent alone.
+      - name: Fetch main's gaiacpp
+        id: gaiacpp
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          changed=""
+          if [ -n "${PR_NUMBER}" ]; then
+            changed="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')"
+          elif [ -n "${BEFORE_SHA}" ] && [ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
+            # A push that changes cpp/ has no green gaiacpp of its own yet.
+            changed="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${GITHUB_SHA}" --jq '.files[].filename')"
+          fi
+          if grep -q '^cpp/' <<< "${changed}"; then
+            echo "This change touches cpp/: build_agents.yml runs the suite on the gaiacpp it builds."
+            echo "harnesses=gaiapy" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          binary="$(python util/fetch_ci_gaiacpp.py --out "$RUNNER_TEMP/gaiacpp")"
+          echo "binary=${binary}" >> "$GITHUB_OUTPUT"
+          echo "harnesses=gaiapy,gaiacpp" >> "$GITHUB_OUTPUT"
+
+      - name: Run harness contract suite
+        timeout-minutes: 12
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          GAIA_TEST_GAIACPP: ${{ steps.gaiacpp.outputs.binary }}
+          GAIA_TEST_HARNESSES: ${{ steps.gaiacpp.outputs.harnesses }}
+        run: |
+          uv pip install --system --quiet -e ".[ui]"
+          python -m pytest tests/integration/test_harness_surface_contract.py -q --timeout=300
