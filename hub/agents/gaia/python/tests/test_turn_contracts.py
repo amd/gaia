@@ -10,12 +10,13 @@ process, the way the sidecar hosts sessions.
 
 Guards #8806 and #8850 (a declined call), #8798 (a declined detail), #8818
 (a research follow-up), #8819 (another chat's skill tools) and #8803 (a
-ruled-out step, not fixed yet).
+ruled-out step).
 """
 
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from types import SimpleNamespace
 
@@ -346,12 +347,8 @@ def test_skill_tools_stay_in_the_chat_that_loaded_them(open_chat, tmp_path):
 # ── A step the user ruled out ────────────────────────────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#8803: an answer that hides a step the user ruled out is not sent "
-        "back yet. Remove this mark when #8810 merges."
-    ),
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="checks the execute bit chmod sets"
 )
 def test_ruled_out_step_that_ran_is_named(open_chat):
     chat = open_chat()
