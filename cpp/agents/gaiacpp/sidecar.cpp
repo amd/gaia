@@ -178,13 +178,19 @@ public:
     }
     void printReasoningProgress(size_t words) override {
         emit({{"type", "status"}, {"phase", "reasoning"}, {"words", words},
-              {"message", "Reasoning - " + std::to_string(words) + " words so far"}});
+              {"message", "Reasoning - " + std::to_string(words) + (words == 1 ? " word so far" : " words so far")}});
     }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
     void printCompletion(int, int) override {}
     void printStreamToken(const std::string& token) override { emit({{"type", "token"}, {"delta", token}}); }
+    void printAnswerRetracted(const std::string&) override {
+        emit({{"type", "status"},
+              {"phase", "answer_check"},
+              {"message", "Checking the answer"},
+              {"retracts_answer", true}});
+    }
 
     void emit(const json& ev) {
         std::shared_ptr<Run> run;

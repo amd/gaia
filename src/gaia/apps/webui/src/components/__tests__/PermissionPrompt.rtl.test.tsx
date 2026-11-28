@@ -120,4 +120,50 @@ describe('permission prompt in Arabic', () => {
         expect(question).toHaveTextContent('يريد GAIA استخدام المجلد');
         expect(question.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^C:\\data\\reports$/);
     });
+
+    it('localizes gaiacpp exact shell always-allow scope in Arabic with LTR isolation and no backticks', () => {
+        const command = 'python3 -c "print(42)"';
+        prompt({
+            tool: 'run_shell_command',
+            toolLabel: 'running a command',
+            alwaysScope: `bash_execute:exact:${command}`,
+            alwaysLabel: `Run \`${command}\``,
+            toolArgs: { command },
+        });
+        const always = screen.getByRole('button', { name: /Always allow/ });
+        const arabicOnly = always.cloneNode(true) as HTMLElement;
+        arabicOnly.querySelectorAll('small').forEach((g) => g.remove());
+        expect(stripIsolates(arabicOnly.textContent ?? '').trim()).toBe(
+            `السماح دائمًا بـ تشغيل ${command} في هذه المحادثة`,
+        );
+        expect(always.textContent).not.toContain('`');
+        expect(arabicOnly.textContent).not.toContain('Run');
+        const ltr = [...always.querySelectorAll('bdi[dir="ltr"]')].map((el) => el.textContent);
+        expect(ltr).toContain(command);
+        const gloss = stripIsolates(always.querySelector('.i18n-gloss')?.textContent ?? '');
+        expect(gloss).toBe(`(Always allow running ${command} in this chat)`);
+        expect(always.getAttribute('title')).not.toContain('`');
+        expect(always.getAttribute('title')).not.toMatch(/[\uE000\uE001]/);
+    });
+
+    it('localizes gaiacpp cmd shell always-allow scope in Arabic with LTR isolation', () => {
+        prompt({
+            tool: 'run_shell_command',
+            toolLabel: 'running a command',
+            alwaysScope: 'bash_execute:cmd:git',
+            alwaysLabel: 'Run git commands',
+            toolArgs: { command: 'git status' },
+        });
+        const always = screen.getByRole('button', { name: /Always allow/ });
+        const arabicOnly = always.cloneNode(true) as HTMLElement;
+        arabicOnly.querySelectorAll('small').forEach((g) => g.remove());
+        expect(stripIsolates(arabicOnly.textContent ?? '').trim()).toBe(
+            'السماح دائمًا بـ تشغيل أوامر git في هذه المحادثة',
+        );
+        expect(arabicOnly.textContent).not.toContain('Run');
+        const ltr = [...always.querySelectorAll('bdi[dir="ltr"]')].map((el) => el.textContent);
+        expect(ltr).toContain('git');
+        const gloss = stripIsolates(always.querySelector('.i18n-gloss')?.textContent ?? '');
+        expect(gloss).toBe('(Always allow running git commands in this chat)');
+    });
 });
