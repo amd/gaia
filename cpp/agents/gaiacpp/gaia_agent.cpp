@@ -476,7 +476,7 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
     if (memoryOff() && (reads.count(tool.name) || writes.count(tool.name))) {
         return refuse("Memory is off for this chat: nothing is read from or saved to it.");
     }
-    if (options_.memoryPrivate && options_.memoryPrivate->load() && writes.count(tool.name)) {
+    if (memoryPrivate() && writes.count(tool.name)) {
         return refuse("This chat is private: nothing from it is saved to memory.");
     }
     return std::nullopt;
@@ -682,11 +682,18 @@ void GaiaAgent::onTurnStart() {
     }
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
-    for (const auto& name : compactWithheldTools()) {
+    // Memory tools also follow the chat's switch, so the model isn't offered a tool it would be refused.
+    const bool memOff = memoryOff();
+    const bool memPrivate = memoryPrivate();
+    const auto& withheld = compactWithheldTools();
+    std::set<std::string> gated(withheld.begin(), withheld.end());
+    gated.insert({"recall", "remember", "update_memory", "forget"});
+    for (const auto& name : gated) {
+        bool on = !(compact && std::find(withheld.begin(), withheld.end(), name) != withheld.end());
+        if (name == "recall") on = on && !memOff;
+        if (name == "remember" || name == "update_memory" || name == "forget") on = on && !memOff && !memPrivate;
         // Written only on a change, so a turn doesn't race readers on other threads for nothing.
-        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) == compact) {
-            toolRegistry().setEnabled(name, !compact);
-        }
+        if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) != on) toolRegistry().setEnabled(name, on);
     }
     // A compact model gets helpers only when asked for by number: its evals have not earned them.
     if (toolRegistry().hasTool("delegate_task")) {
@@ -776,6 +783,13 @@ std::string GaiaAgent::systemContext() const {
     if (options_.webOff) {
         out << "- Web access is off for this run. Do not search the web or fetch pages, repositories or "
                "answers through the shell or a script either. Installing a package the task needs is fine.\n";
+    }
+    if (memoryOff()) {
+        out << "- Memory is off for this chat: nothing is read from or saved to memory. Do not search "
+               "local files to substitute for memory; tell the user memory is off.\n";
+    } else if (memoryPrivate()) {
+        out << "- This chat is private: you may recall earlier memories, but nothing from this chat is "
+               "saved to memory.\n";
     }
     if (pythonCommand().empty()) {
         out << "- Python: none found on PATH. Don't plan around it; say so if a task needs it.\n";
