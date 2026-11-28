@@ -52,6 +52,11 @@ WRITE_TOOLS = frozenset(
     }
 )
 
+#: Tools whose ``results`` list carries document passages (``gaiacpp`` shape).
+_DOCUMENT_QUERY_TOOLS = frozenset(
+    {"query_documents", "query_specific_file", "search_documents"}
+)
+
 #: Indexing tools, keyed to the argument naming what they indexed.
 _INDEX_TOOLS = {"index_document": "file_path", "index_directory": "directory_path"}
 
@@ -236,12 +241,17 @@ class TurnLedger:
             if not call["success"] or not isinstance(data, dict):
                 continue
             chunks = data.get("chunks")
+            if not isinstance(chunks, list) and call["tool"] in _DOCUMENT_QUERY_TOOLS:
+                chunks = data.get("results")
             if not isinstance(chunks, list):
                 continue
             for chunk in chunks:
-                if not isinstance(chunk, dict) or not chunk.get("source_file"):
+                if not isinstance(chunk, dict):
                     continue
-                path = str(chunk["source_file"])
+                source = chunk.get("source_file") or chunk.get("file")
+                if not source:
+                    continue
+                path = str(source)
                 base = Path(path).name
                 entry = docs.setdefault(
                     path,
@@ -254,7 +264,11 @@ class TurnLedger:
                 )
                 page = chunk.get("page")
                 # Two queries in one turn often return the same passage.
-                body = chunk.get("content", chunk.get("chunk_index"))
+                body = chunk.get("content")
+                if body is None:
+                    body = chunk.get("text")
+                if body is None:
+                    body = chunk.get("chunk_index")
                 body = body if isinstance(body, (str, int)) else None
                 key = (path, page if isinstance(page, int) else None, body)
                 if body is None or key not in seen:
@@ -296,6 +310,24 @@ class TurnLedger:
                 paths.append(path)
         return paths
 
+    @staticmethod
+    def _collect_indexed_result(data: Any, found: Dict[str, int]) -> None:
+        if not isinstance(data, dict) or data.get("status") != "success":
+            return
+        path = data.get("file_path")
+        if isinstance(path, str) and os.path.isabs(path):
+            chunks = data.get("num_chunks")
+            found[path] = chunks if isinstance(chunks, int) else 0
+        indexed = data.get("indexed")
+        if isinstance(indexed, list):
+            for item in indexed:
+                if not isinstance(item, dict):
+                    continue
+                item_path = item.get("file")
+                if isinstance(item_path, str) and os.path.isabs(item_path):
+                    chunks = item.get("chunks")
+                    found[item_path] = chunks if isinstance(chunks, int) else 0
+
     def indexed_documents(self) -> List[Tuple[str, int]]:
         """``(path, chunks)`` for each file ``index_document`` indexed this turn.
 
@@ -304,15 +336,18 @@ class TurnLedger:
         """
         found: Dict[str, int] = {}
         for call in self._finished():
+            if not call["success"]:
+                continue
             data = call["data"]
-            if call["tool"] != "index_document" or not call["success"]:
-                continue
-            if not isinstance(data, dict) or data.get("status") != "success":
-                continue
-            path = data.get("file_path")
-            if isinstance(path, str) and os.path.isabs(path):
-                chunks = data.get("num_chunks")
-                found[path] = chunks if isinstance(chunks, int) else 0
+            if call["tool"] == "index_document":
+                self._collect_indexed_result(data, found)
+            elif call["tool"] == "index_documents":
+                if isinstance(data, list):
+                    for entry in data:
+                        if isinstance(entry, dict):
+                            self._collect_indexed_result(entry.get("result"), found)
+                else:
+                    self._collect_indexed_result(data, found)
         return list(found.items())
 
     def unreadable_documents(self) -> List[Tuple[str, str]]:
@@ -376,7 +411,9 @@ class TurnLedger:
                         item["copy_of"] = kept
                     out.append(item)
             elif tool in _INDEX_TOOLS:
-                path = args.get(_INDEX_TOOLS[tool])
+                path = args.get(_INDEX_TOOLS[tool]) or (
+                    args.get("path") if tool == "index_document" else None
+                )
                 if isinstance(path, str) and path:
                     path = os.path.expanduser(path)
                     out.append(
