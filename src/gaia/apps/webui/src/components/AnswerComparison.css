@@ -91,6 +91,12 @@
     cursor: default;
 }
 
+/* The menu hangs off the button, not the whole message. */
+.retry-menu-anchor {
+    position: relative;
+    display: inline-flex;
+}
+
 .retry-menu {
     display: flex;
     flex-direction: column;
