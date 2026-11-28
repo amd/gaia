@@ -729,10 +729,10 @@ class GaiaAgent(
     def close(self, *, wait_for_mcp: bool = True) -> None:
         """Release this agent's watchers, HTTP session and SQLite handles now.
 
-        ``ChatAgent`` puts that teardown in ``__del__``, which for an instance
-        whose tool registry holds bound methods only runs when the cyclic
-        collector gets to it — far too late for a sidecar that builds an agent
-        per one-shot request. Every step is individually guarded and idempotent,
+        ``ChatAgent.close`` runs that teardown, which otherwise waits for
+        ``__del__``. An instance whose tool registry holds bound methods is
+        only finalized when the cyclic collector gets to it, far too late for
+        a sidecar that builds an agent per one-shot request. Every step is individually guarded and idempotent,
         so the later ``__del__`` is harmless. MCP servers are stopped here and
         waited for, so they are gone when ``close()`` returns; with
         ``wait_for_mcp=False`` they stop on a background thread instead, for a
@@ -744,7 +744,7 @@ class GaiaAgent(
                 manager.disconnect_all()
             except Exception as e:  # noqa: BLE001 — logged; the rest still runs
                 logger.error("Error stopping MCP servers during close: %s", e)
-        self.__del__()
+        super().close()
 
     def _register_tools(self) -> None:
         """ChatAgent's profile tools, plus runtime access to the skill library.
