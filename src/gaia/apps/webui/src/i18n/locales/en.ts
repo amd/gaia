@@ -1704,6 +1704,8 @@ export const enMessages = {
     'settings.backTo': 'Back to {section}',
     'chat.loadingTools': 'Loading more tools',
     'chat.loadingMessages': 'Loading messages',
+    'chat.empty.title': 'This chat is empty',
+    'chat.empty.hint': 'Send a message below to start it.',
     'chat.privateOffTitle': "Turn off private chat. This chat isn't saved to memory.",
     'chat.browseFiles': 'Browse files on this PC',
     'chat.exportTitle': 'Export as Markdown',

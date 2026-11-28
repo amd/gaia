@@ -299,6 +299,28 @@
     overflow-anchor: auto;
 }
 
+/* A chat with no messages: the new-chat greeting's look, smaller. */
+.chat-empty {
+    padding: 18vh 0 0;
+    text-align: center;
+}
+
+.chat-empty-title {
+    margin: 0 0 8px;
+    color: var(--text-primary);
+    font-family: var(--font-greeting);
+    font-size: 26px;
+    font-weight: 300;
+    line-height: 1.2;
+    text-wrap: balance;
+}
+
+.chat-empty-hint {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
 /* One readable column, centred, for both the transcript and the composer. */
 .messages-column,
 .input-column {
