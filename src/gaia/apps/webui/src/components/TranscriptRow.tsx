@@ -46,6 +46,9 @@ export interface TranscriptRowProps {
     onCloseComparison: () => void;
 }
 
+/** Failure causes (`done.failure`) that are not the agent's doing. */
+const NOT_THE_AGENTS_FAULT = new Set(['model_server_down', 'model_unavailable']);
+
 /** One message in the transcript; memoised so a streaming reply redraws only itself. */
 export const TranscriptRow = memo(function TranscriptRow({
     message: msg, className, notice, busy, readOnly, unsent, isLast, comparing, comparison, laterCount, latencyMs, answeredBy,
@@ -60,9 +63,11 @@ export const TranscriptRow = memo(function TranscriptRow({
         && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
     const canChange = !busy && !unsent && msg.role === 'user' && !readOnly;
     const model = msg.stats?.model ?? answeredBy;
-    const recovers = msg.failed === true && msg.failure !== 'model_server_down' && canTryAgain;
+    // The model server or the model itself failed: switching agents wouldn't help.
+    const agentsFault = msg.failed === true && !(msg.failure && NOT_THE_AGENTS_FAULT.has(msg.failure));
+    const recovers = agentsFault && canTryAgain;
     // Only when gaiacpp started and failed: a gaiacpp that can't start gets the recovery's two fixes instead.
-    const ranOnNative = msg.failed === true && msg.failure !== 'model_server_down' && msg.agentProgram === 'gaiacpp' && isLast && !busy;
+    const ranOnNative = agentsFault && msg.agentProgram === 'gaiacpp' && isLast && !busy;
     // The recovery card names the real cause and its fixes; the generic failure above it would contradict them.
     const [agentProblem, setAgentProblem] = useState(false);
     const replaced = recovers && agentProblem;

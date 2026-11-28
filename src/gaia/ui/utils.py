@@ -301,6 +301,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         stopped=bool(msg.get("stopped")),
         failed=bool(msg.get("failed")),
         agent_program=msg.get("agent_program"),
+        failure=msg.get("failure"),
     )
 
 

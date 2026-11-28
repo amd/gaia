@@ -2885,6 +2885,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> bool:
             {
                 "type": "agent_error",
                 "content": _agent_ui_wording(_cloud_not_connected_text(model_id)),
+                "failure": MODEL_UNAVAILABLE,
             }
         )
         return False
@@ -2904,6 +2905,14 @@ def _refuse_internet_off(
     sse_handler._emit(
         {"type": "agent_error", "content": profile.internet_upgrade_message}
     )
+
+
+#: A failed turn's cause when its model can't be used: a cloud model with no
+#: working key, or a local model that isn't downloaded. Not the agent's fault.
+MODEL_UNAVAILABLE = "model_unavailable"
+
+#: Causes that switching to the other agent would not fix.
+_NOT_THE_AGENTS_FAULT = frozenset({MODEL_SERVER_DOWN, MODEL_UNAVAILABLE})
 
 
 class ModelServerDownError(RuntimeError):
@@ -3196,7 +3205,11 @@ def _dispatch_sidecar_query(
         )
     elif status_code != 200 and _probe_misses_only_the_model(init_body):
         sse_handler._emit(
-            {"type": "agent_error", "content": _missing_local_model_text(init_body)}
+            {
+                "type": "agent_error",
+                "content": _missing_local_model_text(init_body),
+                "failure": MODEL_UNAVAILABLE,
+            }
         )
         return
     elif status_code != 200:
@@ -3965,12 +3978,12 @@ def _failed_turn_program(
     """``gaiacpp`` when a failed turn ran on the native agent, else None.
 
     The UI then says which agent the chat runs on and how to switch; it never
-    switches by itself. A model-server outage is not the agent's fault, so it
-    names no program.
+    switches by itself. A model-server outage or a model that can't be used is
+    not the agent's fault, so it names no program.
     """
     from gaia.daemon.sidecars import fetch
 
-    if agent_type != FLAGSHIP_AGENT_ID or failure == MODEL_SERVER_DOWN:
+    if agent_type != FLAGSHIP_AGENT_ID or failure in _NOT_THE_AGENTS_FAULT:
         return None
     if fetch.saved_flagship() != fetch.NATIVE_FLAGSHIP:
         return None
@@ -5370,6 +5383,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         full_response = ""
         answer_event = None
         fatal_error = None
+        # The cause a refusal named before the agent ran (MODEL_UNAVAILABLE).
+        refusal_failure = None
         captured_steps = []  # Collect agent steps for DB persistence
         persisted_policy_block_msg_id = None
         persisted_policy_block_content = None
@@ -5508,6 +5523,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "agent_error" and event.get("fatal"):
                     # A relayed sidecar's terminal error: the turn ends here.
                     fatal_error = event.get("content") or ""
+                if event_type == "agent_error" and isinstance(
+                    event.get("failure"), str
+                ):
+                    refusal_failure = event["failure"]
 
                 # Capture agent steps for persistence
                 if event_type == "thinking":
@@ -6061,6 +6080,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         {"role": "user", "content": request.message},
                         {"role": "assistant", "content": stopped_reply},
                     ]
+            failure_kind = (
+                refusal_failure
+                or _turn_failure_kind(answer_event, result_holder.get("result"))
+                if turn_failed
+                else None
+            )
             msg_id = db.upsert_message(
                 request.session_id,
                 persisted_policy_block_msg_id,
@@ -6076,6 +6101,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # As on `done`: a Stop wins over the failure it cut short.
                 failed=turn_failed and not turn_cancelled,
                 agent_program=_turn_program(agent_type),
+                failure=failure_kind,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -6101,11 +6127,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     model_id=model_id,
                 ),
                 request.session_id,
-            )
-            failure_kind = (
-                _turn_failure_kind(answer_event, result_holder.get("result"))
-                if turn_failed
-                else None
             )
             done_event = _done_event(
                 msg_id,
@@ -6211,6 +6232,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     stopped=turn_cancelled,
                     failed=failed,
                     agent_program=_turn_program(agent_type),
+                    failure=refusal_failure if failed else None,
                 )
                 done_event = _done_event(
                     msg_id,
@@ -6218,9 +6240,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     turn_cancelled,
                     turn_summary=turn_summary,
                     failed=failed,
+                    failure=refusal_failure if failed else None,
                     documents_added=documents_added,
                     library_notices=library_notices,
-                    agent_program=_failed_turn_program(agent_type) if failed else None,
+                    agent_program=(
+                        _failed_turn_program(agent_type, refusal_failure)
+                        if failed
+                        else None
+                    ),
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)

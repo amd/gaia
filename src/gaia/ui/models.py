@@ -847,6 +847,8 @@ class MessageResponse(BaseModel):
     failed: bool = False
     # The flagship program that answered this turn (gaiapy or gaiacpp), if any.
     agent_program: Optional[str] = None
+    # The named cause of a failed turn (``model_server_down``), when one was named.
+    failure: Optional[str] = None
 
 
 class MessageListResponse(BaseModel):

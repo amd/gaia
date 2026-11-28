@@ -38,6 +38,7 @@ def test_a_cloud_model_without_a_working_key_stops_the_turn(monkeypatch):
     assert "isn't connected, so GAIA can't answer" in errors[0]["content"]
     assert "Reconnect Fireworks AI" in errors[0]["content"]
     assert "404" not in errors[0]["content"]
+    assert errors[0]["failure"] == "model_unavailable"
 
 
 def test_a_cloud_model_with_a_working_key_goes_ahead(monkeypatch):
@@ -76,3 +77,41 @@ def test_both_modes_say_the_same_thing(monkeypatch):
 
     in_process = _missing_local_model_text({"model": {"id": CLOUD_MODEL}})
     assert sse.events[0]["content"] == _agent_ui_wording(in_process)
+
+
+def test_a_model_that_cant_be_used_names_no_agent_to_switch_to(monkeypatch):
+    from gaia.daemon.sidecars import fetch
+    from gaia.ui._chat_helpers import (
+        FLAGSHIP_AGENT_ID,
+        MODEL_UNAVAILABLE,
+        _failed_turn_program,
+    )
+
+    monkeypatch.setattr(fetch, "saved_flagship", lambda: fetch.NATIVE_FLAGSHIP)
+
+    assert _failed_turn_program(FLAGSHIP_AGENT_ID, MODEL_UNAVAILABLE) is None
+    assert _failed_turn_program(FLAGSHIP_AGENT_ID) == fetch.NATIVE_FLAGSHIP
+
+
+def test_a_failed_turns_cause_survives_a_reload(tmp_path):
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.utils import message_to_response
+
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    sid = db.create_session(title="t")["id"]
+    failed_id = db.add_message(
+        sid,
+        "assistant",
+        "",
+        failed=True,
+        agent_program="gaiacpp",
+        failure="model_unavailable",
+    )
+    answered_id = db.add_message(
+        sid, "assistant", "hi", agent_program="gaiacpp", failure="model_unavailable"
+    )
+
+    rows = {m["id"]: m for m in db.get_messages(sid)}
+    assert message_to_response(rows[failed_id]).failure == "model_unavailable"
+    # Only a failed turn has a cause.
+    assert message_to_response(rows[answered_id]).failure is None
