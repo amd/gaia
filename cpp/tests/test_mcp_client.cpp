@@ -598,7 +598,7 @@ TEST(MCPConfirmationTest, DeniedMcpToolDoesNotExecute) {
 
     EXPECT_FALSE(executed) << "denied MCP tool executed anyway";
     EXPECT_EQ(prompts, 1);
-    EXPECT_EQ(result["status"], "error");
+    EXPECT_EQ(result["status"], "denied");
 }
 
 TEST(MCPConfirmationTest, McpToolWithoutConfirmCallbackFailsClosed) {
@@ -691,7 +691,7 @@ TEST(MCPConfirmationTest, UnprefixedToolNameStillHitsTheGate) {
 
     EXPECT_EQ(prompts, 1) << "unprefixed name bypassed the confirmation gate";
     EXPECT_FALSE(executed);
-    EXPECT_EQ(result["status"], "error");
+    EXPECT_EQ(result["status"], "denied");
 }
 
 TEST(MCPConfirmationTest, AlwaysAllowStoreKeysOnThePrefixedName) {
