@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AddSkillsFromLink } from '../AddSkillsFromLink';
 import { useEscapeToClose } from '../../../hooks/useEscapeToClose';
 import * as api from '../../../services/api';
-import type { LinkSkill } from '../../../types';
+import type { LinkPreview, LinkSkill } from '../../../types';
 
 vi.mock('../../../services/api');
 
@@ -132,7 +132,7 @@ describe('AddSkillsFromLink', () => {
     });
 
     it('leaves the link alone on Escape while it is being read', async () => {
-        let done: (p: unknown) => void = () => {};
+        let done: (p: LinkPreview) => void = () => {};
         mockedApi.previewSkillLink.mockReturnValue(new Promise((resolve) => { done = resolve; }));
         render(<AddSkillsFromLink onAdded={vi.fn()} />);
         const box = screen.getByLabelText('Link to a skill or skills library');
