@@ -21,13 +21,17 @@ interface Props {
     onRetry: () => void;
     /** A message was sent while the agent can't start; it stayed in the box. */
     kept?: boolean;
+    /** Told when a download, switch or retry starts and ends, so the host can hold its own buttons. */
+    onBusy?: (busy: boolean) => void;
+    /** Shown inside a box that is already an alert: no second announcement. */
+    nested?: boolean;
 }
 
 /**
  * The chosen gaiacpp can't start: say why, and offer the two ways out. Nothing
  * changes until the user picks one.
  */
-export function AgentRecovery({ problem, onRetry, kept = false }: Props) {
+export function AgentRecovery({ problem, onRetry, kept = false, onBusy, nested = false }: Props) {
     const t = useT();
     const [open, setOpen] = useState(false);
     const [program, setProgram] = useState<AgentProgram | null>(null);
@@ -88,13 +92,16 @@ export function AgentRecovery({ problem, onRetry, kept = false }: Props) {
 
     const downloading = job?.state === 'downloading';
     const busy = downloading || switching || retrying;
+    const busyRef = useRef(onBusy);
+    busyRef.current = onBusy;
+    useEffect(() => busyRef.current?.(busy), [busy]);
     const canDownload = program?.can_download === true;
     const reason: Param | null = !program || program.can_download
         ? null
         : program.unavailable_code ? ref(WHY[program.unavailable_code]) : program.unavailable_reason;
 
     return (
-        <div className="new-chat-setup-failed agent-recovery" role="alert">
+        <div className="new-chat-setup-failed agent-recovery" role={nested ? undefined : 'alert'}>
             <p className="new-chat-setup-failed-title">
                 {t(problem.code === 'gaiacpp_invalid' ? 'newChat.agent.invalid' : 'newChat.agent.missing', { name: NAME })}
             </p>
