@@ -342,6 +342,12 @@ TEST(InternetRefusalTest, RefusesWhatGoesOnline) {
     mcp.mcpServer = "github";
     EXPECT_NE(internetRefusal(mcp, json::object()), "");
 
+    ToolInfo mailbox;
+    mailbox.name = "list_inbox";
+    mailbox.onlineService = true;
+    EXPECT_NE(internetRefusal(mailbox, json::object()).find("list_inbox, which calls an online service"),
+              std::string::npos);
+
     ToolInfo sh;
     sh.name = "bash_execute";
     for (const char* online : {"curl https://example.com", "git pull", "git -C repo fetch origin",

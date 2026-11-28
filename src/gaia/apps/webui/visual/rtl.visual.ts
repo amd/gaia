@@ -3432,7 +3432,7 @@ for (const locale of ['ar', 'en']) {
                     if (expanded) {
                         // What changes on gaiacpp is a list of its own, each line inside the card.
                         const diffs = agent.locator('.agent-choice-diffs li');
-                        await expect(diffs).toHaveCount(5);
+                        await expect(diffs).toHaveCount(6);
                         const card = (await agent.boundingBox())!;
                         for (const line of await diffs.all()) {
                             const box = (await line.boundingBox())!;

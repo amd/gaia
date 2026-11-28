@@ -31,6 +31,7 @@ const DIFFERENCES: MessageKey[] = [
     'setup.agent.diff.undo',
     'setup.agent.diff.search',
     'setup.agent.diff.media',
+    'setup.agent.diff.email',
     'setup.agent.diff.context',
 ];
 

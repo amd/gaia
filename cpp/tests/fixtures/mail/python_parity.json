@@ -1,0 +1,1756 @@
+{
+ "address_list": [
+  [
+   "\"Ruiz, Dana\" <dana@example.com>",
+   "Ruiz, Dana <dana@example.com>"
+  ],
+  [
+   "Me <me@example.com>, Other <other@example.com>",
+   "Me <me@example.com>, Other <other@example.com>"
+  ],
+  [
+   "cc@example.com",
+   "cc@example.com"
+  ],
+  [
+   "=?UTF-8?B?RGFuYSBSdcOteg==?= <dana@example.com>",
+   "Dana Ruíz <dana@example.com>"
+  ],
+  [
+   "a@x.com, ",
+   "a@x.com"
+  ],
+  [
+   "Undisclosed recipients:;",
+   ""
+  ],
+  [
+   "a@x.com (Doe, J)",
+   ""
+  ],
+  [
+   "Team: a@x.com, b@x.com;",
+   "a@x.com, b@x.com"
+  ],
+  [
+   "dana@example.com <dana@example.com>",
+   ""
+  ],
+  [
+   "\"Dana\" <DANA@example.com>",
+   "Dana <DANA@example.com>"
+  ],
+  [
+   "<bare@example.com>",
+   "bare@example.com"
+  ],
+  [
+   "Name Only",
+   "Name"
+  ],
+  [
+   "x@[127.0.0.1]",
+   ""
+  ],
+  [
+   "a@b@c.com",
+   ""
+  ],
+  [
+   "\"Quote \\\" inside\" <q@x.com>",
+   "Quote \" inside <q@x.com>"
+  ],
+  [
+   "(comment) a@x.com",
+   "comment <a@x.com>"
+  ],
+  [
+   "Dana (work) <dana@x.com>",
+   "Dana (work) <dana@x.com>"
+  ],
+  [
+   "Dana (work <dana@x.com>",
+   ""
+  ],
+  [
+   "=?utf-8?q?Jos=C3=A9?= <j@x.com>, =?iso-8859-1?q?Andr=E9?= <a@x.com>",
+   "José <j@x.com>, André <a@x.com>"
+  ],
+  [
+   "",
+   ""
+  ],
+  [
+   "José <j@x.com>",
+   "José <j@x.com>"
+  ],
+  [
+   "  spaced@x.com  ",
+   "spaced@x.com"
+  ],
+  [
+   "first.last@sub.example.co.uk",
+   "first.last@sub.example.co.uk"
+  ],
+  [
+   "a@x.com,,b@x.com",
+   "a@x.com, b@x.com"
+  ]
+ ],
+ "decode": [
+  [
+   "=?utf-8?q?Hello?= =?utf-8?q?_World?=",
+   "Hello World"
+  ],
+  [
+   "Re: =?utf-8?b?w6k=?=x",
+   "Re: é x"
+  ],
+  [
+   "=?iso-8859-1?q?caf=E9?= ok",
+   "café ok"
+  ],
+  [
+   "Hello =?us-ascii?q?World?=",
+   "Hello  World"
+  ],
+  [
+   "=?utf-8?q?V=C3=A9rtrag.pdf?=",
+   "Vértrag.pdf"
+  ],
+  [
+   "=?x-unknown?q?abc?=",
+   "=?x-unknown?q?abc?="
+  ],
+  [
+   "=?utf-8?b?/w==?=",
+   "=?utf-8?b?/w==?="
+  ],
+  [
+   "plain text",
+   "plain text"
+  ],
+  [
+   "Café =?utf-8?q?x?=",
+   "Café =?utf-8?q?x?="
+  ],
+  [
+   "=?windows-1252?q?=93quoted=94?=",
+   "“quoted”"
+  ],
+  [
+   "=?UTF-8?Q?a?= b =?UTF-8?Q?c?=",
+   "a b c"
+  ],
+  [
+   "(=?utf-8?q?x?=)",
+   "(x)"
+  ],
+  [
+   "=?utf-8?b?YWJj?=",
+   "abc"
+  ],
+  [
+   "=?utf-8?q?a_b?=c",
+   "a b c"
+  ],
+  [
+   "=?utf-8?q?a?=\r\n =?utf-8?q?b?=",
+   "ab"
+  ],
+  [
+   "=?latin-1?q?=E9?= and =?utf-8?q?=C3=A9?=",
+   "é and é"
+  ]
+ ],
+ "preview": [
+  [
+   "  Q3 &amp; Q4 &quot;figures&quot;  ",
+   "Q3 & Q4 \"figures\""
+  ],
+  [
+   "&ampfoo; &#39; &#x26; &nbsp;x &bogus; &copy &#150;",
+   "&foo; ' &  x &bogus; © –"
+  ],
+  [
+   "&#0; &#128512; &#xD800; &#1114112; &#11; &#x80;",
+   "� 😀 � �  €"
+  ],
+  [
+   "&lt;b&gt; &eacute;t&eacute; &hellip; &rsquo;",
+   "<b> été … ’"
+  ],
+  [
+   "&#; &#x; & alone &;",
+   "&#; &#x; & alone &;"
+  ],
+  [
+   " lead nbsp ",
+   "lead nbsp"
+  ],
+  [
+   "no entities",
+   "no entities"
+  ]
+ ],
+ "received": [
+  [
+   "1788336900000",
+   "2026-09-02T08:15:00Z"
+  ],
+  [
+   "not-a-number",
+   ""
+  ],
+  [
+   "-1",
+   "1969-12-31T23:59:59Z"
+  ],
+  [
+   "0",
+   "1970-01-01T00:00:00Z"
+  ],
+  [
+   " 42 ",
+   "1970-01-01T00:00:00Z"
+  ],
+  [
+   "1_000",
+   "1970-01-01T00:00:01Z"
+  ],
+  [
+   1788336900000,
+   "2026-09-02T08:15:00Z"
+  ],
+  [
+   null,
+   ""
+  ],
+  [
+   "",
+   ""
+  ],
+  [
+   "+5",
+   "1970-01-01T00:00:00Z"
+  ]
+ ],
+ "gmail_summary": [
+  [
+   "alternative",
+   {
+    "id": "a1c01306268e0d2c",
+    "threadId": "a1c01306268e0d2c",
+    "labelIds": [
+     "INBOX",
+     "UNREAD",
+     "STARRED",
+     "CATEGORY_UPDATES",
+     "Label_17",
+     "Label_99"
+    ],
+    "snippet": "Can you confirm the Q3 figures? Café.",
+    "internalDate": "1788336900000",
+    "payload": {
+     "mimeType": "multipart/alternative",
+     "filename": "",
+     "headers": [
+      {
+       "name": "Message-ID",
+       "value": "<abc@example.com>"
+      },
+      {
+       "name": "Date",
+       "value": "Wed, 02 Sep 2026 08:15:00 +0000"
+      },
+      {
+       "name": "From",
+       "value": "\"Ruiz, Dana\" <dana@example.com>"
+      },
+      {
+       "name": "To",
+       "value": "Me <me@example.com>, Other <other@example.com>"
+      },
+      {
+       "name": "Cc",
+       "value": "cc@example.com"
+      },
+      {
+       "name": "Subject",
+       "value": "Q3 numbers"
+      },
+      {
+       "name": "Auto-Submitted",
+       "value": "auto-replied"
+      },
+      {
+       "name": "X-Gmail-Labels",
+       "value": "Inbox,Unread,Receipts"
+      },
+      {
+       "name": "MIME-Version",
+       "value": "1.0"
+      },
+      {
+       "name": "Content-Type",
+       "value": "multipart/alternative; boundary=\"B\""
+      }
+     ],
+     "body": {
+      "size": 0
+     },
+     "parts": [
+      {
+       "mimeType": "text/plain",
+       "filename": "",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "text/plain; charset=utf-8"
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 40,
+        "data": "Q2FuIHlvdSBjb25maXJtIHRoZSBRMyBmaWd1cmVzPyBDYWbDqS4NCg"
+       }
+      },
+      {
+       "mimeType": "text/html",
+       "filename": "",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "text/html; charset=utf-8"
+        }
+       ],
+       "body": {
+        "size": 23,
+        "data": "PHA-Q2FuIHlvdSBjb25maXJtPzwvcD4"
+       }
+      }
+     ]
+    },
+    "sizeEstimate": 542
+   },
+   {
+    "Label_17": "Receipts"
+   },
+   false,
+   {
+    "id": "a1c01306268e0d2c",
+    "thread_id": "a1c01306268e0d2c",
+    "subject": "Q3 numbers",
+    "from": "Ruiz, Dana <dana@example.com>",
+    "to": "Me <me@example.com>, Other <other@example.com>",
+    "cc": "cc@example.com",
+    "received": "2026-09-02T08:15:00Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Receipts",
+     "Label_99"
+    ],
+    "preview": "Can you confirm the Q3 figures? Café.",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "auto-replied",
+    "x_autoreply": ""
+   }
+  ],
+  [
+   "alternative",
+   {
+    "id": "a1c01306268e0d2c",
+    "threadId": "a1c01306268e0d2c",
+    "labelIds": [
+     "INBOX",
+     "UNREAD",
+     "STARRED",
+     "CATEGORY_UPDATES",
+     "Label_17",
+     "Label_99"
+    ],
+    "snippet": "Can you confirm the Q3 figures? Café.",
+    "internalDate": "1788336900000",
+    "payload": {
+     "mimeType": "multipart/alternative",
+     "filename": "",
+     "headers": [
+      {
+       "name": "Message-ID",
+       "value": "<abc@example.com>"
+      },
+      {
+       "name": "Date",
+       "value": "Wed, 02 Sep 2026 08:15:00 +0000"
+      },
+      {
+       "name": "From",
+       "value": "\"Ruiz, Dana\" <dana@example.com>"
+      },
+      {
+       "name": "To",
+       "value": "Me <me@example.com>, Other <other@example.com>"
+      },
+      {
+       "name": "Cc",
+       "value": "cc@example.com"
+      },
+      {
+       "name": "Subject",
+       "value": "Q3 numbers"
+      },
+      {
+       "name": "Auto-Submitted",
+       "value": "auto-replied"
+      },
+      {
+       "name": "X-Gmail-Labels",
+       "value": "Inbox,Unread,Receipts"
+      },
+      {
+       "name": "MIME-Version",
+       "value": "1.0"
+      },
+      {
+       "name": "Content-Type",
+       "value": "multipart/alternative; boundary=\"B\""
+      }
+     ],
+     "body": {
+      "size": 0
+     },
+     "parts": [
+      {
+       "mimeType": "text/plain",
+       "filename": "",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "text/plain; charset=utf-8"
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 40,
+        "data": "Q2FuIHlvdSBjb25maXJtIHRoZSBRMyBmaWd1cmVzPyBDYWbDqS4NCg"
+       }
+      },
+      {
+       "mimeType": "text/html",
+       "filename": "",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "text/html; charset=utf-8"
+        }
+       ],
+       "body": {
+        "size": 23,
+        "data": "PHA-Q2FuIHlvdSBjb25maXJtPzwvcD4"
+       }
+      }
+     ]
+    },
+    "sizeEstimate": 542
+   },
+   {
+    "Label_17": "Receipts"
+   },
+   true,
+   {
+    "id": "a1c01306268e0d2c",
+    "thread_id": "a1c01306268e0d2c",
+    "subject": "Q3 numbers",
+    "from": "Ruiz, Dana <dana@example.com>",
+    "to": "Me <me@example.com>, Other <other@example.com>",
+    "cc": "cc@example.com",
+    "received": "2026-09-02T08:15:00Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Receipts",
+     "Label_99"
+    ],
+    "preview": "Can you confirm the Q3 figures? Café.",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "auto-replied",
+    "x_autoreply": "",
+    "body": "Can you confirm the Q3 figures? Café.\r\n",
+    "body_content_type": "text"
+   }
+  ],
+  [
+   "html_only",
+   {
+    "id": "8d2ff5b9da143f07",
+    "threadId": "8d2ff5b9da143f07",
+    "labelIds": [
+     "INBOX",
+     "UNREAD",
+     "STARRED",
+     "CATEGORY_UPDATES",
+     "Label_17",
+     "Label_99"
+    ],
+    "snippet": "<p>Hello <b>there</b></p>",
+    "internalDate": "1788336900000",
+    "payload": {
+     "mimeType": "text/html",
+     "filename": "",
+     "headers": [
+      {
+       "name": "Message-ID",
+       "value": "<html@example.com>"
+      },
+      {
+       "name": "Date",
+       "value": "Wed, 02 Sep 2026 08:15:00 +0000"
+      },
+      {
+       "name": "Subject",
+       "value": "h"
+      },
+      {
+       "name": "MIME-Version",
+       "value": "1.0"
+      },
+      {
+       "name": "Content-Type",
+       "value": "text/html; charset=utf-8"
+      }
+     ],
+     "body": {
+      "size": 27,
+      "data": "PHA-SGVsbG8gPGI-dGhlcmU8L2I-PC9wPg0K"
+     }
+    },
+    "sizeEstimate": 164
+   },
+   {
+    "Label_17": "Receipts"
+   },
+   false,
+   {
+    "id": "8d2ff5b9da143f07",
+    "thread_id": "8d2ff5b9da143f07",
+    "subject": "h",
+    "from": "",
+    "to": "",
+    "cc": "",
+    "received": "2026-09-02T08:15:00Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Receipts",
+     "Label_99"
+    ],
+    "preview": "<p>Hello <b>there</b></p>",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": ""
+   }
+  ],
+  [
+   "html_only",
+   {
+    "id": "8d2ff5b9da143f07",
+    "threadId": "8d2ff5b9da143f07",
+    "labelIds": [
+     "INBOX",
+     "UNREAD",
+     "STARRED",
+     "CATEGORY_UPDATES",
+     "Label_17",
+     "Label_99"
+    ],
+    "snippet": "<p>Hello <b>there</b></p>",
+    "internalDate": "1788336900000",
+    "payload": {
+     "mimeType": "text/html",
+     "filename": "",
+     "headers": [
+      {
+       "name": "Message-ID",
+       "value": "<html@example.com>"
+      },
+      {
+       "name": "Date",
+       "value": "Wed, 02 Sep 2026 08:15:00 +0000"
+      },
+      {
+       "name": "Subject",
+       "value": "h"
+      },
+      {
+       "name": "MIME-Version",
+       "value": "1.0"
+      },
+      {
+       "name": "Content-Type",
+       "value": "text/html; charset=utf-8"
+      }
+     ],
+     "body": {
+      "size": 27,
+      "data": "PHA-SGVsbG8gPGI-dGhlcmU8L2I-PC9wPg0K"
+     }
+    },
+    "sizeEstimate": 164
+   },
+   {
+    "Label_17": "Receipts"
+   },
+   true,
+   {
+    "id": "8d2ff5b9da143f07",
+    "thread_id": "8d2ff5b9da143f07",
+    "subject": "h",
+    "from": "",
+    "to": "",
+    "cc": "",
+    "received": "2026-09-02T08:15:00Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Receipts",
+     "Label_99"
+    ],
+    "preview": "<p>Hello <b>there</b></p>",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": "",
+    "body": "<p>Hello <b>there</b></p>\r\n",
+    "body_content_type": "html"
+   }
+  ],
+  [
+   "attachments",
+   {
+    "id": "c95c65e3c65fa7e7",
+    "threadId": "c95c65e3c65fa7e7",
+    "labelIds": [
+     "INBOX",
+     "UNREAD",
+     "STARRED",
+     "CATEGORY_UPDATES",
+     "Label_17",
+     "Label_99"
+    ],
+    "snippet": "",
+    "internalDate": "1788336900000",
+    "payload": {
+     "mimeType": "multipart/mixed",
+     "filename": "",
+     "headers": [
+      {
+       "name": "Message-ID",
+       "value": "<contract@example.com>"
+      },
+      {
+       "name": "Date",
+       "value": "Wed, 02 Sep 2026 08:15:00 +0000"
+      },
+      {
+       "name": "From",
+       "value": "Dana <dana@example.com>"
+      },
+      {
+       "name": "To",
+       "value": "me@example.com"
+      },
+      {
+       "name": "Subject",
+       "value": "Signed contract ✓"
+      },
+      {
+       "name": "MIME-Version",
+       "value": "1.0"
+      },
+      {
+       "name": "Content-Type",
+       "value": "multipart/mixed; boundary=\"M\""
+      }
+     ],
+     "body": {
+      "size": 0
+     },
+     "parts": [
+      {
+       "mimeType": "multipart/related",
+       "filename": "",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "multipart/related; boundary=\"R\""
+        }
+       ],
+       "body": {
+        "size": 0
+       },
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "filename": "",
+         "headers": [
+          {
+           "name": "Content-Type",
+           "value": "text/html; charset=utf-8"
+          }
+         ],
+         "body": {
+          "size": 48,
+          "data": "PHA-U2lnbmVkIGNvcHkgYXR0YWNoZWQuPC9wPjxpbWcgc3JjPSJjaWQ6bG9nbyI-"
+         }
+        },
+        {
+         "mimeType": "image/png",
+         "filename": "logo.png",
+         "headers": [
+          {
+           "name": "Content-Type",
+           "value": "image/png; name=\"logo.png\""
+          },
+          {
+           "name": "Content-Disposition",
+           "value": "inline; filename=\"logo.png\""
+          },
+          {
+           "name": "Content-ID",
+           "value": "<logo>"
+          },
+          {
+           "name": "Content-Transfer-Encoding",
+           "value": "base64"
+          }
+         ],
+         "body": {
+          "size": 8,
+          "attachmentId": "att_4c4b6a3be1314ab8"
+         }
+        }
+       ]
+      },
+      {
+       "mimeType": "application/pdf",
+       "filename": "=?utf-8?q?V=C3=A9rtrag.pdf?=",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "application/pdf; name=\"contract.pdf\""
+        },
+        {
+         "name": "Content-Disposition",
+         "value": "attachment; filename=\"Vértrag.pdf\""
+        },
+        {
+         "name": "Content-ID",
+         "value": "<pdf>"
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "application/pdf",
+       "filename": "apple.pdf",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "application/pdf; name=\"apple.pdf\""
+        },
+        {
+         "name": "Content-Disposition",
+         "value": "inline; filename=\"apple.pdf\""
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "image/jpeg",
+       "filename": "banner.jpg",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "image/jpeg; name=\"banner.jpg\""
+        },
+        {
+         "name": "Content-Disposition",
+         "value": "inline; filename=\"banner.jpg\""
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "image/jpeg",
+       "filename": "IMG_0412.jpg",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "image/jpeg; name=\"IMG_0412.jpg\""
+        },
+        {
+         "name": "Content-Disposition",
+         "value": "attachment; filename=\"IMG_0412.jpg\""
+        },
+        {
+         "name": "Content-ID",
+         "value": "<img>"
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "image/png",
+       "filename": "chart.png",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "image/png; name=\"chart.png\""
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "application/octet-stream",
+       "filename": "",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "application/octet-stream"
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      }
+     ]
+    },
+    "sizeEstimate": 1399
+   },
+   {
+    "Label_17": "Receipts"
+   },
+   false,
+   {
+    "id": "c95c65e3c65fa7e7",
+    "thread_id": "c95c65e3c65fa7e7",
+    "subject": "Signed contract ✓",
+    "from": "Dana <dana@example.com>",
+    "to": "me@example.com",
+    "cc": "",
+    "received": "2026-09-02T08:15:00Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Receipts",
+     "Label_99"
+    ],
+    "preview": "",
+    "has_attachments": true,
+    "attachments": [
+     {
+      "name": "Vértrag.pdf",
+      "mime_type": "application/pdf",
+      "size": 9
+     },
+     {
+      "name": "apple.pdf",
+      "mime_type": "application/pdf",
+      "size": 9
+     },
+     {
+      "name": "IMG_0412.jpg",
+      "mime_type": "image/jpeg",
+      "size": 9
+     },
+     {
+      "name": "chart.png",
+      "mime_type": "image/png",
+      "size": 9
+     }
+    ],
+    "auto_submitted": "",
+    "x_autoreply": ""
+   }
+  ],
+  [
+   "attachments",
+   {
+    "id": "c95c65e3c65fa7e7",
+    "threadId": "c95c65e3c65fa7e7",
+    "labelIds": [
+     "INBOX",
+     "UNREAD",
+     "STARRED",
+     "CATEGORY_UPDATES",
+     "Label_17",
+     "Label_99"
+    ],
+    "snippet": "",
+    "internalDate": "1788336900000",
+    "payload": {
+     "mimeType": "multipart/mixed",
+     "filename": "",
+     "headers": [
+      {
+       "name": "Message-ID",
+       "value": "<contract@example.com>"
+      },
+      {
+       "name": "Date",
+       "value": "Wed, 02 Sep 2026 08:15:00 +0000"
+      },
+      {
+       "name": "From",
+       "value": "Dana <dana@example.com>"
+      },
+      {
+       "name": "To",
+       "value": "me@example.com"
+      },
+      {
+       "name": "Subject",
+       "value": "Signed contract ✓"
+      },
+      {
+       "name": "MIME-Version",
+       "value": "1.0"
+      },
+      {
+       "name": "Content-Type",
+       "value": "multipart/mixed; boundary=\"M\""
+      }
+     ],
+     "body": {
+      "size": 0
+     },
+     "parts": [
+      {
+       "mimeType": "multipart/related",
+       "filename": "",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "multipart/related; boundary=\"R\""
+        }
+       ],
+       "body": {
+        "size": 0
+       },
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "filename": "",
+         "headers": [
+          {
+           "name": "Content-Type",
+           "value": "text/html; charset=utf-8"
+          }
+         ],
+         "body": {
+          "size": 48,
+          "data": "PHA-U2lnbmVkIGNvcHkgYXR0YWNoZWQuPC9wPjxpbWcgc3JjPSJjaWQ6bG9nbyI-"
+         }
+        },
+        {
+         "mimeType": "image/png",
+         "filename": "logo.png",
+         "headers": [
+          {
+           "name": "Content-Type",
+           "value": "image/png; name=\"logo.png\""
+          },
+          {
+           "name": "Content-Disposition",
+           "value": "inline; filename=\"logo.png\""
+          },
+          {
+           "name": "Content-ID",
+           "value": "<logo>"
+          },
+          {
+           "name": "Content-Transfer-Encoding",
+           "value": "base64"
+          }
+         ],
+         "body": {
+          "size": 8,
+          "attachmentId": "att_4c4b6a3be1314ab8"
+         }
+        }
+       ]
+      },
+      {
+       "mimeType": "application/pdf",
+       "filename": "=?utf-8?q?V=C3=A9rtrag.pdf?=",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "application/pdf; name=\"contract.pdf\""
+        },
+        {
+         "name": "Content-Disposition",
+         "value": "attachment; filename=\"Vértrag.pdf\""
+        },
+        {
+         "name": "Content-ID",
+         "value": "<pdf>"
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "application/pdf",
+       "filename": "apple.pdf",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "application/pdf; name=\"apple.pdf\""
+        },
+        {
+         "name": "Content-Disposition",
+         "value": "inline; filename=\"apple.pdf\""
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "image/jpeg",
+       "filename": "banner.jpg",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "image/jpeg; name=\"banner.jpg\""
+        },
+        {
+         "name": "Content-Disposition",
+         "value": "inline; filename=\"banner.jpg\""
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "image/jpeg",
+       "filename": "IMG_0412.jpg",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "image/jpeg; name=\"IMG_0412.jpg\""
+        },
+        {
+         "name": "Content-Disposition",
+         "value": "attachment; filename=\"IMG_0412.jpg\""
+        },
+        {
+         "name": "Content-ID",
+         "value": "<img>"
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "image/png",
+       "filename": "chart.png",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "image/png; name=\"chart.png\""
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      },
+      {
+       "mimeType": "application/octet-stream",
+       "filename": "",
+       "headers": [
+        {
+         "name": "Content-Type",
+         "value": "application/octet-stream"
+        },
+        {
+         "name": "Content-Transfer-Encoding",
+         "value": "base64"
+        }
+       ],
+       "body": {
+        "size": 9,
+        "attachmentId": "att_e5c62df5dab5c87b"
+       }
+      }
+     ]
+    },
+    "sizeEstimate": 1399
+   },
+   {
+    "Label_17": "Receipts"
+   },
+   true,
+   {
+    "id": "c95c65e3c65fa7e7",
+    "thread_id": "c95c65e3c65fa7e7",
+    "subject": "Signed contract ✓",
+    "from": "Dana <dana@example.com>",
+    "to": "me@example.com",
+    "cc": "",
+    "received": "2026-09-02T08:15:00Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Receipts",
+     "Label_99"
+    ],
+    "preview": "",
+    "has_attachments": true,
+    "attachments": [
+     {
+      "name": "Vértrag.pdf",
+      "mime_type": "application/pdf",
+      "size": 9
+     },
+     {
+      "name": "apple.pdf",
+      "mime_type": "application/pdf",
+      "size": 9
+     },
+     {
+      "name": "IMG_0412.jpg",
+      "mime_type": "image/jpeg",
+      "size": 9
+     },
+     {
+      "name": "chart.png",
+      "mime_type": "image/png",
+      "size": 9
+     }
+    ],
+    "auto_submitted": "",
+    "x_autoreply": "",
+    "body": "<p>Signed copy attached.</p><img src=\"cid:logo\">",
+    "body_content_type": "html"
+   }
+  ],
+  [
+   "binary_only",
+   {
+    "id": "78db7a491d75abbe",
+    "threadId": "78db7a491d75abbe",
+    "labelIds": [
+     "INBOX",
+     "UNREAD",
+     "STARRED",
+     "CATEGORY_UPDATES",
+     "Label_17",
+     "Label_99"
+    ],
+    "snippet": "%PDF-1.4",
+    "internalDate": "1795842264212",
+    "payload": {
+     "mimeType": "application/octet-stream",
+     "filename": "",
+     "headers": [
+      {
+       "name": "Message-ID",
+       "value": "<bin@example.com>"
+      },
+      {
+       "name": "Subject",
+       "value": ""
+      },
+      {
+       "name": "MIME-Version",
+       "value": "1.0"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/octet-stream"
+      },
+      {
+       "name": "Content-Transfer-Encoding",
+       "value": "base64"
+      }
+     ],
+     "body": {
+      "size": 9,
+      "attachmentId": "att_e5c62df5dab5c87b"
+     }
+    },
+    "sizeEstimate": 145
+   },
+   {
+    "Label_17": "Receipts"
+   },
+   false,
+   {
+    "id": "78db7a491d75abbe",
+    "thread_id": "78db7a491d75abbe",
+    "subject": "(no subject)",
+    "from": "",
+    "to": "",
+    "cc": "",
+    "received": "2026-11-28T05:04:24Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Receipts",
+     "Label_99"
+    ],
+    "preview": "%PDF-1.4",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": ""
+   }
+  ],
+  [
+   "binary_only",
+   {
+    "id": "78db7a491d75abbe",
+    "threadId": "78db7a491d75abbe",
+    "labelIds": [
+     "INBOX",
+     "UNREAD",
+     "STARRED",
+     "CATEGORY_UPDATES",
+     "Label_17",
+     "Label_99"
+    ],
+    "snippet": "%PDF-1.4",
+    "internalDate": "1795842264212",
+    "payload": {
+     "mimeType": "application/octet-stream",
+     "filename": "",
+     "headers": [
+      {
+       "name": "Message-ID",
+       "value": "<bin@example.com>"
+      },
+      {
+       "name": "Subject",
+       "value": ""
+      },
+      {
+       "name": "MIME-Version",
+       "value": "1.0"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/octet-stream"
+      },
+      {
+       "name": "Content-Transfer-Encoding",
+       "value": "base64"
+      }
+     ],
+     "body": {
+      "size": 9,
+      "attachmentId": "att_e5c62df5dab5c87b"
+     }
+    },
+    "sizeEstimate": 145
+   },
+   {
+    "Label_17": "Receipts"
+   },
+   true,
+   {
+    "id": "78db7a491d75abbe",
+    "thread_id": "78db7a491d75abbe",
+    "subject": "(no subject)",
+    "from": "",
+    "to": "",
+    "cc": "",
+    "received": "2026-11-28T05:04:24Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Receipts",
+     "Label_99"
+    ],
+    "preview": "%PDF-1.4",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": "",
+    "body": "",
+    "body_content_type": "text"
+   }
+  ]
+ ],
+ "graph_summary": [
+  [
+   "AAMk-1",
+   {
+    "id": "AAMk-1",
+    "conversationId": "conv-1",
+    "subject": "Q3 numbers",
+    "from": {
+     "emailAddress": {
+      "name": "Dana Ruiz",
+      "address": "dana@example.com"
+     }
+    },
+    "toRecipients": [
+     {
+      "emailAddress": {
+       "name": "Me",
+       "address": "me@example.com"
+      }
+     },
+     {
+      "emailAddress": {
+       "name": "",
+       "address": "x@example.com"
+      }
+     },
+     {
+      "emailAddress": {
+       "name": "OTHER@example.com",
+       "address": "other@example.com"
+      }
+     }
+    ],
+    "ccRecipients": [],
+    "receivedDateTime": "2026-09-02T08:15:00Z",
+    "isRead": false,
+    "flag": {
+     "flagStatus": "flagged"
+    },
+    "categories": [
+     "Work"
+    ],
+    "bodyPreview": "  Can you confirm the Q3 figures?  ",
+    "body": {
+     "contentType": "HTML",
+     "content": "<p>Can you confirm?</p>"
+    },
+    "hasAttachments": true,
+    "attachments": [
+     {
+      "name": "logo.png",
+      "contentType": "image/PNG",
+      "size": 1200,
+      "isInline": true
+     },
+     {
+      "name": "contract.pdf",
+      "contentType": "Application/PDF",
+      "size": 84213,
+      "isInline": false
+     }
+    ],
+    "internetMessageHeaders": [
+     {
+      "name": "Auto-Submitted",
+      "value": "auto-generated"
+     },
+     {
+      "name": "X-Autoreply",
+      "value": "yes"
+     },
+     {
+      "name": "x-autoreply",
+      "value": "last-wins"
+     }
+    ]
+   },
+   false,
+   {
+    "id": "AAMk-1",
+    "thread_id": "conv-1",
+    "subject": "Q3 numbers",
+    "from": "Dana Ruiz <dana@example.com>",
+    "to": "Me <me@example.com>, x@example.com, other@example.com",
+    "cc": "",
+    "received": "2026-09-02T08:15:00Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Work"
+    ],
+    "preview": "Can you confirm the Q3 figures?",
+    "has_attachments": true,
+    "attachments": [
+     {
+      "name": "contract.pdf",
+      "mime_type": "application/pdf",
+      "size": 84213
+     }
+    ],
+    "auto_submitted": "auto-generated",
+    "x_autoreply": "last-wins"
+   }
+  ],
+  [
+   "AAMk-1",
+   {
+    "id": "AAMk-1",
+    "conversationId": "conv-1",
+    "subject": "Q3 numbers",
+    "from": {
+     "emailAddress": {
+      "name": "Dana Ruiz",
+      "address": "dana@example.com"
+     }
+    },
+    "toRecipients": [
+     {
+      "emailAddress": {
+       "name": "Me",
+       "address": "me@example.com"
+      }
+     },
+     {
+      "emailAddress": {
+       "name": "",
+       "address": "x@example.com"
+      }
+     },
+     {
+      "emailAddress": {
+       "name": "OTHER@example.com",
+       "address": "other@example.com"
+      }
+     }
+    ],
+    "ccRecipients": [],
+    "receivedDateTime": "2026-09-02T08:15:00Z",
+    "isRead": false,
+    "flag": {
+     "flagStatus": "flagged"
+    },
+    "categories": [
+     "Work"
+    ],
+    "bodyPreview": "  Can you confirm the Q3 figures?  ",
+    "body": {
+     "contentType": "HTML",
+     "content": "<p>Can you confirm?</p>"
+    },
+    "hasAttachments": true,
+    "attachments": [
+     {
+      "name": "logo.png",
+      "contentType": "image/PNG",
+      "size": 1200,
+      "isInline": true
+     },
+     {
+      "name": "contract.pdf",
+      "contentType": "Application/PDF",
+      "size": 84213,
+      "isInline": false
+     }
+    ],
+    "internetMessageHeaders": [
+     {
+      "name": "Auto-Submitted",
+      "value": "auto-generated"
+     },
+     {
+      "name": "X-Autoreply",
+      "value": "yes"
+     },
+     {
+      "name": "x-autoreply",
+      "value": "last-wins"
+     }
+    ]
+   },
+   true,
+   {
+    "id": "AAMk-1",
+    "thread_id": "conv-1",
+    "subject": "Q3 numbers",
+    "from": "Dana Ruiz <dana@example.com>",
+    "to": "Me <me@example.com>, x@example.com, other@example.com",
+    "cc": "",
+    "received": "2026-09-02T08:15:00Z",
+    "unread": true,
+    "flagged": true,
+    "categories": [
+     "Work"
+    ],
+    "preview": "Can you confirm the Q3 figures?",
+    "has_attachments": true,
+    "attachments": [
+     {
+      "name": "contract.pdf",
+      "mime_type": "application/pdf",
+      "size": 84213
+     }
+    ],
+    "auto_submitted": "auto-generated",
+    "x_autoreply": "last-wins",
+    "body": "<p>Can you confirm?</p>",
+    "body_content_type": "html"
+   }
+  ],
+  [
+   "solo",
+   {
+    "id": "solo",
+    "subject": "x"
+   },
+   false,
+   {
+    "id": "solo",
+    "thread_id": "solo",
+    "subject": "x",
+    "from": "",
+    "to": "",
+    "cc": "",
+    "received": "",
+    "unread": false,
+    "flagged": false,
+    "categories": [],
+    "preview": "",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": ""
+   }
+  ],
+  [
+   "solo",
+   {
+    "id": "solo",
+    "subject": "x"
+   },
+   true,
+   {
+    "id": "solo",
+    "thread_id": "solo",
+    "subject": "x",
+    "from": "",
+    "to": "",
+    "cc": "",
+    "received": "",
+    "unread": false,
+    "flagged": false,
+    "categories": [],
+    "preview": "",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": "",
+    "body": "",
+    "body_content_type": "text"
+   }
+  ],
+  [
+   "1",
+   {
+    "id": "1",
+    "from": {
+     "emailAddress": {
+      "address": "a@b.com"
+     }
+    },
+    "isRead": true,
+    "flag": {
+     "flagStatus": "complete"
+    }
+   },
+   false,
+   {
+    "id": "1",
+    "thread_id": "1",
+    "subject": "(no subject)",
+    "from": "a@b.com",
+    "to": "",
+    "cc": "",
+    "received": "",
+    "unread": false,
+    "flagged": true,
+    "categories": [],
+    "preview": "",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": ""
+   }
+  ],
+  [
+   "1",
+   {
+    "id": "1",
+    "from": {
+     "emailAddress": {
+      "address": "a@b.com"
+     }
+    },
+    "isRead": true,
+    "flag": {
+     "flagStatus": "complete"
+    }
+   },
+   true,
+   {
+    "id": "1",
+    "thread_id": "1",
+    "subject": "(no subject)",
+    "from": "a@b.com",
+    "to": "",
+    "cc": "",
+    "received": "",
+    "unread": false,
+    "flagged": true,
+    "categories": [],
+    "preview": "",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": "",
+    "body": "",
+    "body_content_type": "text"
+   }
+  ],
+  [
+   "2",
+   {
+    "id": "2",
+    "isRead": null,
+    "flag": {
+     "flagStatus": "notFlagged"
+    },
+    "hasAttachments": false,
+    "body": {}
+   },
+   false,
+   {
+    "id": "2",
+    "thread_id": "2",
+    "subject": "(no subject)",
+    "from": "",
+    "to": "",
+    "cc": "",
+    "received": "",
+    "unread": true,
+    "flagged": false,
+    "categories": [],
+    "preview": "",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": ""
+   }
+  ],
+  [
+   "2",
+   {
+    "id": "2",
+    "isRead": null,
+    "flag": {
+     "flagStatus": "notFlagged"
+    },
+    "hasAttachments": false,
+    "body": {}
+   },
+   true,
+   {
+    "id": "2",
+    "thread_id": "2",
+    "subject": "(no subject)",
+    "from": "",
+    "to": "",
+    "cc": "",
+    "received": "",
+    "unread": true,
+    "flagged": false,
+    "categories": [],
+    "preview": "",
+    "has_attachments": false,
+    "attachments": [],
+    "auto_submitted": "",
+    "x_autoreply": "",
+    "body": "",
+    "body_content_type": "text"
+   }
+  ]
+ ]
+}

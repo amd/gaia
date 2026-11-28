@@ -528,7 +528,9 @@ TEST_F(GaiacppSidecar, TokenFileIsReadAndTheKeychainSecretFileIsRemoved) {
     std::ofstream(secretFile, std::ios::binary) << "daemon keychain secret";
     ASSERT_NO_FATAL_FAILURE(startSidecar({{"GAIA_GAIA_SIDECAR_TOKEN", std::nullopt},
                                           {"GAIA_GAIA_SIDECAR_TOKEN_FILE", tokenFile.string()},
-                                          {"GAIA_HOST_KEYCHAIN_SECRET_FILE", secretFile.string()}}));
+                                          {"GAIA_HOST_KEYCHAIN_SECRET_FILE", secretFile.string()},
+                                          {"GAIA_HOST_CUSTODY_URL", std::string("http://127.0.0.1:9")},
+                                          {"PYTHON_KEYRING_BACKEND", std::nullopt}}));
 
     auto ok = send("GET", "/v1/gaia/skills", bearer("token-from-file-91"));
     ASSERT_TRUE(ok);
@@ -542,6 +544,21 @@ TEST_F(GaiacppSidecar, TokenFileIsReadAndTheKeychainSecretFileIsRemoved) {
     EXPECT_EQ(envToken->status, 401) << "only the file's token is accepted";
 
     EXPECT_FALSE(fs::exists(secretFile)) << "the sidecar must remove the keychain secret file the daemon hands it";
+}
+
+TEST_F(GaiacppSidecar, AKeychainSecretWithNoDaemonAddressStopsStartup) {
+    const fs::path secretFile = root_ / "keychain.secret";
+    std::ofstream(secretFile, std::ios::binary) << "daemon keychain secret";
+    auto env = baseEnv(mock().baseUrl());
+    env["GAIA_HOST_KEYCHAIN_SECRET_FILE"] = secretFile.string();
+    env["GAIA_HOST_CUSTODY_URL"] = std::nullopt;
+    env["PYTHON_KEYRING_BACKEND"] = std::nullopt;
+    ASSERT_NO_THROW(spawn(env));
+    ASSERT_TRUE(child_->waitExit(30000)) << "gaiacpp served with no way to reach the keychain";
+    EXPECT_NE(child_->exitCode(), 0);
+    const std::string log = readFile(root_ / "sidecar.stderr");
+    EXPECT_NE(log.find("GAIA_HOST_CUSTODY_URL"), std::string::npos) << log;
+    EXPECT_FALSE(fs::exists(secretFile)) << "the secret file is removed even when startup stops";
 }
 
 TEST_F(GaiacppSidecar, EmptyTokenFileStopsStartupWithAReason) {
@@ -703,6 +720,28 @@ TEST_F(GaiacppSidecar, TheHelperSettingReachesAChatsAgent) {
     }
     EXPECT_TRUE(hasRead) << tools->body.substr(0, 600);
     EXPECT_FALSE(offered) << "GAIA_MAX_HELPERS=0 removes delegate_task for the Agent UI's agent too";
+}
+
+TEST_F(GaiacppSidecar, GaiaFeatureTierGivesACompactModelTheMailTools) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"GAIA_FEATURE_TIER", std::string("full")}}));
+    mock().pushResponse(answerReply("hi"));
+    Turn t(port_, queryBody("run-tier", "hello", {{"session_id", "chat-tier"}, {"model", "Gemma-4-E4B-it-GGUF"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto sent = modelRequests();
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_EQ(sent[0]["model"], "Gemma-4-E4B-it-GGUF");
+    EXPECT_NE(sent[0].dump().find("list_inbox"), std::string::npos) << "GAIA_FEATURE_TIER=full gives Gemma the mail tools";
+}
+
+TEST_F(GaiacppSidecar, ACompactModelIsNotOfferedTheMailTools) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"GAIA_FEATURE_TIER", std::nullopt}}));
+    mock().pushResponse(answerReply("hi"));
+    Turn t(port_, queryBody("run-compact", "hello", {{"session_id", "chat-compact"}, {"model", "Gemma-4-E4B-it-GGUF"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto sent = modelRequests();
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_EQ(sent[0].dump().find("list_inbox"), std::string::npos);
+    EXPECT_NE(sent[0].dump().find("bash_execute"), std::string::npos) << "the request still lists its tools";
 }
 
 TEST_F(GaiacppSidecar, AChatsAgentHasDelegateTaskByDefault) {

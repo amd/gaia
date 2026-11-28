@@ -137,6 +137,12 @@ var toolPhrases = map[string]toolPhrase{
 	"list_inbox":   {Without: "Reading your inbox"},
 	"read_email":   {With: "Opening message %s", Without: "Opening a message", Arg: "message_id"},
 	"search_email": {With: "Searching your mail for %s", Without: "Searching your mail", Arg: "query"},
+	"get_thread":   {Without: "Reading a conversation"},
+
+	"check_mailbox_access":     {Without: "Checking mailbox access"},
+	"list_mail_folders":        {Without: "Listing mail folders"},
+	"list_connected_mailboxes": {Without: "Checking connected mailboxes"},
+	"list_waiting_on_you":      {Without: "Finding mail waiting on you"},
 
 	// Not tools: the agent checking in on a long turn, and asking to reach a
 	// path outside the session.

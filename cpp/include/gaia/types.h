@@ -306,6 +306,10 @@ struct ToolInfo {
     /// True when one result may take a quarter of the context window instead of the usual cap:
     /// for a tool whose result is already the short form of a lot of reading.
     bool wideResult = false;
+
+    /// True for a tool that always calls an online service (a mailbox, a
+    /// calendar), so it is refused while the internet is off.
+    bool onlineService = false;
 };
 
 // ---- LLM Usage Statistics ----

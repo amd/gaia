@@ -282,6 +282,9 @@ add_library(gaia_core
     src/database.cpp
     src/api_server.cpp
     src/web_tools.cpp
+    src/mail_text.cpp
+    src/mail_phishing.cpp
+    src/mail_waiting.cpp
     src/workspace.cpp
     src/shell_guard.cpp
     src/document_index.cpp
@@ -290,6 +293,12 @@ add_library(gaia_core
     src/keyring.cpp
     src/mcp_stdio_server.cpp
     src/secrets.cpp
+    src/mail_http.cpp
+    src/mail_gmail.cpp
+    src/connectors.cpp
+    src/mail_graph.cpp
+    src/connect_card.cpp
+    src/email_tools.cpp
 )
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
@@ -489,6 +498,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_mcp_registry.cpp
         tests/test_mcp_stdio_server.cpp
         tests/test_secrets.cpp
+        tests/test_mail_backends.cpp
         tests/test_mcp_http.cpp
         tests/test_agent_resilience.cpp
         tests/test_declined_calls.cpp
@@ -500,6 +510,9 @@ if(GAIA_BUILD_TESTS)
         tests/test_memory_store.cpp
         tests/test_skill_signing.cpp
         tests/test_media_tools.cpp
+        tests/test_mail_screens.cpp
+        tests/test_connectors.cpp
+        tests/test_email_tools.cpp
         agents/gaiacpp/gaia_agent.cpp
         agents/gaiacpp/delegation.cpp
         agents/gaiacpp/bash_tools.cpp
