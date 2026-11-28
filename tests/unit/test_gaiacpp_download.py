@@ -334,6 +334,7 @@ def test_gaiacpp_already_here_is_not_downloaded_again(client, release, tmp_path)
     _place(target, PAYLOAD)
     r = client.post("/api/agent-programs/gaiacpp/download")
     assert r.status_code == 409
+    assert r.json()["detail"]["status"] == "gaiacpp_already_installed"
 
 
 def test_a_gaiacpp_that_fails_its_check_can_be_downloaded_again(
@@ -500,7 +501,8 @@ def test_updating_the_agent_in_use_is_refused_while_a_chat_is_answering(
     monkeypatch.setattr(run_manager, "active_sessions", lambda: ["chat-1"])
     r = client.post("/api/agent-programs/gaiacpp/download")
     assert r.status_code == 409
-    assert "answering" in r.json()["detail"]
+    assert r.json()["detail"]["status"] == "gaiacpp_update_chat_busy"
+    assert "answering" in r.json()["detail"]["message"]
     assert target.read_bytes() == b"last release"
 
 
@@ -515,7 +517,8 @@ def test_updating_the_agent_in_use_is_refused_while_setup_is_testing(
     monkeypatch.setattr(runner, "status", lambda: {"state": "verifying"})
     r = client.post("/api/agent-programs/gaiacpp/download")
     assert r.status_code == 409
-    assert "setting up" in r.json()["detail"]
+    assert r.json()["detail"]["status"] == "gaiacpp_update_setup_busy"
+    assert "setting up" in r.json()["detail"]["message"]
     assert target.read_bytes() == b"last release"
 
 
