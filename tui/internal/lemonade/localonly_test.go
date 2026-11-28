@@ -218,7 +218,7 @@ func TestPolicyPathFromLookupDistinguishesEmptyFromUnset(t *testing.T) {
 	}
 
 	env["GAIA_HOME"] = "~/$UNSET_VAR/g"
-	if got, want := PolicyPathFromLookup(lookup, home), filepath.Join("/home/u", "$UNSET_VAR", "policy.json"); filepath.Clean(got) != want {
+	if got, want := PolicyPathFromLookup(lookup, home), filepath.Join("/home/u", "$UNSET_VAR", "g", "policy.json"); filepath.Clean(got) != want {
 		t.Errorf("unset var: got %q, want %q", got, want)
 	}
 
