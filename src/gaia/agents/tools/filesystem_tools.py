@@ -44,7 +44,7 @@ from gaia.filesystem.name_match import (
     glob_matches_mid_word,
 )
 from gaia.logger import get_logger
-from gaia.security import _format_size
+from gaia.utils.sizes import format_size
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
@@ -436,7 +436,7 @@ class FileSystemToolsMixin:
 
                 # Format output
                 lines = [
-                    f"{resolved} ({len(entries)} items, {_format_size(total_size)} total)\n"
+                    f"{resolved} ({len(entries)} items, {format_size(total_size)} total)\n"
                 ]
                 lines.append(f"  {'Type':<6} {'Name':<35} {'Size':<12} {'Modified'}")
                 lines.append(f"  {'----':<6} {'----':<35} {'----':<12} {'--------'}")
@@ -444,7 +444,7 @@ class FileSystemToolsMixin:
                 for item in items:
                     type_str = "[DIR]" if item["is_dir"] else "[FIL]"
                     name_str = item["name"] + ("/" if item["is_dir"] else "")
-                    size_str = _format_size(item["size"])
+                    size_str = format_size(item["size"])
                     mod_str = _format_date(item["modified"])
                     lines.append(
                         f"  {type_str:<6} {name_str:<35} {size_str:<12} {mod_str}"
@@ -562,7 +562,7 @@ class FileSystemToolsMixin:
                                 size = entry.stat(follow_symlinks=False).st_size
                                 total_size += size
                                 size_str = (
-                                    f" ({_format_size(size)})" if show_sizes else ""
+                                    f" ({format_size(size)})" if show_sizes else ""
                                 )
                             except (PermissionError, OSError):
                                 size_str = ""
@@ -588,7 +588,7 @@ class FileSystemToolsMixin:
                         f"{file_count} file{'s' if file_count != 1 else ''}"
                     )
                 if show_sizes and total_size > 0:
-                    summary_parts.append(f"{_format_size(total_size)} total")
+                    summary_parts.append(f"{format_size(total_size)} total")
 
                 if summary_parts:
                     lines.append(f"\n{', '.join(summary_parts)}")
@@ -652,7 +652,7 @@ class FileSystemToolsMixin:
                         f"  Contents:  {file_count} files, {dir_count} subdirectories"
                     )
                     lines.append(
-                        f"  Total Size (direct children): {_format_size(total_size)}"
+                        f"  Total Size (direct children): {format_size(total_size)}"
                     )
 
                     if ext_counts:
@@ -670,7 +670,7 @@ class FileSystemToolsMixin:
                     # File info
                     lines.append(f"File: {resolved}")
                     lines.append(f"  Name:      {resolved.name}")
-                    lines.append(f"  Size:      {_format_size(st.st_size)}")
+                    lines.append(f"  Size:      {format_size(st.st_size)}")
                     lines.append(f"  Modified:  {_format_date(st.st_mtime)}")
                     lines.append(f"  Created:   {_format_date(st.st_ctime)}")
 
@@ -722,7 +722,7 @@ class FileSystemToolsMixin:
                             )
                             if st.st_size > read_limit:
                                 lines.append(
-                                    f"  Lines:     ~{line_count}+ (sampled first {_format_size(read_limit)})"
+                                    f"  Lines:     ~{line_count}+ (sampled first {format_size(read_limit)})"
                                 )
                             else:
                                 lines.append(f"  Lines:     {line_count}")
@@ -948,7 +948,7 @@ class FileSystemToolsMixin:
                                 f"Found {len(index_results)} result(s) from index:\n"
                             ]
                             for i, r in enumerate(index_results, 1):
-                                size_str = _format_size(r.get("size", 0))
+                                size_str = format_size(r.get("size", 0))
                                 mod_str = r.get("modified_at", "")
                                 lines.append(
                                     f"  {i}. {r['path']} ({size_str}, {mod_str})"
@@ -1114,7 +1114,7 @@ class FileSystemToolsMixin:
 
                 lines = [f"Found {len(results)} result(s):\n"]
                 for i, r in enumerate(results, 1):
-                    size_str = _format_size(r.get("size", 0))
+                    size_str = format_size(r.get("size", 0))
                     mod_str = (
                         _format_date(r.get("modified", 0)) if r.get("modified") else ""
                     )
@@ -1226,8 +1226,8 @@ class FileSystemToolsMixin:
                 # reading every byte, and it has its own page cap.
                 if file_size > MAX_READ_BYTES and ext != ".pdf" and mode != "preview":
                     return (
-                        f"Error: File too large to read in full ({_format_size(file_size)}). "
-                        f"Maximum is {_format_size(MAX_READ_BYTES)}.\n"
+                        f"Error: File too large to read in full ({format_size(file_size)}). "
+                        f"Maximum is {format_size(MAX_READ_BYTES)}.\n"
                         f"Use mode='preview' for the first 20 lines, "
                         f"or read_file(offset=0, limit=8000) for bounded text pages."
                     )
@@ -1280,7 +1280,7 @@ class FileSystemToolsMixin:
                             mime, _ = mimetypes.guess_type(str(resolved))
                             hex_preview = sample[:64].hex(" ")
                             return (
-                                f"[Binary file: {_format_size(file_size)}]\n"
+                                f"[Binary file: {format_size(file_size)}]\n"
                                 f"MIME: {mime or 'unknown'}\n"
                                 f"Hex preview: {hex_preview}..."
                             )
@@ -1356,7 +1356,7 @@ class FileSystemToolsMixin:
 
                 # Format with line numbers
                 output_lines = [
-                    f"File: {resolved} ({total_lines} lines, {_format_size(file_size)})"
+                    f"File: {resolved} ({total_lines} lines, {format_size(file_size)})"
                 ]
                 if detected_encoding != "utf-8":
                     output_lines.append(f"Encoding: {detected_encoding}")

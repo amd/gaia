@@ -690,3 +690,74 @@ class TestStablePromptOrderAndDueDates:
 
         assert "lived in Calgary" not in prompt
         assert "dog is called Juniper" in prompt
+
+
+class TestWhatThisChatSavedIsShown:
+    """A fact saved earlier in the chat reaches later turns even when the
+    question scores low against it: small models never call recall for it."""
+
+    SALON = "Pawfect's busiest days are Saturdays"
+
+    def _saved(self, host, store, content, vec=None, **kwargs):
+        kid = _remember(
+            store, host.vectors, content, _axis(3) if vec is None else vec, **kwargs
+        )
+        host._session_saved_ids = [*getattr(host, "_session_saved_ids", []), kid]
+        return kid
+
+    def _context(self, host):
+        host._rebuild_faiss_index()
+        host._memory_turn_query = QUERY
+        return host.get_memory_dynamic_context()
+
+    def test_an_unrelated_looking_fact_saved_this_chat_is_shown(self, host, store):
+        self._saved(host, store, self.SALON)
+        ctx = self._context(host)
+        assert "Stored memories that may bear on this message" in ctx
+        assert f"  - [fact] {self.SALON} (" in ctx
+
+    def test_the_same_fact_from_an_earlier_chat_is_not(self, host, store):
+        _remember(store, host.vectors, self.SALON, _axis(3))
+        assert self.SALON not in self._context(host)
+
+    def test_a_fact_recall_already_found_is_listed_once(self, host, store):
+        self._saved(
+            host, store, "toybox tests need TOYBOX_CLOCK=frozen", _axis(0, lean=0.3)
+        )
+        assert self._context(host).count("TOYBOX_CLOCK=frozen") == 1
+
+    def test_what_the_frozen_prompt_shows_is_not_repeated(self, host, store):
+        kid = self._saved(host, store, self.SALON)
+        host._stable_memory_ids = {kid}
+        assert self.SALON not in self._context(host)
+
+    def test_a_forgotten_or_sensitive_fact_is_not_shown(self, host, store):
+        gone = self._saved(host, store, self.SALON)
+        self._saved(host, store, "Door code is 4417", sensitive=True)
+        store.delete(gone)
+        ctx = self._context(host)
+        assert self.SALON not in ctx and "4417" not in ctx
+
+    def test_a_save_is_recorded_and_only_the_latest_eight_kept(self):
+        class _Base:
+            def _execute_tool_timed(self, tool_name, tool_args):
+                return tool_args["result"]
+
+        class _Agent(MemoryMixin, _Base):
+            pass
+
+        agent = _Agent()
+        agent._turn_tool_executions = []
+        for i in range(10):
+            agent._execute_tool_timed(
+                "remember", {"result": {"status": "stored", "knowledge_id": f"k{i}"}}
+            )
+        agent._execute_tool_timed(
+            "remember", {"result": {"status": "skipped", "knowledge_id": "refused"}}
+        )
+        agent._execute_tool_timed(
+            "update_memory", {"result": {"status": "updated", "knowledge_id": "k5"}}
+        )
+        kept = ["k2", "k3", "k4", "k6", "k7", "k8", "k9", "k5"]
+        assert agent._session_saved_ids == kept
+        assert len(agent._session_saved_ids) <= memory_module.SESSION_SAVED_SHOWN

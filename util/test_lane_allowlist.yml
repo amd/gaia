@@ -24,6 +24,7 @@ files:
   tests/integration/eval/test_sidecar_eval_gaia.py: Scores the flagship sidecar against a real model; real_model marker, self-hosted Strix Halo only.
 
   # A live Lemonade Server with models loaded.
+  tests/integration/test_base_agent_live.py: Runs a plain Agent subclass through real turns, history and a hosted model; needs a live Lemonade Server with a chat model (and a Fireworks key for the hosted tests).
   tests/integration/test_chat_rag_pdf_chat_e2e.py: Chats over an indexed PDF end to end; needs a live Lemonade Server with the chat and embedding models.
   tests/integration/test_chat_rag_pdf_e2e.py: Indexes and queries a PDF end to end; needs a live Lemonade Server with the chat and embedding models.
   tests/integration/test_pptx_rag_e2e.py: Answers questions over an indexed PPTX; needs a live Lemonade Server with the chat and embedding models.

@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from gaia.security import read_block
-from gaia.upload_names import reserve_copy_path
+from gaia.upload_names import reserve_copy_path, unsafe_name_char
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
 from .._chat_helpers import (
@@ -155,38 +155,6 @@ def _is_server_owned(filepath: str) -> bool:
         return False
 
 
-# Characters that are illegal in Windows filenames (POSIX is more permissive,
-# but sanitizing to the Windows rules gives cross-platform portability).
-_ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*'
-
-# Defense in depth: the two characters that can terminate or escape a
-# PowerShell string literal. Uploaded names reach shell-adjacent converters
-# (``rag.pptx_utils.convert_pptx_to_pdf``), which pass paths out-of-band rather
-# than interpolating them — this keeps a name from becoming code even if some
-# future caller forgets that.
-_SHELL_QUOTING_CHARS = "'`"
-
-
-# Characters drawn like a slash or backslash, which would make a name read as a path.
-_SLASH_LOOKALIKES = "\u2044\u2215\u29f5\u29f8\u29f9\ufe68\uff0f\uff3c"
-
-# Zero-width joiners spell words in Persian, Indic scripts and emoji; they stay.
-_JOINERS = "\u200c\u200d"
-
-
-def _unsafe_name_char(c: str) -> bool:
-    """Whether *c* must not appear in a stored document name."""
-    return (
-        c in _ILLEGAL_FILENAME_CHARS
-        or c in _SHELL_QUOTING_CHARS
-        or c in _SLASH_LOOKALIKES
-        or (
-            unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp")
-            and c not in _JOINERS
-        )
-    )
-
-
 def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     """Sanitize a filename stem for safe cross-platform filesystem use.
 
@@ -206,7 +174,7 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     recognize the document by its human-readable name.
     """
     cleaned = "".join(
-        "_" if _unsafe_name_char(c) else c for c in unicodedata.normalize("NFC", stem)
+        "_" if unsafe_name_char(c) else c for c in unicodedata.normalize("NFC", stem)
     )
     cleaned = cleaned.strip(" .")
     cleaned = cleaned[:max_length]
