@@ -636,10 +636,9 @@ def put(
     except Exception as e:  # noqa: BLE001 - re-raised or logged per mode below
         if mirror == MIRROR_BACKGROUND:
             logger.warning(
-                "Saved %s to the credential vault, but could not update its "
-                "older per-item entry kept for downgrades (%s); the next save "
-                "retries it.",
-                username,
+                "Saved a secret to the credential vault, but could not update "
+                "its older per-item entry kept for downgrades (%s); the next "
+                "save retries it.",
                 type(e).__name__,
             )
             return
@@ -663,8 +662,7 @@ def put(
             raise
         # Left "stale", so the next save just rewrites the item again.
         logger.warning(
-            "Could not record the legacy mirror of %s (%s)",
-            username,
+            "Could not record a legacy credential mirror (%s)",
             type(e).__name__,
         )
 
