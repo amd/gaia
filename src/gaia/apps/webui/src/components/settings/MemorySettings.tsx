@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import * as memoryApi from '../../services/memoryApi';
+import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
 import { EmbedderSetting } from './EmbedderSetting';
@@ -12,6 +13,8 @@ export function MemorySettings() {
     const t = useT();
     const setShowMemoryDashboard = useChatStore((s) => s.setShowMemoryDashboard);
     const closeSettings = useChatStore((s) => s.closeSettings);
+    const openSettings = useChatStore((s) => s.openSettings);
+    const isFastAgent = useActiveAgentStore((s) => s.current) === 'gaiacpp';
     const [settings, setSettings] = useState<memoryApi.MemorySettings | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
@@ -39,6 +42,14 @@ export function MemorySettings() {
         <div className="settings-pane">
             <h2 className="settings-pane-title">{t('settings.section.memory')}</h2>
             <p className="settings-pane-lede">{t('settings.memory.lede')}</p>
+            {isFastAgent && (
+                <div className="settings-notice" role="status">
+                    <p>{t('settings.memory.fastAgentNotice')}</p>
+                    <button type="button" className="btn-secondary" onClick={() => openSettings('model')}>
+                        {t.compose((say) => say('mem.store.change', { tab: say('settings.section.model') }))}
+                    </button>
+                </div>
+            )}
             <section className="settings-card" aria-label={t('settings.section.memory')}>
                 <label className="setting-row">
                     <span>{t('settings.memory.remember')}</span>
@@ -65,9 +76,11 @@ export function MemorySettings() {
                     </button>
                 </div>
             </section>
-            <section className="settings-card" aria-label={t('settings.memory.embedder.label')}>
-                <EmbedderSetting />
-            </section>
+            {!isFastAgent && (
+                <section className="settings-card" aria-label={t('settings.memory.embedder.label')}>
+                    <EmbedderSetting />
+                </section>
+            )}
         </div>
     );
 }

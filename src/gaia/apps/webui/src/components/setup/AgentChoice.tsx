@@ -5,7 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown, Download, Loader2 } from 'lucide-react';
 import { RadioGroup } from '../RadioGroup';
 import { useT } from '../../i18n/useT';
-import type { MessageKey } from '../../i18n/registry';
+import { ref, type MessageKey, type Param } from '../../i18n/registry';
 import * as api from '../../services/api';
 import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import type { AgentProgram, AgentPrograms, FlagshipAgent } from '../../types';
@@ -41,7 +41,28 @@ export const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageK
     unverifiable: 'setup.agent.why.unverifiable',
 };
 
+const SAVE_ERRORS: Record<string, MessageKey> = {
+    agent_switch_chat_busy: 'setup.agent.error.chatBusy',
+    agent_switch_setup_busy: 'setup.agent.error.setupBusy',
+    gaiacpp_not_installed: 'setup.agent.error.notInstalled',
+};
+
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+function saveErrorParam(err: unknown): Param {
+    if (err instanceof api.ApiError && err.reason) {
+        const key = SAVE_ERRORS[err.reason];
+        if (key) return ref(key);
+        if (
+            err.reason === 'agent_stop_failed'
+            && typeof err.body?.agent === 'string'
+            && typeof err.body?.error === 'string'
+        ) {
+            return ref('setup.agent.error.stopFailed', { agent: err.body.agent, error: err.body.error });
+        }
+    }
+    return messageOf(err);
+}
 
 /** Setup's pick: saved on Continue, and downloaded first when `download` is set. */
 export interface AgentPick {
@@ -72,7 +93,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     const oldId = `${ids}-old`;
     const [listing, setListing] = useState<AgentPrograms | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const [saveError, setSaveError] = useState<string | null>(null);
+    const [saveError, setSaveError] = useState<Param | null>(null);
     const [saving, setSaving] = useState(false);
     const [open, setOpen] = useState(false);
     const mounted = useRef(true);
@@ -87,7 +108,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
             if (mounted.current) setListing((l) => (l ? { ...l, current: updated.flagship_agent } : l));
         } catch (err) {
             if (!mounted.current) return;
-            setSaveError(messageOf(err));
+            setSaveError(saveErrorParam(err));
             // A 422 or 409 saved nothing; any other failure may have saved it, so read back what the server holds.
             const refused = err instanceof api.ApiError && (err.httpStatus === 422 || err.httpStatus === 409);
             const back = refused ? null : await api.getAgentPrograms().catch(() => null);

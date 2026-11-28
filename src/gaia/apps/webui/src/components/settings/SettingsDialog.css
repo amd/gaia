@@ -1218,6 +1218,21 @@
     align-self: flex-start;
 }
 
+.automation-native-notice {
+    margin: 0;
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.automation-native-notice .link-btn {
+    font-size: inherit;
+}
+
 /* Add skills from a link */
 .skill-link-form,
 .skill-link-head,
