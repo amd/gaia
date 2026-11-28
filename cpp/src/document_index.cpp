@@ -9,11 +9,14 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <random>
 #include <regex>
 #include <set>
 
 #include "gaia/ignore.h"
 #include "gaia/process.h"
+#include "lower_ascii.h"
+#include "shell_quote.h"
 
 namespace fs = std::filesystem;
 
@@ -26,22 +29,51 @@ constexpr double kBm25K1 = 1.2;
 constexpr double kBm25B = 0.75;
 constexpr size_t kMaxExtractBytes = 64u * 1024u * 1024u;
 
-std::string lowerExt(const std::string& path) {
-    std::string e = fs::path(path).extension().string();
-    std::transform(e.begin(), e.end(), e.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return e;
-}
+std::string lowerExt(const std::string& path) { return detail::lowerAscii(fs::path(path).extension().string()); }
 
-std::string shellQuote(const std::string& s) {
 #ifdef _WIN32
-    return "\"" + s + "\"";
+constexpr bool kShellExpandsPercent = true;
 #else
-    std::string out = "'";
-    for (char c : s) out += (c == '\'') ? std::string("'\\''") : std::string(1, c);
-    return out + "'";
+constexpr bool kShellExpandsPercent = false;
 #endif
-}
+
+// cmd /c expands %NAME% even inside quotes, and a Windows file name may hold a %.
+// Such a file is read through a temporary copy whose name has none.
+class ShellSafePath {
+public:
+    explicit ShellSafePath(const std::string& path) : path_(path) {
+        if (!kShellExpandsPercent || path.find('%') == std::string::npos) return;
+        std::error_code ec;
+        const fs::path dir = fs::temp_directory_path(ec);
+        if (ec || dir.string().find('%') != std::string::npos) {
+            throw std::runtime_error("Can't read " + path +
+                                     ": its name contains %, and there is no temporary folder without one "
+                                     "to copy it to. Rename the file without % and try again.");
+        }
+        std::mt19937_64 rng(std::random_device{}());
+        copy_ = dir / ("gaia-doc-" + std::to_string(rng()) + lowerExt(path));
+        fs::copy_file(fs::path(path), copy_, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            copy_.clear();
+            throw std::runtime_error("Can't read " + path + ": its name contains %, and copying it to " +
+                                     dir.string() + " failed (" + ec.message() +
+                                     "). Rename the file without % and try again.");
+        }
+        path_ = copy_.string();
+    }
+    ~ShellSafePath() {
+        if (copy_.empty()) return;
+        std::error_code ec;
+        fs::remove(copy_, ec);
+    }
+    ShellSafePath(const ShellSafePath&) = delete;
+    ShellSafePath& operator=(const ShellSafePath&) = delete;
+    const std::string& str() const { return path_; }
+
+private:
+    std::string path_;
+    fs::path copy_;
+};
 
 std::string decodeXmlEntities(std::string s) {
     const std::pair<const char*, const char*> ents[] = {
@@ -58,15 +90,16 @@ std::string decodeXmlEntities(std::string s) {
 
 // Paragraph text of a .docx: <w:t> runs, <w:p> ends become newlines.
 std::string docxText(const std::string& path) {
+    const ShellSafePath safe(path);
 #ifdef _WIN32
     // Windows ships no unzip; its own tar reads zip archives. Named in full: a GNU tar earlier on
     // PATH (Git's) does not read them, and takes C: for a remote host.
     const std::string tar = systemProgramPath("tar.exe");
     // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
-    const std::string extract = "\"\"" + tar + "\" -xOf " + shellQuote(path) + " word/document.xml\"";
+    const std::string extract = "\"\"" + tar + "\" -xOf " + detail::shellQuote(safe.str()) + " word/document.xml\"";
     const char* tool = "tar";
 #else
-    const std::string extract = "unzip -p " + shellQuote(path) + " word/document.xml";
+    const std::string extract = "unzip -p " + detail::shellQuote(safe.str()) + " word/document.xml";
     const char* tool = "unzip";
 #endif
     ProcessResult r = ProcessRunner::run(extract, 60000, "", {}, kMaxExtractBytes);
@@ -239,6 +272,7 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
     const std::string ext = lowerExt(path);
     std::vector<std::pair<int, std::string>> pages;
     if (ext == ".pdf") {
+        const ShellSafePath safe(path);
 #ifdef _WIN32
         // By full path: cmd.exe would run a pdftotext.bat in the working folder first.
         const std::string pdftotext = findProgramOnPath("pdftotext");
@@ -246,9 +280,9 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
             throw std::runtime_error("Can't read PDF " + path + ": pdftotext is not installed (install poppler)");
         }
         // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
-        const std::string extract = "\"\"" + pdftotext + "\" -layout " + shellQuote(path) + " -\"";
+        const std::string extract = "\"\"" + pdftotext + "\" -layout " + detail::shellQuote(safe.str()) + " -\"";
 #else
-        const std::string extract = "pdftotext -layout " + shellQuote(path) + " -";
+        const std::string extract = "pdftotext -layout " + detail::shellQuote(safe.str()) + " -";
 #endif
         ProcessResult r = ProcessRunner::run(extract, 120000, "", {}, kMaxExtractBytes);
         if (r.stdout_output.size() >= kMaxExtractBytes) {
