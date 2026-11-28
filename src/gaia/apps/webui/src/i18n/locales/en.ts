@@ -3169,6 +3169,9 @@ export const enMessages = {
     // The model chip's status icons
     'modelChip.notDownloaded': 'Not downloaded',
     'modelChip.switchFailed': 'Model switch failed',
+    'modelChip.next': 'next',
+    'modelChip.queuedTitle': '{model} is used from your next message.',
+    'modelChip.notDownloadedTitle': "{name} isn't downloaded yet. Open the list to download it.",
 
     // The update chip
 
