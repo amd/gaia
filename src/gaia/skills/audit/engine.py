@@ -211,6 +211,9 @@ def _local_modules(directory: Path) -> list[str]:
         relative = path.relative_to(directory)
         top = relative.parts[0]
         modules.append(Path(top).stem if len(relative.parts) == 1 else top)
+        # A script run directly imports the files beside it by their bare names.
+        if len(relative.parts) > 1:
+            modules.append(path.stem)
     return modules
 
 

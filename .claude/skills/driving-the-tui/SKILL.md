@@ -8,6 +8,10 @@ description: Use when testing or validating the GAIA TUI (tui/) by actually runn
 The TUI exposes a loopback control API so an assistant can operate it and read
 what a user would see. **Use it. Never sleep.**
 
+Changed how a screen looks or reads? Check what you capture against the
+`ui-ux-pro-max` skill's rules that fit a terminal (hierarchy, contrast, feedback,
+states, wording, keyboard flow), with `docs/spec/gaia-design-language.mdx` winning.
+
 ## Isolate memory before you start it — every time
 
 **Set `GAIA_MEMORY_DB` to a throwaway file in every drive.** The agent behind the

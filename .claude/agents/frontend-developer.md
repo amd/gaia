@@ -11,6 +11,10 @@ You work on GAIA frontends. Your surface is the Agent UI (`src/gaia/apps/webui/`
 
 Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
+Before changing what a person sees, search the `ui-ux-pro-max` skill for the pattern,
+and check the result against it and `docs/spec/gaia-design-language.mdx` (which wins).
+Then follow `reviewing-agent-ui` before calling it done.
+
 ## When to use
 
 - Editing the Agent UI (`src/gaia/apps/webui/`) — React/TypeScript/Vite/Electron

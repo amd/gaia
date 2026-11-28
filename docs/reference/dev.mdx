@@ -152,6 +152,14 @@ cannot do it. On a local machine and in CI it exits immediately without output â
 it is gated on `CLAUDE_CODE_REMOTE` and `CI`.
 </Note>
 
+The repo also ships the [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
+skill by Next Level Builder (MIT) in `.claude/skills/ui-ux-pro-max/`, a searchable set of
+UI and UX rules. `CLAUDE.md` asks Claude Code to design every Agent UI, phone-width and TUI
+change against it, with GAIA's design language taking precedence. A `PostToolUse` hook,
+[`scripts/ui_design_reminder.sh`](https://github.com/amd/gaia/blob/main/scripts/ui_design_reminder.sh),
+reminds it once per session, the first time it edits Agent UI or TUI source. It needs no
+setup.
+
 
 GAIA ships a `.claude/settings.json` that declares two recommended Claude Code plugins from the official Anthropic marketplace:
 

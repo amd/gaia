@@ -383,6 +383,24 @@ def test_a_sibling_module_in_the_skill_is_not_a_dependency(tmp_path):
     assert "supply.undeclared_dependency" not in _rules(audit_skill(directory))
 
 
+def test_a_module_beside_a_script_in_a_subfolder_is_not_a_dependency(tmp_path):
+    """``python scripts/search.py`` imports ``scripts/core.py`` as ``core``."""
+    directory = _skill(tmp_path)
+    scripts = directory / "scripts"
+    scripts.mkdir()
+    (scripts / "core.py").write_text("def go():\n    return 1\n", encoding="utf-8")
+    (scripts / "search.py").write_text("from core import go\n", encoding="utf-8")
+    assert "supply.undeclared_dependency" not in _rules(audit_skill(directory))
+
+
+def test_a_third_party_import_in_a_subfolder_script_is_still_flagged(tmp_path):
+    directory = _skill(tmp_path)
+    scripts = directory / "scripts"
+    scripts.mkdir()
+    (scripts / "search.py").write_text("import requests\n", encoding="utf-8")
+    assert "supply.undeclared_dependency" in _rules(audit_skill(directory))
+
+
 def test_import_alias_is_resolved_to_its_distribution(tmp_path):
     """``import yaml`` is satisfied by declaring ``pyyaml``."""
     directory = _skill(
