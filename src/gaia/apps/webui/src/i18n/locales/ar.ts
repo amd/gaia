@@ -286,6 +286,7 @@ const messages: Messages = {
     'composer.skillsTitle': 'المهارات',
     'composer.skillsLoading': 'جارٍ تحميل المهارات…',
     'composer.skillsFailed': "تعذّر تحميل مهاراتك: {error}",
+    'skillMention.kind': 'مهارة',
     'composer.attach': 'إرفاق ملفات',
     'composer.queue': 'إضافة الرسالة إلى قائمة الانتظار',
     'composer.queueTitle': 'أضفها إلى قائمة الانتظار لتُرسل عند انتهاء هذا الرد (Enter)',

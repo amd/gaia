@@ -54,6 +54,11 @@ MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
 
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+#: How Claude Code names a plugin's skill: ``<plugin>:<skill>``. Discovery
+#: builds these names; a ``SKILL.md`` can never declare one.
+PLUGIN_SKILL_NAME_PATTERN = re.compile(
+    r"^[a-z0-9]+(-[a-z0-9]+)*:[a-z0-9]+(-[a-z0-9]+)*$"
+)
 
 # Official SemVer 2.0.0 pattern (semver.org).
 SEMVER_PATTERN = re.compile(
@@ -708,6 +713,7 @@ def parse_project_skill_file(
     *,
     root: Optional[str] = None,
     read_only: bool = True,
+    check_directory_name: bool = True,
 ) -> Skill:
     """Parse a repository's ``.claude/skills`` skill the way Claude Code reads it.
 
@@ -719,6 +725,8 @@ def parse_project_skill_file(
     1,024-character description cap does not apply, and a malformed
     ``version`` or ``metadata`` is dropped. ``metadata.gaia`` that does not
     parse is dropped whole, so a broken declaration never grants anything.
+    *check_directory_name* off skips the strict name check, for a folder whose
+    name is not the skill's (a one-skill plugin's version folder).
 
     Raises:
         SkillValidationError: no frontmatter, no usable name, or no
@@ -727,7 +735,12 @@ def parse_project_skill_file(
     path = Path(path)
     skill_file = path / SKILL_FILENAME if path.is_dir() else path
     try:
-        return parse_skill_file(skill_file, root=root, read_only=read_only)
+        return parse_skill_file(
+            skill_file,
+            root=root,
+            read_only=read_only,
+            check_directory_name=check_directory_name,
+        )
     except SkillValidationError as strict_error:
         reason = strict_error
     try:

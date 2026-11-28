@@ -11,7 +11,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
-import { forgetInstalledSkills } from '../../utils/research';
+import { forgetInstalledSkills } from '../../utils/installedSkills';
 import type { Session, SystemStatus } from '../../types';
 
 vi.mock('../../stores/modelNeededStore', async (importOriginal) => ({

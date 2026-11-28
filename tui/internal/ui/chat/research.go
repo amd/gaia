@@ -77,29 +77,35 @@ func (m ChatModel) withResearch(query string) string {
 	return researchCommand + " " + query
 }
 
-// skillCommandRE is the shape the agent reads as a skill command: /<name>
-// followed by space or the end of the line. The agent reads lowercase names
-// only, so a match in another case is lowercased before it is sent.
-var skillCommandRE = regexp.MustCompile(`^/([a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)(?:\s|$)`)
+// skillCommandRE is one whitespace-separated word the agent reads as a skill
+// command: /<name>, or /<plugin>:<name> for a Claude Code plugin's skill, then
+// any sentence punctuation. The word may start the line or come later in it
+// (gaia.skills.command holds the same rule). The agent lowercases the name;
+// the TUI sends it lowercased too, so the line shows what runs.
+var skillCommandRE = regexp.MustCompile(`^/((?:[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*:)?[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)[.,!?;:\x{060C}\x{061F}]*$`)
 
-// asSkillCommand is query with its /<name> lowercased, and true, when name is
-// an installed skill in any case. A mistyped name or a path such as
-// /tmp/notes.txt is not one. Before the agent has reported its skills the
-// line is sent as typed: the agent decides, as it would with research mode off.
+// wordRE splits a line into the words a skill command is looked for in.
+var wordRE = regexp.MustCompile(`\S+`)
+
+// asSkillCommand is query with the first installed skill it names lowercased,
+// and true. A mistyped name or a path such as /tmp/notes.txt is not one.
+// Before the agent has reported its skills, a line holding any word of that
+// shape is sent as typed: the agent decides, as it would with research mode off.
 func (m ChatModel) asSkillCommand(query string) (string, bool) {
-	trimmed := strings.TrimLeftFunc(query, unicode.IsSpace)
-	match := skillCommandRE.FindStringSubmatchIndex(trimmed)
-	if match == nil {
-		return "", false
-	}
-	if m.skillCommands == nil {
-		return query, true
-	}
-	name := strings.ToLower(trimmed[match[2]:match[3]])
-	for _, s := range m.skillCommands {
-		if strings.ToLower(s.Name) == name {
-			lead := query[:len(query)-len(trimmed)]
-			return lead + "/" + name + trimmed[match[3]:], true
+	for _, word := range wordRE.FindAllStringIndex(query, -1) {
+		match := skillCommandRE.FindStringSubmatchIndex(query[word[0]:word[1]])
+		if match == nil {
+			continue
+		}
+		if m.skillCommands == nil {
+			return query, true
+		}
+		start, end := word[0]+match[2], word[0]+match[3]
+		name := strings.ToLower(query[start:end])
+		for _, s := range m.skillCommands {
+			if strings.ToLower(s.Name) == name {
+				return query[:start] + name + query[end:], true
+			}
 		}
 	}
 	return "", false

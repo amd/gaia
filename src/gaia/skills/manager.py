@@ -12,6 +12,7 @@ first:
  1    Agent-bundled ``skills/<name>/``            Shipped inside an agent package
  2    ``~/.gaia/skills/<name>/``                  This user, all projects
  3    ``./.claude/skills/`` + ``~/.claude/skills/``  Read-only Claude Code import
+     + enabled Claude Code plugins' skills       (named ``<plugin>:<skill>``)
 ===  ==========================================  ==========================
 
 A later root **never** overrides a same-named skill found in an earlier one;
@@ -28,6 +29,7 @@ resolves bundled files on demand (level 3).
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +44,7 @@ from gaia.skills.errors import (
     SkillValidationError,
 )
 from gaia.skills.format import (
+    NAME_PATTERN,
     SKILL_FILENAME,
     Skill,
     parse_project_skill_file,
@@ -67,15 +70,16 @@ _WARNED_IMPORT_ERRORS: set[tuple[str, str]] = set()
 _WARNED_LOCK = threading.Lock()
 
 
-def _warn_invalid_import_once(entry: Path, message: str) -> None:
-    key = (str(entry), message)
+def _warn_once(where: str, message: str) -> None:
+    key = (where, message)
     with _WARNED_LOCK:
         first = key not in _WARNED_IMPORT_ERRORS
         _WARNED_IMPORT_ERRORS.add(key)
-    if first:
-        log.warning("Skipping invalid imported skill at %s: %s", entry, message)
-    else:
-        log.debug("Skipping invalid imported skill at %s: %s", entry, message)
+    (log.warning if first else log.debug)("%s: %s", where, message)
+
+
+def _warn_invalid_import_once(entry: Path, message: str) -> None:
+    _warn_once(f"Skipping invalid imported skill at {entry}", message)
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,9 @@ class SkillRoot:
     label: str
     path: Path
     read_only: bool = False
+    #: A Claude Code plugin's name: its skills are named ``<plugin>:<skill>``,
+    #: and ``path`` may itself be a skill folder.
+    plugin: Optional[str] = None
 
     def __str__(self) -> str:
         return f"{self.label}:{self.path}"
@@ -99,10 +106,19 @@ def user_skills_dir() -> Path:
     return gaia_home() / "skills"
 
 
-def _parse(entry: Path, root: SkillRoot) -> Skill:
+def _parse(entry: Path, root: SkillRoot, *, body: bool = False) -> Skill:
+    """Parse *entry*, named as its root names it; *body* also reads instructions."""
+    if root.plugin is not None:
+        # A one-skill plugin's folder is its version (humanizer/3.1.0), not its name.
+        skill = parse_project_skill_file(
+            entry, root=root.label, read_only=True, check_directory_name=False
+        )
+        skill.name = f"{root.plugin}:{skill.name}"
+        return skill
     if root.label == ROOT_CLAUDE_PROJECT:
         return parse_project_skill_file(entry, root=root.label, read_only=True)
-    return parse_skill_metadata(entry, root=root.label, read_only=root.read_only)
+    parse = parse_skill_file if body else parse_skill_metadata
+    return parse(entry, root=root.label, read_only=root.read_only)
 
 
 def default_project_dir() -> Optional[Path]:
@@ -117,6 +133,98 @@ def claude_skills_dirs(project_dir: Optional[Path] = None) -> list[Path]:
     """Return the read-only Claude Code import roots (project, then user)."""
     project = Path(project_dir) if project_dir is not None else Path.cwd()
     return [project / ".claude" / "skills", Path.home() / ".claude" / "skills"]
+
+
+def _json_object(path: Path, key: str) -> dict:
+    """``path``'s top-level ``key``, ``{}`` when either is missing.
+
+    Raises:
+        OSError, ValueError: the file is unreadable or not that shape.
+    """
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    value = data.get(key) if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not isinstance(value, (dict, type(None))):
+        raise ValueError(f"'{key}' is not a JSON object")
+    return value or {}
+
+
+def _plugin_skill_folders(base: Path, manifest: dict) -> list[Path]:
+    """``skills/``, the folders ``manifest["skills"]`` adds, else a root ``SKILL.md``."""
+    extra = manifest.get("skills") or []
+    extra = [extra] if isinstance(extra, str) else extra
+    if not extra and not (base / "skills").is_dir():
+        extra = ["."] if (base / SKILL_FILENAME).is_file() else []
+    folders: list[Path] = []
+    for folder in [base / "skills", *(base / str(p) for p in extra)]:
+        resolved = folder.resolve()
+        inside = resolved == base.resolve() or base.resolve() in resolved.parents
+        if inside and resolved.is_dir() and resolved not in folders:
+            folders.append(resolved)
+    return folders
+
+
+def claude_plugin_skill_roots() -> list[SkillRoot]:
+    """The skill folders of the Claude Code plugins enabled for this user.
+
+    Read as Claude Code reads them: ``~/.claude/plugins/installed_plugins.json``
+    names each user-scope install, ``enabledPlugins`` in
+    ``~/.claude/settings.json`` (else the plugin's ``defaultEnabled``) says
+    whether it is on, and its skills are ``skills/<name>/SKILL.md``, the
+    folders its manifest's ``skills`` adds, or a lone ``SKILL.md`` at its root.
+    No registry means no plugins; an unreadable file is warned about, naming it.
+    """
+    claude = Path.home() / ".claude"
+    registry = claude / "plugins" / "installed_plugins.json"
+    settings = claude / "settings.json"
+    where = registry
+    try:
+        installs = _json_object(registry, "plugins")
+        where = settings
+        enabled = _json_object(settings, "enabledPlugins")
+    except (OSError, ValueError) as exc:
+        _warn_once(f"Not listing Claude Code plugin skills: {where}", str(exc))
+        return []
+
+    roots: list[SkillRoot] = []
+    for key, records in installs.items():
+        install = next(
+            (
+                r
+                for r in (records if isinstance(records, list) else [])
+                if isinstance(r, dict)
+                and r.get("scope", "user") == "user"
+                and isinstance(r.get("installPath"), str)
+            ),
+            None,
+        )
+        if install is None:
+            continue
+        base = Path(install["installPath"])
+        manifest_file = base / ".claude-plugin" / "plugin.json"
+        try:
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            manifest = {}
+        except (OSError, ValueError) as exc:
+            _warn_once(f"Skipping Claude Code plugin {key}", f"{manifest_file}: {exc}")
+            continue
+        manifest = manifest if isinstance(manifest, dict) else {}
+        if not enabled.get(key, manifest.get("defaultEnabled", True)):
+            continue
+        name = manifest.get("name") or str(key).split("@", 1)[0]
+        if not isinstance(name, str) or not NAME_PATTERN.match(name):
+            _warn_once(
+                f"Skipping Claude Code plugin {key}",
+                f"its name {name!r} is not lowercase letters, digits and hyphens",
+            )
+            continue
+        roots.extend(
+            SkillRoot(ROOT_CLAUDE_IMPORT, folder, read_only=True, plugin=name)
+            for folder in _plugin_skill_folders(base, manifest)
+        )
+    return roots
 
 
 class SkillManager:
@@ -137,7 +245,8 @@ class SkillManager:
         Args:
             agent_skill_dirs: Agent-bundled ``skills/`` directories (precedence 1).
             user_skills_root: Overrides ``~/.gaia/skills`` (precedence 2).
-            claude_skill_dirs: Overrides the ``.claude/skills`` roots (precedence 3).
+            claude_skill_dirs: Overrides the ``.claude/skills`` roots (precedence 3),
+                Claude Code plugins' skills included.
             project_dir: The project root. Its ``.claude/skills`` is labelled
                 ``claude-project`` and listed in the catalogue; when omitted the
                 working directory's is used, as an unlisted ``claude-import``.
@@ -159,7 +268,11 @@ class SkillManager:
 
         self._lock = threading.RLock()
         self._metadata: Optional[dict[str, Skill]] = None
+        #: Claude Code plugins' skill folders, read once per discovery.
+        self._plugin_roots: Optional[list[SkillRoot]] = None
         self._shadowed: dict[str, list[Skill]] = {}
+        #: The root each discovered skill won from, so :meth:`load` names it alike.
+        self._winning_roots: dict[str, SkillRoot] = {}
         self._errors: dict[str, str] = {}
         self._import_errors: dict[str, str] = {}
         self._watchers: list = []
@@ -201,6 +314,10 @@ class SkillManager:
                 )
                 for d in claude
             )
+            if self._claude_dirs is None:
+                if self._plugin_roots is None:
+                    self._plugin_roots = claude_plugin_skill_roots()
+                roots.extend(self._plugin_roots)
         return roots
 
     # ------------------------------------------------------------------
@@ -216,18 +333,24 @@ class SkillManager:
         with self._lock:
             if self._metadata is not None and not force:
                 return dict(self._metadata)
+            self._plugin_roots = None
 
             found: dict[str, Skill] = {}
+            winning_roots: dict[str, SkillRoot] = {}
             shadowed: dict[str, list[Skill]] = {}
             errors: dict[str, str] = {}
             import_errors: dict[str, str] = {}
 
-            for root in self.roots:
+            roots = self.roots
+            for root in roots:
                 if not root.path.is_dir():
                     log.debug("Skill root %s does not exist — skipping", root)
                     continue
                 log.debug("Scanning skill root %s", root)
-                for entry in sorted(root.path.iterdir()):
+                one_skill = (
+                    root.plugin is not None and (root.path / SKILL_FILENAME).is_file()
+                )
+                for entry in [root.path] if one_skill else sorted(root.path.iterdir()):
                     if not entry.is_dir() or not (entry / SKILL_FILENAME).is_file():
                         continue
                     try:
@@ -255,15 +378,17 @@ class SkillManager:
                         )
                         continue
                     found[skill.name] = skill
+                    winning_roots[skill.name] = root
 
             self._metadata = found
+            self._winning_roots = winning_roots
             self._shadowed = shadowed
             self._errors = errors
             self._import_errors = import_errors
             log.info(
                 "Discovered %d skill(s) across %d root(s); %d shadowed, %d invalid",
                 len(found),
-                len(self.roots),
+                len(roots),
                 sum(len(v) for v in shadowed.values()),
                 len(errors),
             )
@@ -338,14 +463,11 @@ class SkillManager:
             SkillDriftError: the skill was installed at ``community`` /
                 ``verified`` and no longer matches what the lock recorded.
         """
-        metadata = self.get(name)
+        with self._lock:
+            metadata = self.get(name)
+            root = self._winning_roots[name]
         assert metadata.path is not None  # discovery always sets it
-        parse = (
-            parse_project_skill_file
-            if metadata.root == ROOT_CLAUDE_PROJECT
-            else parse_skill_file
-        )
-        skill = parse(metadata.path, root=metadata.root, read_only=metadata.read_only)
+        skill = _parse(metadata.path, root, body=True)
         if metadata.root == ROOT_USER:
             # Deferred: keeps the marketplace modules off the import path of
             # every agent that merely composes a bundled skill.

@@ -1569,13 +1569,57 @@ def test_process_query_sends_the_framed_request(session, monkeypatch):
     assert "note-taker" in session.agent.loaded_skills
 
 
+def test_a_typed_plugin_skill_command_runs_that_skill(session, tmp_path, monkeypatch):
+    """``/<plugin>:<skill>`` runs an enabled Claude Code plugin's skill."""
+    home = tmp_path / "home"
+    install = home / ".claude" / "plugins" / "cache" / "m" / "garden-kit" / "1.0"
+    skill_dir = install / "skills" / "plant-care"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: plant-care\ndescription: Care for a plant.\n---\n\n"
+        "PLANT-CARE-BODY\n",
+        encoding="utf-8",
+    )
+    registry = home / ".claude" / "plugins" / "installed_plugins.json"
+    registry.write_text(
+        '{"version": 2, "plugins": {"garden-kit@m": '
+        f'[{{"scope": "user", "installPath": {str(install)!r}}}]}}}}'.replace("'", '"'),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        session.agent,
+        "_skill_manager",
+        SkillManager(
+            agent_skill_dirs=[str(session.library.bundled)],
+            user_skills_root=session.library.user,
+        ),
+    )
+
+    sent = session.agent._expand_skill_command("/garden-kit:plant-care water it")
+
+    assert "garden-kit:plant-care" in session.agent.loaded_skills
+    assert "PLANT-CARE-BODY" in session.agent._prompt_text()
+    assert sent.startswith("[GAIA: the user typed /garden-kit:plant-care")
+    assert sent.endswith("\n\nwater it")
+
+
 @pytest.mark.parametrize(
     "text",
-    ["/tmp/report.txt summarize it", "/not-installed hi", "/etc", "hi /note-taker"],
+    ["/tmp/report.txt summarize it", "/not-installed hi", "/etc", "see /etc/hosts"],
 )
 def test_text_that_names_no_installed_skill_passes_through(session, text):
     assert session.agent._expand_skill_command(text) == text
     assert "note-taker" not in session.agent.loaded_skills
+
+
+def test_a_skill_named_mid_sentence_runs_on_the_whole_message(session):
+    sent = session.agent._expand_skill_command("summarize this chat with /note-taker")
+
+    assert "note-taker" in session.agent.loaded_skills
+    assert sent.startswith("[GAIA: the user typed /note-taker")
+    assert sent.endswith("\n\nsummarize this chat with /note-taker")
 
 
 def test_a_refused_skill_is_reported_not_run(session):

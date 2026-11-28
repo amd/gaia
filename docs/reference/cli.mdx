@@ -161,7 +161,7 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
 | `--disallowed-tools <tools>` | Tools the agent may neither see nor call, comma- or space-separated, with `*` globs (`search_web,browser_*`). Repeatable. `search_tools` never finds a withheld tool, and a tool a skill adds mid-turn is withheld too when a pattern matches it. Each pattern must match a tool the agent has when the turn starts, or the run fails (exit 1) before it begins, so a typo can't leave a tool on |
 | `--no-web` | Withhold GAIA's tools that search, read, download or install from the internet: `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `open_url`, `browser_*`, `search_documentation`, `search_skill_hub`, `install_skill`, `install_cli` and `transcribe_media`. The shell and connector (MCP) tools stay available; withhold those with `--disallowed-tools`. The agent is also told not to search or fetch from the web through the shell or a script. That is an instruction, not a block: cut the network to enforce it |
-| `--no-skills` | No skill catalogue or suggestions in the prompt, no learned skill changes, and no tools to find, load, install or learn skills. A prompt that starts with `/<skill-name>` does not load that skill either: the answer says skills are off. `--disallowed-tools load_skill` does the same. A skill the agent always loads stays loaded |
+| `--no-skills` | No skill catalogue or suggestions in the prompt, no learned skill changes, and no tools to find, load, install or learn skills. A prompt that names a skill as `/<skill-name>` does not load that skill either: the answer says skills are off. `--disallowed-tools load_skill` does the same. A skill the agent always loads stays loaded |
 
 `-p` takes no subcommand: `gaia -p "hi" chat` is a usage error. The flags above
 apply only to `-p`; given before a subcommand without it (`gaia --model X chat`)
@@ -2980,7 +2980,7 @@ Skills are discovered from these roots, highest precedence first:
 | `agent-bundled` | An agent package's own `skills/` directory | No |
 | `user` | `~/.gaia/skills/` (honors `GAIA_CONFIG_DIR`) | **Yes** — where `create` and `import` install |
 | `claude-project` | The agent's project's `.claude/skills/` | No — listed in the skill catalog like Claude Code lists them, for a model that gets the full project context (see `project_context` under [Configuration](#configuration)); its `tools.py` and CLI grants stay withheld, since cloning a repo is not consent to run its code |
-| `claude-import` | `./.claude/skills/` (when no project is known) then `~/.claude/skills/` | No — read-only Claude Code import, loadable by name but not listed in the catalog |
+| `claude-import` | `./.claude/skills/` (when no project is known), then `~/.claude/skills/`, then the skills of enabled Claude Code plugins, named `<plugin>:<skill>` as Claude Code names them | No — read-only Claude Code import, loadable by name but not listed in the catalog |
 
 ### Subcommands
 

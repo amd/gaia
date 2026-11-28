@@ -36,8 +36,11 @@ configure({ asyncUtilTimeout: 10_000 });
 
 // RTL auto-cleanup relies on globals being injected; with globals: false
 // we register the cleanup hook explicitly.
-afterEach(() => {
+afterEach(async () => {
     cleanup();
+    // One module copy of the installed skills; imported late so a suite's
+    // vi.mock of the api reaches it.
+    (await import('../utils/installedSkills')).forgetInstalledSkills();
     // Saved drafts and the last open chat outlive a render by design; one
     // test's typing must not prefill the next test's text box.
     if (typeof localStorage === 'undefined') return; // node-environment test files

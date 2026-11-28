@@ -9,7 +9,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import { FlagshipMissing } from '../../utils/newTask';
-import { forgetInstalledSkills } from '../../utils/research';
+import { forgetInstalledSkills } from '../../utils/installedSkills';
 import newChatCss from '../NewChat.css?raw';
 import type { ActiveModel, AgentProgram, AgentPrograms, Document, Settings, StartScreen, SystemStatus } from '../../types';
 

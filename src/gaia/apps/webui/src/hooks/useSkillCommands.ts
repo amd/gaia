@@ -2,12 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useState } from 'react';
-import * as api from '../services/api';
 import type { SkillInfo } from '../types';
-import { rememberInstalledSkills } from '../utils/research';
-
-/** A composer that holds only `/` and a skill name being typed. */
-const TYPING_COMMAND = /^\/[a-z0-9-]*$/i;
+import { readInstalledSkills, useInstalledSkills } from '../utils/installedSkills';
+import { commandAtCaret, type TypedCommand } from '../utils/skillCommand';
 
 type Status = 'loading' | 'ready' | 'error';
 
@@ -22,15 +19,20 @@ export interface SkillCommands {
     select: (index: number) => void;
     /** Hide the list until the text changes. */
     dismiss: () => void;
+    /** The `/` word at the caret, which a picked name replaces. */
+    word: TypedCommand | null;
 }
 
 /**
- * The skills a `/` command can run, for what the composer holds now.
- * Read fresh each time a `/` starts, so a skill added a moment ago is offered.
+ * The skills a `/` command can run, for the `/` word at the caret: at the
+ * start of the text or after a space, anywhere in it. *caret* is null while
+ * a range is selected. Read fresh each time a `/` starts, so a skill added a
+ * moment ago is offered.
  */
-export function useSkillCommands(value: string): SkillCommands {
-    const typing = TYPING_COMMAND.test(value);
-    const [skills, setSkills] = useState<SkillInfo[]>([]);
+export function useSkillCommands(value: string, caret: number | null): SkillCommands {
+    const word = caret === null ? null : commandAtCaret(value, caret);
+    const typing = word !== null;
+    const skills = useInstalledSkills();
     const [status, setStatus] = useState<Status>('loading');
     const [error, setError] = useState<string | null>(null);
     const [selected, setSelected] = useState(0);
@@ -40,11 +42,9 @@ export function useSkillCommands(value: string): SkillCommands {
         if (!typing) return;
         let live = true;
         setStatus((s) => (s === 'ready' ? s : 'loading'));
-        api.listSkills().then(
-            (r) => {
-                rememberInstalledSkills(r.skills.map((s) => s.name));
+        readInstalledSkills().then(
+            () => {
                 if (!live) return;
-                setSkills(r.skills);
                 setStatus('ready');
                 setError(null);
             },
@@ -57,13 +57,13 @@ export function useSkillCommands(value: string): SkillCommands {
         return () => { live = false; };
     }, [typing]);
 
-    useEffect(() => { setSelected(0); }, [value]);
+    const typed = word?.typed.toLowerCase() ?? null;
+    useEffect(() => { setSelected(0); }, [typed]);
 
-    const typed = value.toLowerCase();
-    const matches = typing ? skills.filter((s) => `/${s.name}`.startsWith(typed)) : [];
+    const matches = typed === null || !skills ? [] : Array.from(skills.values()).filter((s) => `/${s.name}`.toLowerCase().startsWith(typed));
     const open = typing && dismissedAt !== value && (status !== 'ready' || matches.length > 0);
     const select = useCallback((index: number) => setSelected(index), []);
     const dismiss = useCallback(() => setDismissedAt(value), [value]);
 
-    return { open, status, error, matches, selected: Math.min(selected, Math.max(matches.length - 1, 0)), select, dismiss };
+    return { open, status, error, matches, selected: Math.min(selected, Math.max(matches.length - 1, 0)), select, dismiss, word };
 }

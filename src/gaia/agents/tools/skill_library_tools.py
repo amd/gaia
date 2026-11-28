@@ -160,18 +160,25 @@ def _failed_verification(agent: Any) -> Set[str]:
     return state[1]
 
 
-def _reject_bad_name(action: str, name: str) -> Dict[str, Any] | None:
+def _reject_bad_name(
+    action: str, name: str, *, plugin_skill: bool = False
+) -> Dict[str, Any] | None:
     """Refuse anything that is not a bare skill name; ``None`` when it is fine.
+
+    With *plugin_skill*, a Claude Code plugin's ``<plugin>:<skill>`` passes too:
+    those are read-only, so only loading takes one, never a path join.
 
     The substrate validates the same names now (:mod:`gaia.skills.naming`); this
     stays so the model gets a structured tool error naming the fix rather than a
     raised exception. Validated against the canonical ``NAME_PATTERN`` rather
     than a hand-rolled check, so the two can't drift.
     """
-    from gaia.skills.format import NAME_PATTERN
+    from gaia.skills.format import NAME_PATTERN, PLUGIN_SKILL_NAME_PATTERN
 
     text = (name or "").strip()
     if text and NAME_PATTERN.match(text):
+        return None
+    if text and plugin_skill and PLUGIN_SKILL_NAME_PATTERN.match(text):
         return None
     logger.warning("%s: refusing skill name %r", action, name)
     return {
@@ -274,7 +281,7 @@ class SkillLibraryToolsMixin:
         from gaia.skills.errors import SkillError
         from gaia.skills.manager import CLAUDE_ROOTS
 
-        rejection = _reject_bad_name("load_skill", name)
+        rejection = _reject_bad_name("load_skill", name, plugin_skill=True)
         if rejection is not None:
             return rejection
         skill_name = name.strip()

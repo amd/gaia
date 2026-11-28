@@ -10,6 +10,7 @@ Every test runs from a cold state: roots live under ``tmp_path`` and the real
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -232,6 +233,121 @@ def test_invalid_claude_import_warns_once_and_is_tagged_as_import(roots):
     assert list(manager.import_discovery_errors) == [str(roots["claude"] / "theirs")]
     assert log.warning.call_count == 1  # the import, once across rescans
     assert log.error.call_count == 3  # the user's own skill, every rescan
+
+
+# ----------------------------------------------------------------------
+# Claude Code plugins' skills
+# ----------------------------------------------------------------------
+
+
+def _skill_text(name: str, description: str, body: str = "Steps.") -> str:
+    return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}\n"
+
+
+@pytest.fixture
+def claude_home(tmp_path, monkeypatch):
+    """A HOME whose Claude Code has one enabled and one disabled plugin."""
+    home = tmp_path / "home"
+    cache = home / ".claude" / "plugins" / "cache" / "market"
+    garden = cache / "garden-kit" / "1.0.0"
+    write_skill_dir(
+        garden / "skills",
+        "plant-care",
+        _skill_text("plant-care", "Care for a houseplant.", "PLANT-CARE-BODY"),
+    )
+    old = cache / "old-tools" / "0.1.0"
+    write_skill_dir(old / "skills", "legacy", _skill_text("legacy", "Old reports."))
+    # A plugin whose manifest points at a root SKILL.md, as humanizer's does.
+    solo = cache / "solo" / "2.0.0"
+    write_skill_dir(solo.parent, "2.0.0", _skill_text("solo", "One skill."))
+    (solo / ".claude-plugin").mkdir()
+    (solo / ".claude-plugin" / "plugin.json").write_text(
+        '{"name": "solo", "skills": ["./"]}', encoding="utf-8"
+    )
+    registry = home / ".claude" / "plugins" / "installed_plugins.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    f"{name}@market": [{"scope": "user", "installPath": str(path)}]
+                    for name, path in (
+                        ("garden-kit", garden),
+                        ("old-tools", old),
+                        ("solo", solo),
+                    )
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps(
+            {"enabledPlugins": {"garden-kit@market": True, "old-tools@market": False}}
+        ),
+        encoding="utf-8",
+    )
+    write_skill_dir(
+        home / ".claude" / "skills", "notes", _skill_text("notes", "Take notes.")
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.chdir(tmp_path)
+    return home
+
+
+def default_manager(tmp_path):
+    return SkillManager(user_skills_root=tmp_path / "gaia-home" / "skills")
+
+
+def test_enabled_plugins_skills_are_named_as_claude_code_names_them(
+    claude_home, tmp_path
+):
+    manager = default_manager(tmp_path)
+
+    skills = {s.name: s for s in manager.list_skills()}
+    assert sorted(skills) == ["garden-kit:plant-care", "notes", "solo:solo"]
+    plant = skills["garden-kit:plant-care"]
+    assert (plant.root, plant.read_only) == (ROOT_CLAUDE_IMPORT, True)
+    loaded = manager.load("garden-kit:plant-care")
+    assert loaded.name == "garden-kit:plant-care"
+    assert "PLANT-CARE-BODY" in loaded.body
+
+
+def test_a_one_skill_plugin_in_its_version_folder_logs_no_warning(
+    claude_home, tmp_path
+):
+    with patch("gaia.skills.format.log") as log:
+        skills = {s.name: s for s in default_manager(tmp_path).list_skills()}
+
+    assert skills["solo:solo"].description == "One skill."
+    log.warning.assert_not_called()
+
+
+def test_no_plugin_registry_means_no_plugin_skills(claude_home, tmp_path):
+    (claude_home / ".claude" / "plugins" / "installed_plugins.json").unlink()
+
+    with patch("gaia.skills.manager.log") as log:
+        names = [s.name for s in default_manager(tmp_path).list_skills()]
+
+    assert names == ["notes"]
+    log.warning.assert_not_called()
+
+
+def test_a_broken_plugin_registry_is_named_and_the_rest_still_list(
+    claude_home, tmp_path
+):
+    registry = claude_home / ".claude" / "plugins" / "installed_plugins.json"
+    registry.write_text("{not json", encoding="utf-8")
+
+    with (
+        patch("gaia.skills.manager.log") as log,
+        patch("gaia.skills.manager._WARNED_IMPORT_ERRORS", set()),
+    ):
+        names = [s.name for s in default_manager(tmp_path).list_skills()]
+
+    assert names == ["notes"]
+    assert log.warning.call_count == 1
+    assert str(registry) in log.warning.call_args.args[1]
 
 
 def test_reload_picks_up_a_new_skill(roots):

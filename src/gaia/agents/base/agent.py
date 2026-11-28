@@ -13682,11 +13682,11 @@ Do NOT wrap conversational replies in JSON.
         self.close()
 
     def _expand_skill_command(self, user_input: Any) -> Any:
-        """Run ``/<skill-name> request`` on that skill, as Claude Code does.
+        """Run the skill a message names as ``/<skill-name>``, as Claude Code does.
 
-        A message that does not start with an installed skill's name is
-        returned unchanged, so a path like ``/tmp`` still reads as text. Only an
-        agent with the skill library (``activate_skill``) takes commands.
+        A message that names no installed skill is returned unchanged, so a
+        path like ``/tmp`` still reads as text. Only an agent with the skill
+        library (``activate_skill``) takes commands.
         """
         activate = getattr(self, "activate_skill", None)
         if not callable(activate) or not isinstance(user_input, str):
@@ -13695,7 +13695,11 @@ Do NOT wrap conversational replies in JSON.
             MEMORY_CONTEXT_FOOTER,
             MEMORY_CONTEXT_HEADER,
         )
-        from gaia.skills.command import parse_skill_command, skill_command_message
+        from gaia.skills.command import (
+            names_a_skill,
+            parse_skill_command,
+            skill_command_message,
+        )
 
         # MemoryMixin puts its per-turn block before the user's text; keep it.
         memory, typed = "", user_input
@@ -13703,11 +13707,11 @@ Do NOT wrap conversational replies in JSON.
         if user_input.startswith(MEMORY_CONTEXT_HEADER) and fence in user_input:
             head, _, typed = user_input.partition(fence)
             memory = head + fence
-        command = parse_skill_command(typed)
-        if command is None:
+        if not names_a_skill(typed):
             return user_input
         # Rescanned: the user may have added the skill since this chat began.
-        if command.name not in self.skill_manager.discover(force=True):
+        command = parse_skill_command(typed, self.skill_manager.discover(force=True))
+        if command is None:
             return user_input
         # A withheld load_skill covers the typed command too, not just the model.
         if command.name not in self.loaded_skills and not _tool_permitted(
