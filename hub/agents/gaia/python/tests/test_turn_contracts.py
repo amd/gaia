@@ -347,9 +347,7 @@ def test_skill_tools_stay_in_the_chat_that_loaded_them(open_chat, tmp_path):
 # ── A step the user ruled out ────────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="checks the execute bit chmod sets"
-)
+@pytest.mark.skipif(sys.platform == "win32", reason="checks the execute bit chmod sets")
 def test_ruled_out_step_that_ran_is_named(open_chat):
     chat = open_chat()
     script = chat.work / "run.sh"
