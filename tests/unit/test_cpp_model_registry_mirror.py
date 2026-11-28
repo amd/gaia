@@ -43,6 +43,49 @@ def test_the_cpp_table_lists_every_python_model_with_the_same_flag():
     )
 
 
+def _cpp_thinking() -> dict[str, bool]:
+    text = REGISTRY.read_text(encoding="utf-8")
+    body = text[
+        text.index("kThinking = {") : text.index("for (const auto& [id, thinking]")
+    ]
+    return {m["id"]: m["flag"] == "true" for m in ROW.finditer(body)}
+
+
+def test_the_cpp_thinking_table_matches_python():
+    python = {r.model_id: r.thinking for r in MODELS.values() if r.thinking is not None}
+    assert python, "MODELS sets no thinking switch; the C++ table has nothing to mirror"
+    assert _cpp_thinking() == python, (
+        "kThinking in cpp/src/model_registry.cpp and MODELS' thinking flags "
+        "differ; mirror the change in the same commit"
+    )
+
+
+THINKING_PROBES = REPO_ROOT / "cpp" / "tests" / "fixtures" / "thinking_probes.json"
+
+
+def test_python_sends_the_thinking_choice_the_shared_probes_expect(monkeypatch):
+    # The C++ ModelRegistryTest reads the same file, so both sides match ids alike.
+    import json
+
+    from gaia.llm import custom_models
+    from gaia.llm.lemonade_client import requested_thinking
+
+    monkeypatch.setattr(custom_models, "list_custom_models", lambda: [])
+    probes = json.loads(THINKING_PROBES.read_text(encoding="utf-8"))["probes"]
+    assert probes
+    got = {model_id: requested_thinking(model_id) for model_id in probes}
+    assert got == probes
+
+
+def test_the_shared_probes_cover_every_python_thinking_model():
+    import json
+
+    probes = json.loads(THINKING_PROBES.read_text(encoding="utf-8"))["probes"]
+    for r in MODELS.values():
+        if r.thinking is not None:
+            assert probes.get(r.model_id) is r.thinking, r.model_id
+
+
 def test_the_cpp_table_has_no_duplicate_rows():
     ids = [model_id for model_id, _ in _cpp_table()]
     assert len(ids) == len(set(ids))
