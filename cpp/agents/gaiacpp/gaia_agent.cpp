@@ -49,6 +49,9 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
                                      "with --no-memory to work without one.");
         }
     }
+    if (options_.automations) {
+        automations_ = std::make_unique<AutomationStore>(options_.automationsPath);
+    }
     if (options_.documents) {
         EmbedFunction embed;
         if (!options_.embeddingModel.empty()) {
@@ -154,6 +157,7 @@ void GaiaAgent::registerTools() {
         skillToolsRegistered_ = true;
     }
     if (memory_) memory_->registerTools(toolRegistry());
+    if (automations_) automations_->registerTools(toolRegistry());
     // The model means the script's own $; the shell would blank it and the script would still exit 0.
     toolRegistry().setArgRewrite([this](const ToolInfo& tool, json& args) {
         if (tool.name != "bash_execute" || !args.is_object() || !args.contains("command") ||
@@ -444,6 +448,15 @@ Lead with the result. Name the files you created or changed. Cite where facts ca
                       "When helpers come back, answer from their conclusions: do not read the same material again "
                       "yourself. A helper can fail: read each status, then redo a failed part yourself or tell "
                       "the user it is missing.")
+                : std::string()) +
+           (tools().hasTool("create_automation") && tools().isEnabled("create_automation")
+                ? std::string(
+                      "\n\n## Automations and reminders\nWhen the user asks to be reminded at a time (for example "
+                      "\"remind me at 5pm to call Sam\") or to schedule recurring summaries, alerts, or triggers, "
+                      "use create_automation, list_automations, edit_automation, pause_automation, resume_automation, "
+                      "and remove_automation rather than memory. For one-time reminders with fixed text, pass name, "
+                      "at, and say. If create_automation notes that Discord is not connected yet, mention that "
+                      "automations deliver through Discord under Settings > Messaging.")
                 : std::string()) +
            systemContext() +
            (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +

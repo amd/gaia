@@ -124,21 +124,14 @@ describe('AutomationsSettings', () => {
         expect(await screen.findByText(/No automations yet/)).toBeTruthy();
     });
 
-    it('does not tell Fast and light users to recreate a removed automation in chat', async () => {
+    it('keeps the chat hint in the remove dialog on both agents', async () => {
         useActiveAgentStore.setState({ current: 'gaiacpp' });
         routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
         render(<AutomationsSettings />);
         fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
         const sheet = screen.getByRole('alertdialog');
-        expect(sheet.textContent).toMatch(/switch to Full-featured/);
-        expect(sheet.textContent).not.toMatch(/ask GAIA in chat/);
-    });
-
-    it('keeps the chat hint in the remove dialog on Full-featured', async () => {
-        routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
-        render(<AutomationsSettings />);
-        fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
-        expect(screen.getByRole('alertdialog').textContent).toMatch(/ask GAIA in chat/);
+        expect(sheet.textContent).toMatch(/ask GAIA in chat/);
+        expect(sheet.textContent).not.toMatch(/switch to Full-featured/);
     });
 
     it('shows the backend reason when a change fails', async () => {
@@ -160,34 +153,21 @@ describe('AutomationsSettings', () => {
         expect(await screen.findByText('Inbox digest')).toBeTruthy();
     });
 
-    it('shows a Full-featured notice and Agent & model link on gaiacpp without chat-prompt hints', async () => {
+    it('shows the chat-creation hints with no unavailable notice on gaiacpp', async () => {
         useActiveAgentStore.setState({ current: 'gaiacpp' });
         routes = { 'GET /automations': () => ({ body: { automations: [], delivers: false } }) };
         render(<AutomationsSettings />);
-        const note = await screen.findByRole('note');
-        expect(note.textContent).toMatch(/requires Full-featured/);
-        expect(screen.queryByText(/Ask GAIA in chat/)).toBeNull();
-        expect(await screen.findByText('No automations yet.')).toBeTruthy();
-        fireEvent.click(within(note).getByRole('button', { name: /Agent & model/ }));
-        expect(useChatStore.getState().settingsSection).toBe('model');
+        expect(await screen.findByText(/Ask GAIA in chat/)).toBeTruthy();
+        expect(screen.queryByRole('note')).toBeNull();
     });
 
-    it('keeps existing automations manageable while showing the gaiacpp notice', async () => {
-        useActiveAgentStore.setState({ current: 'gaiacpp' });
-        routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
-        render(<AutomationsSettings />);
-        expect(await screen.findByRole('note')).toBeTruthy();
-        expect(await screen.findByText('Inbox digest')).toBeTruthy();
-    });
-
-    it('renders the Arabic gaiacpp notice and Agent & model link', async () => {
+    it('renders the Arabic chat-creation hints with no unavailable notice on gaiacpp', async () => {
         useActiveAgentStore.setState({ current: 'gaiacpp' });
         useChatStore.setState({ locale: 'ar' });
         routes = { 'GET /automations': () => ({ body: { automations: [], delivers: false } }) };
         render(<AutomationsSettings />);
-        const note = await screen.findByRole('note');
-        expect(note.textContent).toContain('كامل الميزات');
-        expect(note.textContent).toContain('الوكيل والنموذج');
+        expect(await screen.findByText(/اطلب من GAIA في المحادثة/)).toBeTruthy();
+        expect(screen.queryByRole('note')).toBeNull();
     });
 });
 

@@ -22,6 +22,7 @@
 
 #include <httplib.h>
 
+#include <gaia/automation_store.h>
 #include <gaia/console.h>
 #include <gaia/document_index.h>
 #include <gaia/ignore.h>
@@ -272,7 +273,10 @@ std::string toolCategory(const ToolInfo& t) {
         {"web_fetch", "browser"}, {"index_document", "rag"}, {"query_documents", "rag"},
         {"list_indexed_documents", "rag"}, {"index_codebase", "code_index"}, {"search_code", "code_index"},
         {"analyze_image", "vlm"}, {"generate_image", "sd"}, {"transcribe_audio", "audio"},
-        {"take_screenshot", "screenshot"}, {"list_skills", "skills"}, {"load_skill", "skills"}};
+        {"take_screenshot", "screenshot"}, {"list_skills", "skills"}, {"load_skill", "skills"},
+        {"list_automations", "automations"}, {"create_automation", "automations"}, {"edit_automation", "automations"},
+        {"pause_automation", "automations"}, {"resume_automation", "automations"},
+        {"remove_automation", "automations"}};
     auto it = known.find(t.name);
     return it == known.end() ? "agent" : it->second;
 }
@@ -663,11 +667,14 @@ private:
         const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
                              judgeShellCommand(args.value("command", ""), "", {}, nullptr).compound;
         const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
+        const std::string autoSummary = AutomationStore::confirmSummary(tool, args);
+        const std::string summary = shell ? "Run: " + args.value("command", "")
+                                          : pathAccess ? pathAccessQuestion(args)
+                                                       : !autoSummary.empty() ? autoSummary : "Use " + tool;
         json ev = {{"type", "needs_confirmation"},
                    {"run_id", run->id},
                    {"action", tool},
-                   {"summary", shell ? "Run: " + args.value("command", "")
-                                     : pathAccess ? pathAccessQuestion(args) : "Use " + tool},
+                   {"summary", summary},
                    {"confirm_id", confirmId},
                    {"args", args}};
         if (!pathAccess) {

@@ -286,6 +286,7 @@ add_library(gaia_core
     src/shell_guard.cpp
     src/document_index.cpp
     src/memory_store.cpp
+    src/automation_store.cpp
     src/media_tools.cpp
     src/keyring.cpp
     src/mcp_stdio_server.cpp
@@ -498,6 +499,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_gaia_agent.cpp
         tests/test_delegation.cpp
         tests/test_memory_store.cpp
+        tests/test_automation_store.cpp
         tests/test_skill_signing.cpp
         tests/test_media_tools.cpp
         agents/gaiacpp/gaia_agent.cpp

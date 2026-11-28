@@ -13,7 +13,6 @@ import {
     type Automation,
     type AutomationList,
 } from '../../services/automationsApi';
-import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import { useChatStore } from '../../stores/chatStore';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 
@@ -114,7 +113,6 @@ function AutomationCard({ item, busy, onToggle, onRemove }: {
 /** Settings > Automations: see, pause, resume and remove what GAIA runs on its own. */
 export function AutomationsSettings() {
     const t = useT();
-    const isNative = useActiveAgentStore((s) => s.current === 'gaiacpp');
     const openSettings = useChatStore((s) => s.openSettings);
     const [list, setList] = useState<AutomationList | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -154,17 +152,7 @@ export function AutomationsSettings() {
     return (
         <div className="settings-pane">
             <h2 className="settings-pane-title">{t('settings.section.automations')}</h2>
-            <p className="settings-pane-lede">
-                {t(isNative ? 'settings.automations.ledeNative' : 'settings.automations.lede')}
-            </p>
-            {isNative && (
-                <p className="automation-native-notice" role="note">
-                    <span>{t('settings.automations.nativeNotice')}</span>{' '}
-                    <button type="button" className="link-btn" onClick={() => openSettings('model')}>
-                        {t.compose((say) => say('mem.store.change', { tab: say('settings.section.model') }))}
-                    </button>
-                </p>
-            )}
+            <p className="settings-pane-lede">{t('settings.automations.lede')}</p>
             {loadError && (
                 <>
                     <p className="settings-error" role="alert">{t('settings.automations.loadFailed', { error: loadError })}</p>
@@ -187,9 +175,7 @@ export function AutomationsSettings() {
             )}
             {actionError && <p className="settings-error" role="alert">{actionError}</p>}
             {list && list.automations.length === 0 && (
-                <p className="settings-hint automation-empty">
-                    {t(isNative ? 'settings.automations.emptyNative' : 'settings.automations.empty')}
-                </p>
+                <p className="settings-hint automation-empty">{t('settings.automations.empty')}</p>
             )}
             {list && list.automations.length > 0 && (
                 <ul className="automation-list">
@@ -213,7 +199,7 @@ export function AutomationsSettings() {
                     onConfirm={() => remove(confirm)}
                     onCancel={() => setConfirm(null)}
                 >
-                    <p>{t(isNative ? 'settings.automations.removeBodyNative' : 'settings.automations.removeBody')}</p>
+                    <p>{t('settings.automations.removeBody')}</p>
                 </ConfirmSheet>
             )}
         </div>

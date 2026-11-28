@@ -125,6 +125,12 @@ var toolPhrases = map[string]toolPhrase{
 	"get_mcp_prompt":     {With: "Reading the connector prompt %s", Without: "Reading a connector's prompt", Arg: "name"},
 	"list_mcp_resources": {Without: "Listing a connector's resources"},
 	"read_mcp_resource":  {With: "Reading the connector resource %s", Without: "Reading a connector's resource", Arg: "uri"},
+	"list_automations":   {Without: "Listing automations"},
+	"create_automation":  {With: "Creating automation %s", Without: "Creating an automation", Arg: "name"},
+	"edit_automation":    {With: "Editing automation %s", Without: "Editing an automation", Arg: "ref"},
+	"pause_automation":   {With: "Pausing automation %s", Without: "Pausing an automation", Arg: "ref"},
+	"resume_automation":  {With: "Resuming automation %s", Without: "Resuming an automation", Arg: "ref"},
+	"remove_automation":  {With: "Removing automation %s", Without: "Removing an automation", Arg: "ref"},
 
 	// Web
 	"web_search":    {With: "Searching the web for %s", Without: "Searching the web", Arg: "query"},
