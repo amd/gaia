@@ -72,6 +72,7 @@ SNIPPETS = [
     "&#0; &#128512; &#xD800; &#1114112; &#11; &#x80;",
     "&lt;b&gt; &eacute;t&eacute; &hellip; &rsquo;",
     "&#; &#x; & alone &;",
+    "I &hearts; it &rarr; &check; &NotEqualTilde; &fjlig; &ampx &notin",
     " lead nbsp ",
     "no entities",
 ]
