@@ -334,6 +334,19 @@ def resolve_caller_mode(agent_id: str, override: Optional[str] = None) -> str:
     return override or (os.environ.get(env_var) if env_var else None) or "user"
 
 
+def dev_mode_applies(agent_id: str) -> bool:
+    """Whether dev mode's source launch means anything for *agent_id*.
+
+    Not for the flagship while gaiacpp is chosen: it is a program of its own,
+    started the same way in either mode, so no checkout is resolved or compared.
+    """
+    from gaia.daemon.sidecars import fetch
+
+    if agent_id != fetch.FLAGSHIP_AGENT_ID:
+        return True
+    return fetch.saved_flagship() != fetch.NATIVE_FLAGSHIP
+
+
 def _normalize_git_toplevel(raw: str) -> Path:
     """Normalize ``git rev-parse --show-toplevel`` output for the running OS.
 
