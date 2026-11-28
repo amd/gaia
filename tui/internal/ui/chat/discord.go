@@ -182,7 +182,7 @@ func (m ChatModel) startDiscordSetup() (tea.Model, tea.Cmd) {
 		"",
 		"1. Click New Application, name it (GAIA works), and click Create.",
 		"2. In the left menu open Bot, click Reset Token, then Copy.",
-		"3. Paste it below. It is masked and goes straight to your OS keyring.",
+		"3. Paste it below. It is masked and saved to your encrypted vault (key in OS keyring).",
 		"",
 		"No intents or permissions need turning on. Only you can use it: GAIA",
 		"answers DMs from the one account you pair, and anything that changes",
@@ -224,7 +224,7 @@ func (m ChatModel) handleDiscordConnected(msg discordConnectedMsg) (tea.Model, t
 		return m.statusNote(fmt.Sprintf(
 			"Discord setup failed: %v\n\nType /discord setup to try again.", msg.err)), nil
 	}
-	lines := []string{"Token accepted for " + msg.result.BotName + ". It is in your OS keyring."}
+	lines := []string{"Token accepted for " + msg.result.BotName + ". It is saved in your encrypted vault (key in OS keyring)."}
 	if msg.result.BotPublic {
 		lines = append(lines, "",
 			"Tip: Public Bot is on, so anyone could add this bot to their server and",

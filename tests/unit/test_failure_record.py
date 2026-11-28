@@ -308,7 +308,11 @@ def _agent(backend):
         agent = _Agent(
             silent_mode=True, skip_lemonade=True, model_id=DEFAULT_MODEL_NAME
         )
-    agent.chat = SimpleNamespace(llm_client=SimpleNamespace(_backend=backend))
+    agent.chat = SimpleNamespace(
+        llm_client=SimpleNamespace(_backend=backend),
+        effective_model=DEFAULT_MODEL_NAME,
+        config=SimpleNamespace(use_claude=False),
+    )
     return agent
 
 
