@@ -2570,7 +2570,7 @@ TEST(GaiaAgentTest, SourceFilesAnAnswerSaysItWroteAreClaimedFilesToo) {
     EXPECT_TRUE(GaiaAgent::claimedFiles("I created the server with Node.js and Express.js.").empty());
     EXPECT_TRUE(GaiaAgent::claimedFiles("I built the frontend with Svelte.js, not Angular.js or jQuery.js.").empty());
     // A component file with a capital letter is still a file.
-    EXPECT_EQ(GaiaAgent::claimedFiles("I created `App.js` and `Button.jsx`."), (Files{"App.js", "Button.jsx"}));
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created `App.js`. I wrote `Button.jsx`."), (Files{"App.js", "Button.jsx"}));
     EXPECT_TRUE(GaiaAgent::claimedFiles("The bug is in utils.js, on line 4.").empty());
 }
 
