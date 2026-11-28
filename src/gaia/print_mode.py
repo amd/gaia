@@ -176,6 +176,18 @@ def configure_console(console: Any, skip_permissions: bool, full_access: bool) -
     console.auto_approve_gated_tools = skip_permissions or full_access
     # Asked for by name on the command line, as the TUI's /full-access is.
     console.full_access = full_access
+    console.approval_surface = "cli"
+
+
+def _with_unattended_refusal(result: Dict[str, Any], console: Any) -> Dict[str, Any]:
+    """*result* failed at the tool nobody could approve, as the relayed run ends."""
+    denial = console.unattended_denial()
+    if denial is None or result.get("status") != "success":
+        return result
+    from gaia.agents.base.console import cli_refusal_message
+
+    refusal = cli_refusal_message(denial.tool)
+    return {**result, "status": "error", "result": refusal, "error": refusal}
 
 
 def _describe(exc: BaseException) -> str:
@@ -763,6 +775,7 @@ def _run_turn(
             # Stop MCP servers now: at interpreter exit __del__ can't start the
             # thread that stops them, and logs a traceback instead.
             agent.close()
+    result = _with_unattended_refusal(result, agent.console)
     record = summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )
