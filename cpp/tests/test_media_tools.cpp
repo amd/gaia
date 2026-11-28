@@ -168,3 +168,235 @@ TEST(MediaToolsTest, NonAsciiFileNamesAreUtf8) {
     ASSERT_EQ(drawn["status"], "success") << drawn.dump();
     EXPECT_EQ(fs::file_size(image), 7u);
 }
+
+namespace {
+
+// Minimal valid 1x1 PNG, base64-encoded.
+constexpr const char* kTinyPngB64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+struct ScopedEnvVar {
+    std::string name;
+    std::string prev;
+    bool hadPrev = false;
+    ScopedEnvVar(const std::string& n, const std::string& val) : name(n) {
+        if (const char* cur = std::getenv(n.c_str())) {
+            hadPrev = true;
+            prev = cur;
+        }
+        set(val);
+    }
+    ~ScopedEnvVar() {
+        if (hadPrev) set(prev);
+        else unset();
+    }
+    void set(const std::string& v) {
+#ifdef _WIN32
+        _putenv_s(name.c_str(), v.c_str());
+#else
+        setenv(name.c_str(), v.c_str(), 1);
+#endif
+    }
+    void unset() {
+#ifdef _WIN32
+        _putenv_s(name.c_str(), "");
+#else
+        unsetenv(name.c_str());
+#endif
+    }
+};
+
+struct ImageMockServer {
+    httplib::Server srv;
+    std::thread t;
+    int port = 0;
+    std::string lastAuth;
+    json lastRequest;
+    int generateCalls = 0;
+    int generateStatus = 200;
+    std::string generateBody = std::string(R"({"data":[{"b64_json":")") + kTinyPngB64 + R"("}]})";
+    json modelsBody = {
+        {"data",
+         json::array({
+             {{"id", "Qwen3.6-35B-A3B-GGUF"}, {"recipe", "llamacpp"}, {"labels", json::array({"llm"})}},
+             {{"id", "RealESRGAN-x4plus"}, {"recipe", "sd-cpp"}, {"labels", json::array({"image", "upscaling"})}},
+             {{"id", "SDXL-Turbo"}, {"recipe", "sd-cpp"}, {"labels", json::array({"image"})}, {"downloaded", true}},
+             {{"id", "Z-Image-Turbo"},
+              {"recipe", "thenoise"},
+              {"labels", json::array({"image"})},
+              {"downloaded", true},
+              {"image_defaults", {{"width", 1024}, {"height", 1024}, {"steps", 9}}}},
+             {{"id", "Flux-2-Klein-4B"},
+              {"recipe", "sd-cpp"},
+              {"labels", json::array({"image"})},
+              {"downloaded", false}},
+         })}};
+
+    ImageMockServer() {
+        srv.Get("/api/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
+            lastAuth = req.get_header_value("Authorization");
+            res.set_content(modelsBody.dump(), "application/json");
+        });
+        srv.Post("/api/v1/images/generations", [this](const httplib::Request& req, httplib::Response& res) {
+            ++generateCalls;
+            lastAuth = req.get_header_value("Authorization");
+            lastRequest = json::parse(req.body, nullptr, false);
+            res.status = generateStatus;
+            res.set_content(generateBody, "application/json");
+        });
+        port = srv.bind_to_any_port("127.0.0.1");
+        t = std::thread([this] { srv.listen_after_bind(); });
+        while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ~ImageMockServer() {
+        srv.stop();
+        t.join();
+    }
+    std::string url() const { return "http://127.0.0.1:" + std::to_string(port) + "/api/v1"; }
+};
+
+}  // namespace
+
+TEST(MediaToolsTest, GenerateImageReadsConfigDefaultsSavesPngAndSupportsOverrides) {
+    ImageMockServer s;
+    Dir home;
+    ScopedEnvVar envHome("GAIA_HOME", home.path.u8string());
+    ScopedEnvVar envCfgDir("GAIA_CONFIG_DIR", "");
+    ScopedEnvVar envCfgFile("GAIA_CONFIG_FILE", "");
+    std::ofstream(home.path / "config.json")
+        << json{{"image_model", "Z-Image-Turbo"}, {"image_size", "1024x1024"}, {"image_steps", 9}}.dump();
+
+    ToolRegistry reg;
+    // No confirm callback: default cache-folder generation must not require confirmation.
+    MediaToolsOptions o;
+    o.enableImageTools = true;
+    o.chatEndpoint = [&s] { return MediaEndpoint{s.url(), "lemon-secret"}; };
+    MediaTools::registerAll(reg, o);
+    ASSERT_TRUE(reg.hasTool("generate_image"));
+    ASSERT_TRUE(reg.hasTool("list_sd_models"));
+
+    json r = reg.executeTool("generate_image", json{{"prompt", "a sunset over mountains"}});
+    ASSERT_EQ(r["status"], "success") << r.dump();
+    EXPECT_EQ(s.lastAuth, "Bearer lemon-secret");
+    EXPECT_EQ(s.lastRequest["model"], "Z-Image-Turbo");
+    EXPECT_EQ(s.lastRequest["size"], "1024x1024");
+    EXPECT_EQ(s.lastRequest["steps"], 9);
+    EXPECT_EQ(s.lastRequest["response_format"], "b64_json");
+
+    const std::string saved = r.at("image_path").get<std::string>();
+    EXPECT_EQ(r.at("path").get<std::string>(), saved);
+    EXPECT_EQ(r.at("file_path").get<std::string>(), saved);
+    const fs::path savedPath = fs::u8path(saved);
+    EXPECT_TRUE(savedPath.is_absolute());
+    EXPECT_EQ(savedPath.parent_path(), fs::canonical(home.path / "cache" / "sd" / "images"));
+    ASSERT_TRUE(fs::is_regular_file(savedPath));
+    std::ifstream in(savedPath, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    ASSERT_GE(bytes.size(), 8u);
+    EXPECT_EQ(bytes.substr(0, 4), "\x89PNG");
+
+    // Explicit args override saved config; switching to a different model uses that model's defaults.
+    json r2 = reg.executeTool(
+        "generate_image",
+        json{{"prompt", "a lighthouse"}, {"model", "SDXL-Turbo"}, {"size", "768x768"}, {"steps", 6}, {"seed", 42}});
+    ASSERT_EQ(r2["status"], "success") << r2.dump();
+    EXPECT_EQ(s.lastRequest["model"], "SDXL-Turbo");
+    EXPECT_EQ(s.lastRequest["size"], "768x768");
+    EXPECT_EQ(s.lastRequest["steps"], 6);
+    EXPECT_EQ(s.lastRequest["seed"], 42);
+}
+
+TEST(MediaToolsTest, GenerateImageFailsLoudlyOnMissingModelHttpErrorsBadBase64AndTraversal) {
+    ImageMockServer s;
+    Dir home;
+    ScopedEnvVar envHome("GAIA_HOME", home.path.u8string());
+    ScopedEnvVar envCfgDir("GAIA_CONFIG_DIR", "");
+    ScopedEnvVar envCfgFile("GAIA_CONFIG_FILE", "");
+
+    ToolRegistry reg;
+    MediaToolsOptions o;
+    o.enableImageTools = true;
+    o.chatEndpoint = [&s] { return MediaEndpoint{s.url(), "k"}; };
+    o.checkPath = [&home](const std::string& p) {
+        return p.rfind(home.path.u8string(), 0) == 0 && p.find("..") == std::string::npos
+                   ? ""
+                   : std::string("Refused: outside allowed folders");
+    };
+    MediaTools::registerAll(reg, o);
+
+    // Non-downloaded non-legacy model fails loudly before calling /images/generations.
+    json missing = reg.executeTool("generate_image", json{{"prompt", "cat"}, {"model", "Flux-2-Klein-4B"}});
+    EXPECT_EQ(missing["status"], "error");
+    EXPECT_NE(missing["error"].get<std::string>().find("not downloaded"), std::string::npos);
+    EXPECT_EQ(s.generateCalls, 0);
+
+    // Path traversal / outside path refused (and requires confirmation when explicit output_path is set).
+    reg.setConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    json trav = reg.executeTool("generate_image",
+                                json{{"prompt", "cat"}, {"output_path", (home.path / ".." / "escape.png").u8string()}});
+    EXPECT_EQ(trav["status"], "error");
+    EXPECT_EQ(s.generateCalls, 0);
+
+    // HTTP 404 fails loudly.
+    s.generateStatus = 404;
+    s.generateBody = R"({"error":{"message":"model not found"}})";
+    json notFound = reg.executeTool("generate_image", json{{"prompt", "cat"}});
+    EXPECT_EQ(notFound["status"], "error");
+    EXPECT_NE(notFound["error"].get<std::string>().find("404"), std::string::npos);
+
+    // HTTP 500 fails loudly.
+    s.generateStatus = 500;
+    s.generateBody = R"({"error":{"message":"backend crashed"}})";
+    json err500 = reg.executeTool("generate_image", json{{"prompt", "cat"}});
+    EXPECT_EQ(err500["status"], "error");
+    EXPECT_NE(err500["error"].get<std::string>().find("500"), std::string::npos);
+    EXPECT_NE(err500["error"].get<std::string>().find("backend crashed"), std::string::npos);
+
+    // Invalid base64 fails loudly and writes nothing.
+    s.generateStatus = 200;
+    s.generateBody = R"({"data":[{"b64_json":"not*valid*base64"}]})";
+    json badB64 = reg.executeTool("generate_image", json{{"prompt", "cat"}});
+    EXPECT_EQ(badB64["status"], "error");
+    EXPECT_NE(badB64["error"].get<std::string>().find("base64"), std::string::npos);
+
+    // Unreachable endpoint fails loudly.
+    ToolRegistry regDown;
+    MediaToolsOptions down;
+    down.enableImageTools = true;
+    down.chatEndpoint = [] { return MediaEndpoint{"http://127.0.0.1:1/api/v1", ""}; };
+    MediaTools::registerAll(regDown, down);
+    json unreachable = regDown.executeTool("generate_image", json{{"prompt", "cat"}});
+    EXPECT_EQ(unreachable["status"], "error");
+    EXPECT_NE(unreachable["error"].get<std::string>().find("could not reach Lemonade"), std::string::npos);
+
+    // Malformed config.json fails loudly instead of silently falling back.
+    std::ofstream(home.path / "config.json") << "{bad json";
+    json badCfg = reg.executeTool("generate_image", json{{"prompt", "cat"}});
+    EXPECT_EQ(badCfg["status"], "error");
+    EXPECT_NE(badCfg["error"].get<std::string>().find("not valid JSON"), std::string::npos);
+}
+
+TEST(MediaToolsTest, ListSdModelsFiltersImageModelsAndReportsSavedDefault) {
+    ImageMockServer s;
+    Dir home;
+    ScopedEnvVar envHome("GAIA_HOME", home.path.u8string());
+    ScopedEnvVar envCfgDir("GAIA_CONFIG_DIR", "");
+    ScopedEnvVar envCfgFile("GAIA_CONFIG_FILE", "");
+    std::ofstream(home.path / "config.json") << json{{"image_model", "Z-Image-Turbo"}}.dump();
+
+    ToolRegistry reg;
+    MediaToolsOptions o;
+    o.enableImageTools = true;
+    o.chatEndpoint = [&s] { return MediaEndpoint{s.url(), "tok"}; };
+    MediaTools::registerAll(reg, o);
+
+    json r = reg.executeTool("list_sd_models", json::object());
+    ASSERT_EQ(r["status"], "success") << r.dump();
+    EXPECT_EQ(r["default_model"], "Z-Image-Turbo");
+    std::vector<std::string> names;
+    for (const auto& m : r["models"]) names.push_back(m["name"].get<std::string>());
+    EXPECT_NE(std::find(names.begin(), names.end(), "SDXL-Turbo"), names.end());
+    EXPECT_NE(std::find(names.begin(), names.end(), "Z-Image-Turbo"), names.end());
+    EXPECT_EQ(std::find(names.begin(), names.end(), "Qwen3.6-35B-A3B-GGUF"), names.end());
+    EXPECT_EQ(std::find(names.begin(), names.end(), "RealESRGAN-x4plus"), names.end());
+}

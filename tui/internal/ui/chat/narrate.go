@@ -118,6 +118,7 @@ var toolPhrases = map[string]toolPhrase{
 	"forget":             {Without: "Deleting from memory"},
 	"take_screenshot":    {Without: "Taking a screenshot"},
 	"generate_image":     {With: "Creating an image of %s", Without: "Creating an image", Arg: "prompt"},
+	"list_sd_models":     {Without: "Listing image models"},
 	"analyze_image":      {With: "Looking at %s", Without: "Looking at an image", Arg: "path"},
 	"transcribe_audio":   {With: "Transcribing %s", Without: "Transcribing a recording", Arg: "path"},
 	"read_tool_output":   {Without: "Re-reading an earlier result"},

@@ -50,7 +50,8 @@ public:
         std::string visionModel;     // empty = the agent's own model
         std::string transcribeModel; // empty = no transcribe_audio
         std::string audioBaseUrl;    // empty = the agent's endpoint
-        std::string imageModel;      // empty = no generate_image
+        bool imageTools = true;      // generate_image / list_sd_models (reads GAIA config.json)
+        std::string imageModel;      // empty = read image_model from config.json (default SDXL-Turbo)
         bool screenshots = false;    // take_screenshot (off unless asked: privacy)
         // The shell this agent's commands run in; unset = one per process.
         std::shared_ptr<ShellSession> shell;

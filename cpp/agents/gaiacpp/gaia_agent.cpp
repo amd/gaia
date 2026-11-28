@@ -343,6 +343,7 @@ void GaiaAgent::registerTools() {
     {
         MediaToolsOptions m;
         m.transcribeModel = options_.transcribeModel;
+        m.enableImageTools = options_.imageTools;
         m.imageModel = options_.imageModel;
         m.chatEndpoint = [this] {
             const AgentConfig c = this->config();
@@ -444,6 +445,14 @@ Lead with the result. Name the files you created or changed. Cite where facts ca
                       "When helpers come back, answer from their conclusions: do not read the same material again "
                       "yourself. A helper can fail: read each status, then redo a failed part yourself or tell "
                       "the user it is missing.")
+                : std::string()) +
+           (tools().hasTool("generate_image") && tools().isEnabled("generate_image")
+                ? std::string(
+                      "\n\n## Image generation\nWhen the user asks for a picture, illustration or artwork, call "
+                      "generate_image directly (omit output_path unless the user named a specific file path so the "
+                      "image previews inline). Never use generate_image for slides, decks, presentations, documents "
+                      "or charts. On success, report the saved image_path. On error, state the error in 1-2 sentences "
+                      "without pretending an image was created.")
                 : std::string()) +
            systemContext() +
            (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +
@@ -690,6 +699,7 @@ void GaiaAgent::onTurnStart() {
     gated.insert({"recall", "remember", "update_memory", "forget"});
     for (const auto& name : gated) {
         bool on = !(compact && std::find(withheld.begin(), withheld.end(), name) != withheld.end());
+        if ((name == "generate_image" || name == "list_sd_models") && !options_.imageModel.empty()) on = true;
         if (name == "recall") on = on && !memOff;
         if (name == "remember" || name == "update_memory" || name == "forget") on = on && !memOff && !memPrivate;
         // Written only on a change, so a turn doesn't race readers on other threads for nothing.

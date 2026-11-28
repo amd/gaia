@@ -65,7 +65,7 @@ describe('AgentChoice', () => {
             "Memory is separate: what GAIA remembered with Full-featured isn't seen by Fast and light, and the other way round.",
             "File changes it makes can't be undone from the chat.",
             'Document search matches words, not meaning.',
-            "It can't create images, transcribe audio or turn a document into speech.",
+            "It can't transcribe audio or turn a document into speech.",
             "The context meter doesn't show how full the conversation is.",
         ]);
         expect(screen.queryByText(/fewer tools and features/)).not.toBeInTheDocument();
