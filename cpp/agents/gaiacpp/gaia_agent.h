@@ -266,6 +266,7 @@ private:
     std::optional<std::string> turnListing_;  // unset until the first turn starts
     std::string turnTextSize_;                // how much text the working folder holds, in words for the prompt
     std::set<std::string> turnTablesPointedAt_;  // CSVs a command was sent to file_read for, once each
+    std::set<std::string> turnIndexedDocsPointedAt_;  // indexed PDFs/.docx a command was sent to query_documents for, once each
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
     bool skillToolsRegistered_ = false;

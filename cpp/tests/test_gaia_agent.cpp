@@ -2543,6 +2543,109 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
     EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
 }
 
+TEST(GaiaAgentTest, PromptListsIndexedDocumentsAndPrefersQueryDocuments) {
+    Workdir w;
+    const fs::path report = w.path / "quarterly_report.txt";
+    std::ofstream(report) << "Total Active Units: 1,480 robots. Battery Replacement Cost: $18,200.";
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    mock.pushResponse(answer("ok"));
+
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    agent.processQuery("hello");
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string before = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(before.find("query_documents"), std::string::npos) << before;
+    EXPECT_EQ(before.find("Indexed documents"), std::string::npos);
+
+    ASSERT_NE(agent.documents(), nullptr);
+    EXPECT_GT(agent.documents()->indexFile(report.string()), 0u);
+    agent.rebuildSystemPrompt();
+    agent.processQuery("what is the battery replacement cost?");
+    ASSERT_EQ(mock.receivedBodies().size(), 2u);
+    const std::string after = json::parse(mock.receivedBodies()[1])["messages"][0]["content"];
+    EXPECT_NE(after.find("Indexed documents"), std::string::npos) << after;
+    EXPECT_NE(after.find("quarterly_report.txt"), std::string::npos) << after;
+}
+
+TEST(GaiaAgentTest, ShellAttemptOnIndexedPdfRedirectsToQueryDocumentsBeforeAsking) {
+    Workdir w;
+    // Use .docx so the test exercises the PDF/Word redirect without depending on pdftotext in CI.
+    const fs::path doc = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "orion_onboarding.docx";
+    ASSERT_TRUE(fs::exists(doc)) << doc;
+    const fs::path copy = w.path / "report.docx";
+    fs::copy_file(doc, copy);
+
+    bench::MockLlmServer mock;
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    ASSERT_NE(agent.documents(), nullptr);
+    ASSERT_GT(agent.documents()->indexFile(copy.string()), 0u);
+
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+    const json cmd = {{"command", "python3 -c \"print('report.docx')\""}};
+    const json first = agent.toolRegistry().executeTool("bash_execute", cmd);
+    EXPECT_EQ(first.value("status", ""), "error") << first.dump();
+    EXPECT_EQ(first.value("executed", true), false) << first.dump();
+    EXPECT_NE(first.value("error", "").find("query_documents"), std::string::npos) << first.dump();
+    EXPECT_EQ(asked, 0) << "redirect must happen before any approval card";
+
+    // A genuine follow-up script on the same turn is not blocked permanently.
+    const json second = agent.toolRegistry().executeTool("bash_execute", cmd);
+    EXPECT_EQ(asked, 1) << second.dump();
+}
+
+TEST(GaiaAgentTest, IndexedPdfRedirectMatchesTheWholeFileNameOnly) {
+    Workdir w;
+    const fs::path doc = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "orion_onboarding.docx";
+    ASSERT_TRUE(fs::exists(doc)) << doc;
+    fs::copy_file(doc, w.path / "report.docx");
+
+    bench::MockLlmServer mock;
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    ASSERT_NE(agent.documents(), nullptr);
+    ASSERT_GT(agent.documents()->indexFile((w.path / "report.docx").string()), 0u);
+
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+    for (const char* other : {"annual_report.docx", "report.docx.bak", "old-report.docx"}) {
+        const json cmd = {{"command", std::string("python3 -c \"print('") + other + "')\""}};
+        const json r = agent.toolRegistry().executeTool("bash_execute", cmd);
+        EXPECT_EQ(r.value("error", "").find("is already indexed"), std::string::npos) << other << ": " << r.dump();
+    }
+    EXPECT_EQ(asked, 3) << "a different file whose name contains report.docx goes to approval, not the redirect";
+}
+
+TEST(GaiaAgentTest, PromptListsAtMostTwentyIndexedDocuments) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    ASSERT_NE(agent.documents(), nullptr);
+    for (int i = 0; i < 23; ++i) {
+        const fs::path f = w.path / ("note_" + std::to_string(100 + i) + ".txt");
+        std::ofstream(f) << "Note number " << i << " says the meeting is on day " << i << ".";
+        ASSERT_GT(agent.documents()->indexFile(f.string()), 0u);
+    }
+    agent.rebuildSystemPrompt();
+    agent.processQuery("hello");
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(system.find("and 3 more"), std::string::npos) << system;
+    const size_t start = system.find("- Indexed documents");
+    ASSERT_NE(start, std::string::npos) << system;
+    const std::string line = system.substr(start, system.find('\n', start) - start);
+    size_t listed = 0;
+    for (size_t at = line.find("note_1"); at != std::string::npos; at = line.find("note_1", at + 1)) ++listed;
+    EXPECT_EQ(listed, 20u) << line;
+}
+
 TEST(GaiaAgentTest, GeneralKnowledgeAbsenceIsNotSentBack) {
     struct Case {
         const char* request;

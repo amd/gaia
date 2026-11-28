@@ -1434,7 +1434,7 @@ private:
                 cfg.nativeToolCalls =
                     cfg.modelId.rfind("fireworks.", 0) == 0 ? NativeToolCalls::Always : NativeToolCalls::Auto;
                 s->agent->setConfig(cfg);
-                s->agent->rebuildSystemPrompt();  // memory may have been switched
+                s->agent->rebuildSystemPrompt();  // memory or indexed documents may have changed
                 s->agent->setHistory(history);
                 const size_t before = s->agent->history().size();
                 if (run->cancelled) throw std::runtime_error("cancelled");

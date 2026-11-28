@@ -263,6 +263,39 @@ void GaiaAgent::registerTools() {
                               "often all the request needs. Run a script after that only for what it doesn't give.";
                     }
                 }
+                if (why.empty() && docs_) {
+                    auto mentionsFilename = [](const std::string& cmd, const std::string& name) {
+                        auto isNameChar = [](unsigned char c) {
+                            return std::isalnum(c) || c == '_' || c == '-' || c == '.';
+                        };
+                        size_t pos = 0;
+                        while ((pos = cmd.find(name, pos)) != std::string::npos) {
+                            const bool leftOk = pos == 0 || !isNameChar(static_cast<unsigned char>(cmd[pos - 1]));
+                            const size_t after = pos + name.size();
+                            const bool rightOk = after == cmd.size() || !isNameChar(static_cast<unsigned char>(cmd[after]));
+                            if (leftOk && rightOk) return true;
+                            pos += 1;
+                        }
+                        return false;
+                    };
+                    for (const auto& [path, _] : docs_->files()) {
+                        const fs::path p = fs::u8path(path);
+                        std::string ext = p.extension().u8string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(),
+                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                        if (ext != ".pdf" && ext != ".docx") continue;
+                        const std::string name = p.filename().u8string();
+                        if (name.empty() || !mentionsFilename(advised, name)) continue;
+                        std::lock_guard<std::mutex> lock(turnListingMu_);
+                        if (turnIndexedDocsPointedAt_.insert(name).second) {
+                            why = "Not run yet. " + name +
+                                  " is already indexed: use query_documents to read it and answer directly from its "
+                                  "passages. If the user asked to copy, move, rename, convert or edit the file, or "
+                                  "for raw metadata query_documents does not return, run the command again.";
+                            break;
+                        }
+                    }
+                }
                 if (why.empty()) {
                     std::vector<CallSeen> earlier;
                     for (const auto& c : turnToolCalls()) {
@@ -379,7 +412,7 @@ std::string GaiaAgent::getSystemPrompt() const {
 ## How to work
 1. Look before you answer. If the request names files or a folder, list and read them first. Never say a file or fact does not exist without checking.
 2. Use tools to do the work, not to describe it. A request to create, fix, convert or save a file is done only when the file exists on disk; write it with file_write or a program, then confirm it is there. Writing for the user to read (a story, poem, essay, letter or explanation) goes in your reply, not in a file, unless they ask for a file or name a place to save it.
-3. For formats you cannot read as text (PDF, Word, Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with pypdf/pdfplumber, python-docx, openpyxl/pandas or python-pptx, or pdftotext. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
+3. For PDF and Word (.docx) documents, use query_documents to read and search them (calling index_document first if the file is not already listed as indexed under Environment). Once query_documents returns passages that answer the question, answer directly from them instead of running bash_execute to re-read or verify the file. For formats query_documents cannot index (Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with openpyxl/pandas or python-pptx. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
 4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source. A sum the user states outright, with no file or data behind it (17 times 23), is not data work: answer it yourself, with no tool.
 5. Verify. After a change, re-read the file, run the test or the program, and look at the output.
 6. Keep going until the task is finished or you are truly blocked, then answer.
@@ -683,6 +716,7 @@ void GaiaAgent::onTurnStart() {
     turnTextSize_ = std::move(size);
     turnHostileNames_ = std::move(hostile);
     turnTablesPointedAt_.clear();
+    turnIndexedDocsPointedAt_.clear();
 }
 
 std::string GaiaAgent::systemContext() const {
@@ -727,6 +761,24 @@ std::string GaiaAgent::systemContext() const {
         }
         out << ". Tools refuse other locations, so don't search the whole disk or the home "
                "folder. If a file the user needs isn't in these folders, say so.\n";
+    }
+    if (docs_) {
+        const auto indexed = docs_->files();
+        if (!indexed.empty()) {
+            constexpr size_t kMaxListedDocs = 20;
+            out << "- Indexed documents (already indexed; use query_documents to answer questions about them, not bash_execute):";
+            size_t shown = 0;
+            for (const auto& [path, chunks] : indexed) {
+                if (shown >= kMaxListedDocs) break;
+                out << " " << fs::path(path).filename().u8string() << " (" << chunks
+                    << (chunks == 1 ? " passage" : " passages") << ")";
+                ++shown;
+            }
+            if (indexed.size() > kMaxListedDocs) {
+                out << " and " << (indexed.size() - kMaxListedDocs) << " more (search them with query_documents)";
+            }
+            out << ".\n";
+        }
     }
     if (options_.webOff) {
         out << "- Web access is off for this run. Do not search the web or fetch pages, repositories or "
