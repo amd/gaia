@@ -398,12 +398,20 @@ std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::strin
     json catalog;
     try {
         catalog = client.listModels(true);
-    } catch (const HttpError&) {
-        return "";
-    } catch (const json::exception&) {
-        return "";
+    } catch (const HttpError& e) {
+        // An unreachable server or a server without /models yields to keyword-only memory edits and
+        // the turn's own server-down check; auth errors and 5xx always fail loudly.
+        if (e.status() == 0 || e.status() == 404) {
+            std::cerr << "gaiacpp: skipped embedding model probe at " << client.baseUrl() << ": " << e.what()
+                      << std::endl;
+            return "";
+        }
+        throw;
     }
-    if (!catalog.is_object() || !catalog.contains("data") || !catalog["data"].is_array()) return "";
+    if (!catalog.is_object() || !catalog.contains("data") || !catalog["data"].is_array()) {
+        throw std::runtime_error("Model catalog at " + client.baseUrl() +
+                                 "/models did not return a JSON object with a \"data\" array.");
+    }
     for (const auto& m : catalog["data"]) {
         if (!m.is_object()) continue;
         const std::string id = m.value("id", "");
