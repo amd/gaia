@@ -181,13 +181,22 @@ describe('Chat App Installer Readiness', () => {
       expect(content).toContain('ChatRequest');
     });
 
-    it('should use port 4200 as default (not 4001)', () => {
-      // server.py takes its default from the one shared constant in gaia/ports.py.
+    it('should default to the same port the Electron app connects to', () => {
       const server = fs.readFileSync(path.join(BACKEND_PATH, 'server.py'), 'utf8');
-      const ports = fs.readFileSync(path.join(BACKEND_PATH, '..', 'ports.py'), 'utf8');
-      expect(server).toMatch(/DEFAULT_PORT = AGENT_UI_PORT/);
-      expect(ports).toMatch(/^AGENT_UI_PORT = 4200$/m);
+      expect(server).toMatch(/^from gaia\.ports import AGENT_UI_PORT\r?$/m);
+      expect(server).toMatch(/^DEFAULT_PORT = AGENT_UI_PORT\r?$/m);
       expect(server).not.toContain('4001');
+
+      const ports = fs.readFileSync(path.join(BACKEND_PATH, '..', 'ports.py'), 'utf8');
+      const pythonPort = ports.match(/^AGENT_UI_PORT = (\d+)\r?$/m);
+      expect(pythonPort).not.toBeNull();
+
+      const mainCjs = fs.readFileSync(path.join(CHAT_APP_PATH, 'main.cjs'), 'utf8');
+      const electronPort = mainCjs.match(/^const DEFAULT_BACKEND_PORT = (\d+);\r?$/m);
+      expect(electronPort).not.toBeNull();
+
+      expect(pythonPort[1]).toBe('4200');
+      expect(electronPort[1]).toBe(pythonPort[1]);
     });
   });
 
