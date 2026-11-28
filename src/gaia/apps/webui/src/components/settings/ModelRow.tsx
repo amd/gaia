@@ -6,6 +6,7 @@ import { useT, type Translate } from '../../i18n/useT';
 import type { MessageKey } from '../../i18n/registry';
 import { isDownloading } from '../modelMeta';
 import { NpuNotReady } from '../setup/NpuNotReady';
+import { SupportTag } from '../SupportTag';
 import { formatPrice } from './cloudPrice';
 import type { ProviderModel } from '../../types';
 
@@ -67,6 +68,7 @@ export function ModelRow({ model: m, label, current, remote, busy, onUse, onDown
                     {m.state === 'loaded' && <span className="model-badge is-loaded">{t('settings.model.loaded')}</span>}
                     {m.fits === true && m.available !== false && !m.tight && <span className="model-badge is-fit">{t('settings.model.fits')}</span>}
                     {m.fits === true && m.available !== false && m.tight && <span className="model-badge is-tight" title={t('setup.models.warn.tight')}>{t('settings.model.tight')}</span>}
+                    {!remote && <SupportTag support={m.support} />}
                     {m.custom && <span className="model-badge is-custom">{t('settings.model.custom')}</span>}
                     {!!m.size_gb && <bdi dir="ltr" className="model-badge is-size">{m.size_gb} GB</bdi>}
                     {hasDetails && (

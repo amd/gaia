@@ -477,3 +477,17 @@ TEST(SseParserTest, ToolCallsWithoutAnIndexStayApartAcrossDeltas) {
     EXPECT_EQ(calls[1].name, "list");
     EXPECT_EQ(calls[1].arguments, "{}");
 }
+
+TEST(SseParserTest, ReasoningPiecesGoToTheirOwnCallbackAndNeverToTheAnswer) {
+    std::string answer, reasoning;
+    gaia::SseParser parser([&](const std::string& t) { answer += t; });
+    parser.setReasoningCallback([&](const std::string& t) { reasoning += t; });
+    const std::string stream =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me \"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think.\",\"content\":null}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    parser.feed(stream.data(), stream.size());
+    EXPECT_EQ(reasoning, "Let me think.");
+    EXPECT_EQ(answer, "Hi");
+}

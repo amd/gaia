@@ -201,7 +201,7 @@
 }
 
 .fb-up-btn {
-    margin-inline-start: auto;
+    flex-shrink: 0;
     background: none;
     border: 1px solid var(--border);
     color: var(--text-secondary);
@@ -420,6 +420,21 @@
     border-bottom: 1px solid var(--border-light);
     font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
+}
+
+/* A Latin name in an Arabic UI truncates at its end (dir="auto") and stays on the row's own edge. */
+:root[dir="rtl"] :is(.fb-entry-name, .fb-preview-name)[dir="auto"] {
+    text-align: right;
+}
+
+:root:not([dir="rtl"]) :is(.fb-entry-name, .fb-preview-name)[dir="auto"] {
+    text-align: left;
+}
+
+/* The size comes first in the row; keep "58 B" from reading "B 58" in Arabic. */
+.fb-preview-meta > span:first-child {
+    direction: ltr;
+    unicode-bidi: isolate;
 }
 
 .fb-preview-columns {

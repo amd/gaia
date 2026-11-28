@@ -267,6 +267,7 @@ func TestTheNativeAgentGetsExactlyTheModelServerTheTUIChose(t *testing.T) {
 	inherited := []string{
 		"PATH=/bin",
 		"LEMONADE_API_KEY=inherited-key",
+		"GAIA_LEMONADE_EMBEDDED=1",
 		"lemonade_base_url=http://stale.example:1/api/v1",
 		"GAIA_BASE_URL=http://other.example:2/v1",
 		"GAIA_API_KEY=other-key",

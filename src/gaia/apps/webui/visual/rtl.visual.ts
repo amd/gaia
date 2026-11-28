@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, withResourceStrip, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SETTINGS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, withResourceStrip, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
 import { stripIsolates, translateBare } from '../src/i18n/registry';
 
@@ -78,14 +78,23 @@ const audit = async (page: Page): Promise<string[]> => {
     await nextFrames(page);
     // A state that just landed (a fetch resolving) is mid-transition, and an inherited
     // colour starts a second one on the child; audit where they all end.
+    // Bounded by time, not frames: a page still loading on a busy CI runner starts a few in a row.
     await page.evaluate(async () => {
-        for (let round = 0; round < 10; round++) {
-            const moving = document.getAnimations().filter((a) => a instanceof CSSTransition);
+        const deadline = performance.now() + 3_000;
+        const running = () => document.getAnimations().filter((a) => a instanceof CSSTransition);
+        while (performance.now() < deadline) {
+            const moving = running();
             if (!moving.length) return;
             await Promise.all(moving.map((a) => a.finished.catch(() => undefined)));
             await new Promise((done) => requestAnimationFrame(done));
         }
-        throw new Error('audit: CSS transitions still starting after 10 rounds');
+        const moving = running();
+        if (!moving.length) return;
+        const names = moving.map((a) => {
+            const el = (a.effect as KeyframeEffect | null)?.target;
+            return `${el?.tagName.toLowerCase()}.${el?.className} ${(a as CSSTransition).transitionProperty}`;
+        });
+        throw new Error(`audit: CSS transitions still starting after 3 s: ${names.join(', ')}`);
     });
     return page.evaluate(() => {
         const problems: string[] = [];
@@ -564,6 +573,15 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the empty new-chat message box reads in the interface direction, so its placeholder starts on the right in Arabic (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const box = page.locator('.new-chat textarea').first();
+        await expect(box).toBeVisible();
+        expect(await box.evaluate((el) => getComputedStyle(el).direction)).toBe(locale === 'ar' ? 'rtl' : 'ltr');
+    });
+}
+
 const SKILL_LIST = [
     { name: 'pdf', description: 'Make and edit PDF files. Use when the user asks for a report.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
     { name: 'pptx', description: 'ابنِ عروض الشرائح من ملاحظاتك. استخدمها عند طلب عرض.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
@@ -993,6 +1011,9 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
         await expect(page.locator('.render-calc')).toBeVisible();
         expect(await audit(page)).toEqual([]);
+        const boxDrop = await page.locator('.render-calc__field').evaluateAll((fields) =>
+            fields.map((f) => Math.round(f.querySelector('.render-calc__box')!.getBoundingClientRect().top - f.getBoundingClientRect().top)));
+        expect(new Set(boxDrop).size, `every field puts its box in the same place, got ${boxDrop}`).toBe(1);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
     });
@@ -1243,6 +1264,58 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `full-access-write-confirm-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.msg-assistant')).toEqual([]);
+    });
+}
+
+/** A gaiacpp turn that wrote a file: no record to undo from, and no context measurement. */
+async function withNativeWrite(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'اكتب ملاحظاتي في notes.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'كتبت ملاحظاتك في الملف.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', label: 'Write file', tool: 'write_file', narration: 'Writing file: notes.txt', active: false, success: true, timestamp: 1 },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`, (route) =>
+        route.fulfill({ json: { session_id: ANSWER_SESSION, agent_type: 'gaia', skills: null, program: 'gaiacpp', tools: [{ name: 'write_file', description: 'Write a file.', category: 'file_io' }] } }));
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
+        json: { available: false, reason: "Not available yet: gaiacpp doesn't report what fills its context." },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a gaiacpp turn that wrote a file says undo is not available (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withNativeWrite);
+        const note = page.locator('.msg-assistant .turn-changes.is-unavailable');
+        await expect(note).toBeVisible();
+        await expect(note).toContainText(locale === 'ar' ? 'سريع وخفيف' : 'Fast and light');
+        await expect(page.locator('.msg-assistant .turn-changes-btn')).toHaveCount(0);
+        if (locale === 'ar') expect(await untranslated(page, '.turn-changes')).toEqual([]);
+        await shot(page, `native-no-undo-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`the same turn on the Python agent has no such line (${locale})`, async ({ page }) => {
+        // The line waits on this answer, so its absence is only checked once it has arrived.
+        const asked = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`);
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withNativeWrite(p);
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`, (route) =>
+                route.fulfill({ json: { session_id: ANSWER_SESSION, agent_type: 'gaia', skills: [], program: 'gaiapy', tools: [] } }));
+        });
+        await expect(page.locator('.msg-assistant')).toBeVisible();
+        await asked;
+        await nextFrames(page);
+        await expect(page.locator('.turn-changes.is-unavailable')).toHaveCount(0);
     });
 }
 
@@ -2491,6 +2564,25 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `files-${locale}-zoomed`);
     });
 
+    // A long path scrolls inside the path bar; the open folder and Go up stayed out of reach.
+    test(`the file browser keeps the open folder and Go up in view four folders deep (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 600 });
+        const deep = 'C:\\Shared Projects\\quarterly-financial-reports\\design-review-meeting-notes\\final-archive-2026-edition';
+        await open(page, '', locale, async (p) => {
+            await withOldFile(p);
+            await p.route('**/api/files/browse**', (route) => route.fulfill({
+                json: { current_path: deep, parent_path: 'C:\\Shared Projects\\quarterly-financial-reports\\design-review-meeting-notes', quick_links: [], entries: [] },
+            }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await page.getByRole('button', { name: /Browse files/ }).click();
+        await expect(page.locator('.fb-crumb').last()).toHaveText('final-archive-2026-edition');
+        // Chromium rounds the scroll end to whole pixels, so right-to-left can clip a fraction of the button's padding.
+        await expect(page.locator('.fb-crumb').last()).toBeInViewport({ ratio: 0.95 });
+        await expect(page.locator('.fb-up-btn')).toBeInViewport({ ratio: 1 });
+        await shot(page, `files-${locale}-deep-path`);
+    });
+
     test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
         await withPanelOpen(page);
         const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
@@ -3336,6 +3428,17 @@ for (const locale of ['ar', 'en']) {
                     if (expanded) await more.click();
                     await expect(more).toHaveAttribute('aria-expanded', String(expanded));
                     await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+                    if (expanded) {
+                        // What changes on gaiacpp is a list of its own, each line inside the card.
+                        const diffs = agent.locator('.agent-choice-diffs li');
+                        await expect(diffs).toHaveCount(5);
+                        const card = (await agent.boundingBox())!;
+                        for (const line of await diffs.all()) {
+                            const box = (await line.boundingBox())!;
+                            expect(box.x).toBeGreaterThanOrEqual(card.x - 1);
+                            expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+                        }
+                    }
                     for (const row of await agent.locator('[role="radio"]').all()) {
                         expect((await row.boundingBox())!.height).toBeLessThan(48);
                     }
@@ -3377,6 +3480,42 @@ for (const locale of ['ar', 'en']) {
             // The bar replaces the button; a dimmed button once slid out of its row here.
             await expect(button).toHaveCount(0);
             await shot(page, `model-${locale}-agent-downloading`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a gaiacpp from another GAIA release is marked out of date, with Update on its row', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'outdated', poll: AGENT_DOWNLOADING } });
+            const agent = page.locator('.agent-choice');
+            const row = agent.locator('[role="radio"]').nth(1);
+            // Still pickable: an older copy is flagged, not blocked.
+            await expect(row).not.toHaveAttribute('aria-disabled', 'true');
+            // Update and the sentence under the row say it is out of date; no tag repeats it.
+            await expect(row.locator('.agent-choice-off')).toHaveCount(0);
+            const note = agent.locator('.agent-choice-why');
+            await expect(note).toBeVisible();
+            await expect(note).toContainText('0.27.0-rc.8');
+            await expect(note).toContainText('0.27.0-rc.10');
+            const button = agent.locator('.agent-choice-download');
+            await expect(button).toBeVisible();
+            // The button stays inside its row, clear of the row's text and tags.
+            const [rowBox, btn] = await Promise.all([row.boundingBox(), button.boundingBox()]);
+            expect(btn!.x).toBeGreaterThanOrEqual(rowBox!.x);
+            expect(btn!.x + btn!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
+            for (const part of await row.locator('.agent-choice-what, .setup-choice-tag').all()) {
+                const box = (await part.boundingBox())!;
+                expect(btn!.x >= box.x + box.width || btn!.x + btn!.width <= box.x, 'Update overlaps the row').toBe(true);
+            }
+            expect(rowBox!.height).toBeLessThan(48);
+            await expectSnugTags(agent);
+            await shot(page, `model-${locale}-agent-outdated`);
+            expect(await audit(page)).toEqual([]);
+
+            await button.click();
+            await expect(agent.getByRole('progressbar', { name: /gaiacpp/ })).toHaveAttribute('aria-valuenow', '40');
+            await expect(button).toHaveCount(0);
+            // Updating never switches the agent in use.
+            await expect(agent.locator('[role="radio"]').first()).toHaveAttribute('aria-checked', 'true');
+            await shot(page, `model-${locale}-agent-updating`);
             expect(await audit(page)).toEqual([]);
         });
 
@@ -4605,6 +4744,13 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `schedules-${locale}-long-prompt`);
         });
 
+        test('the info line moves whole items to a new line instead of squeezing them into columns', async ({ page }) => {
+            await openSchedules(page);
+            const meta = page.locator('.schedule-card-meta').first();
+            await expect(meta).toBeVisible();
+            expect(await meta.evaluate((el) => getComputedStyle(el).flexWrap)).toBe('wrap');
+        });
+
         test('new schedule, nothing typed yet', async ({ page }) => {
             await openSchedules(page, []);
             await page.locator('.schedule-modal .btn-primary').click();
@@ -4913,6 +5059,88 @@ for (const locale of ['ar', 'en']) {
         await expect(notice).not.toContainText('gaia ');
         await shot(page, `server-down-${locale}`);
         expect(await audit(page)).toEqual([]);
+    });
+}
+
+const NATIVE_FAILED_REPLY = 'The model call failed at step 1, so this request is unfinished. '
+    + 'The model server at http://127.0.0.1:13305/api/v1 did not answer.\n\nNothing had run yet.';
+
+/** The turn fails on gaiacpp; `python` says whether the Python agent is on this PC. */
+const withNativeAgentFailure = (python: boolean) => async (page: Page): Promise<void> => {
+    let sent = false;
+    await page.route('**/api/chat/send', (route) => {
+        sent = true;
+        const done = { type: 'done', message_id: 42, content: NATIVE_FAILED_REPLY, failed: true, agent_program: 'gaiacpp' };
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify(done)}\n\n` });
+    });
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => (sent
+        ? route.fulfill({
+            json: {
+                messages: [
+                    { id: 41, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 42, session_id: ANSWER_SESSION, role: 'assistant', content: NATIVE_FAILED_REPLY, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        })
+        : route.fallback()));
+    await page.route((url) => url.pathname === '/api/agent-programs', (route) => route.fulfill({
+        json: {
+            current: 'gaiacpp',
+            programs: [
+                { id: 'gaiapy', installed: python, size_bytes: 412_000_000, can_download: false, unavailable_reason: null },
+                { id: 'gaiacpp', installed: true, size_bytes: 6_800_000, can_download: false, unavailable_reason: null },
+            ],
+            download: { state: 'idle', bytes_done: 0, bytes_total: null, error: null },
+        },
+    }));
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const python of [true, false]) {
+        test(`a turn that failed on gaiacpp says so and offers Full-featured, switching only when asked (${python ? 'switch' : 'no gaiapy'}, ${locale})`, async ({ page }) => {
+            const saves: unknown[] = [];
+            await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+                await withNativeAgentFailure(python)(p);
+                await p.route('**/api/settings', async (route) => {
+                    if (route.request().method() !== 'PUT') return route.fallback();
+                    saves.push(route.request().postDataJSON());
+                    return route.fulfill({ json: { ...SETTINGS, flagship_agent: 'gaiapy' } });
+                });
+            });
+            const box = page.getByRole('textbox').first();
+            await box.fill('Summarize the minutes');
+            await box.press('Enter');
+            const notice = page.locator('.native-agent-notice');
+            await expect(notice).toHaveCount(1);
+            await expect(notice).toContainText(locale === 'ar' ? 'سريع وخفيف' : 'Fast and light');
+            await expect(notice.getByRole('button')).toHaveCount(2);
+            await notice.scrollIntoViewIfNeeded();
+            // Nothing is switched until the button is pressed.
+            expect(saves).toEqual([]);
+            await shot(page, `native-agent-failed-${locale}`);
+            expect(await audit(page)).toEqual([]);
+
+            await notice.getByRole('button').first().click();
+            if (python) {
+                await expect(notice).toHaveAttribute('role', 'status');
+                expect(saves).toEqual([{ flagship_agent: 'gaiapy' }]);
+            } else {
+                await expect(notice.getByRole('alert')).toBeVisible();
+                expect(saves).toEqual([]);
+            }
+            await shot(page, `native-agent-failed-${python ? 'switched' : 'no-python'}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+
+    test(`a turn that failed on the Python agent gets no gaiacpp notice (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withServerDown);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        await expect(page.locator('.server-down-notice')).toHaveCount(1);
+        await expect(page.locator('.native-agent-notice')).toHaveCount(0);
     });
 }
 
@@ -5360,6 +5588,28 @@ for (const locale of ['ar', 'en']) {
             }).map((b) => b.textContent);
         });
         expect(clipped).toEqual([]);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a chat that failed on gaiacpp names the agent and offers Full-featured, not another model (${locale})`, async ({ page }) => {
+        const s = scene('test-failed-agent-gaiacpp');
+        await open(page, '', locale, (p) => withSetup(p, s.answers));
+        await s.reach(page);
+        const failed = page.locator('.setup-result.is-failed');
+        await expect(failed).toContainText('Fast and light');
+        // The agent's own words are in view, read left to right, inside the row.
+        const said = failed.locator('.setup-result-error-said bdi');
+        await expect(said).toBeVisible();
+        expect(await said.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        const [rowBox, saidBox] = [await failed.boundingBox(), await said.boundingBox()];
+        expect(saidBox!.x).toBeGreaterThanOrEqual(rowBox!.x - 1);
+        expect(saidBox!.x + saidBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width + 1);
+        // Two ways on, Full-featured the main one; the model picker is not one of them.
+        await expect(page.locator('.setup-footer-row button')).toHaveCount(2);
+        await expect(page.locator('.setup-footer-row .btn-primary')).toHaveCount(1);
+        await expect(page.locator('.setup-footer-row .btn-primary')).toContainText('Full-featured');
+        if (locale === 'ar') expect(await leftoverEnglish(page)).toEqual([]);
     });
 }
 
@@ -5987,6 +6237,40 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+// Fast and light, a document it can't read, then a command it can't check: its English risk note and
+// the attach step's English narration both read in Arabic.
+const UNCHECKED_NOTE = "GAIA can't check where this command reads or writes: python3 runs code, which can read and write anywhere you can. It can reach files outside the folders this chat may use.";
+const PDF_CHECK = `python3 -c "import pypdf; print('ok')" 2>&1 || echo "no pdf library"`;
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`Fast and light's unchecked-command card and its attach step read in the UI's language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [
+            { type: 'tool_start', tool: 'index_documents', detail: 'documents: report-q3.pdf', narration: 'Indexing documents' },
+            { type: 'tool_end', success: true },
+            {
+                type: 'permission_request', tool: 'run_shell_command', tool_label: 'Running a shell command', confirm_id: 'c-unchecked',
+                args: { command: PDF_CHECK, working_directory: '/Users/you/.gaia/documents', _risk_note: UNCHECKED_NOTE },
+            },
+        ]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('summarize this report in three points');
+        await page.keyboard.press('Enter');
+        const risk = page.locator('.perm-card-risk');
+        await expect(risk).toBeVisible();
+        const step = page.locator('.flow-tool-label').filter({ hasText: /documents|المستندات/ }).first();
+        if (locale === 'ar') {
+            await expect(risk).toContainText('لا يستطيع GAIA التحقق');
+            await expect(risk).toContainText('يشغّل تعليمات برمجية');
+            await expect(step).toContainText('أضاف المستندات');
+        } else {
+            await expect(risk).toHaveText(UNCHECKED_NOTE);
+            await expect(step).toHaveText('Added documents');
+        }
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-unchecked-native-${locale}`);
+    });
+}
+
 const FOLDER = 'C:\\Users\\you\\Documents\\uxa';
 const STEPS_THEN_PROMPT = [
     ...['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt', 'a.txt', 'b.txt', 'c.txt', 'd.txt'].flatMap((f) => [
@@ -6588,6 +6872,19 @@ test('composer chips stay whole at phone width', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    test(`a narrow new chat keeps the model name readable beside the memory chip (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 600 });
+        await open(page, '', locale);
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(full);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 820, height: 640 });
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
@@ -7112,6 +7409,65 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'advanced-errors');
         });
 
+        test('gaiacpp: whose memory this is, and only what its store keeps', async ({ page }) => {
+            const refused: string[] = [];
+            page.on('response', (res) => { if (res.status() === 409) refused.push(new URL(res.url()).pathname); });
+            await openMemory(page, locale, { agent: 'gaiacpp' });
+            const banner = page.locator('.mem-store-banner');
+            await expect(banner).toContainText('Fast and light');
+            await expect(page.getByText('Sister Odalys lives in Trondheim')).toBeVisible();
+            // The line sits under the tabs and above the page, never over either.
+            const [tabs, line, body] = await Promise.all(['.mem-tab-bar', '.mem-store-banner', '.memory-dashboard-body'].map((s) => page.locator(s).boundingBox()));
+            expect(line!.y).toBeGreaterThanOrEqual(tabs!.y + tabs!.height - 1);
+            expect(body!.y).toBeGreaterThanOrEqual(line!.y + line!.height - 1);
+            await expect(page.locator('.mem-about-limits')).toBeVisible();
+            await expect(page.locator('.mem-about-add option')).toHaveCount(3);
+            await expect(page.locator('.mem-about-due')).toHaveCount(0);
+            await checkMemory(page, locale, 'native-about');
+
+            for (const [tab, name] of [[/Goals/, 'goals'], [/Profile setup/, 'profile'], [/Advanced/, 'advanced']] as const) {
+                await memoryTab(page, tab);
+                await expect(page.locator('.mem-store-only')).toBeVisible();
+                await expect(banner).toBeVisible();
+                // The tab's underline fades in; a shot taken mid-fade shows the previous tab lit.
+                await page.waitForFunction(() => [...document.querySelectorAll('.mem-tab-btn')].every((tab) => tab.getAnimations().length === 0));
+                await checkMemory(page, locale, `native-${name}`);
+            }
+            await expect(page.locator('.mem-toggle')).toHaveCount(1);
+            await expect(page.locator('.mem-maintenance-wrap, .mem-knowledge-table, .mem-btn-danger')).toHaveCount(0);
+            expect(refused).toEqual([]);
+        });
+
+        test('Full-featured, once gaiacpp has a memory too', async ({ page }) => {
+            await openMemory(page, locale, { otherAvailable: true });
+            await expect(page.locator('.mem-store-banner')).toContainText('Fast and light');
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await checkMemory(page, locale, 'python-banner');
+        });
+
+        test('no line about agents while there is one memory', async ({ page }) => {
+            await openMemory(page, locale);
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await expect(page.locator('.mem-store-banner')).toHaveCount(0);
+        });
+
+        test('the page cannot tell whose memory this is', async ({ page }) => {
+            await openMemory(page, locale, { storeFailed: true });
+            await expect(page.getByRole('alert')).toContainText('gaiacpp is not running');
+            await expect(page.locator('.mem-about, .mem-store-banner')).toHaveCount(0);
+            await checkMemory(page, locale, 'store-failed');
+        });
+
+        test('gaiacpp at phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await openMemory(page, locale, { agent: 'gaiacpp' });
+            // The closed drawer waits off screen by design; this test is about the dashboard.
+            await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+            await expect(page.locator('.mem-store-banner')).toBeVisible();
+            await expect(page.getByText('Sister Odalys lives in Trondheim')).toBeVisible();
+            await checkMemory(page, locale, 'native-about-phone');
+        });
+
         test('advanced, a row open and the add form', async ({ page }) => {
             await openMemory(page, locale);
             await memoryTab(page, /Advanced/);
@@ -7315,7 +7671,7 @@ const CRASHES: Record<'main' | 'sidebar' | 'window', { hash: string; before: (pa
     window: {
         hash: '',
         before: (page) => page.route((url) => url.pathname === '/api/providers/active', (route) =>
-            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN } } })),
+            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN, model: BROKEN, reason: 'it has no working key' } } })),
     },
 };
 

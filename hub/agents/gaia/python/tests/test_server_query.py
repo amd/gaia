@@ -262,13 +262,12 @@ def _wait_until(predicate, timeout=5.0):
 
 
 # ---------------------------------------------------------------------------
-# The shell-guardrail half of bypass never reaches this transport (#3373)
+# Bypass over HTTP (#3373)
 #
-# Bypass is two grants on one PermissionState: skip the confirmation prompt,
-# and lift the shell guardrails. HTTP sessions may have the first — they can
-# answer a prompt, so they can also pre-answer it. The second is remote code
-# execution on a bound socket rather than a relaxed permission model, and stays
-# a stdio affordance: one local parent on a private pipe.
+# Bypass is two grants: skip the confirmation prompt, and lift the shell
+# guardrails. A query starts with both off. A chat turns them on only through
+# /sessions/{id}/bypass; a one-shot run (``gaia -p``) only through its own body,
+# for that run alone. Both need an authenticated caller.
 # ---------------------------------------------------------------------------
 
 
@@ -282,14 +281,20 @@ def test_a_query_runs_with_the_shell_gates_on(built):
     assert agents[0].console.full_access is False
 
 
-def test_the_request_body_cannot_ask_for_bypass(built):
-    """extra='forbid' is what makes this unreachable; pin it, so adding a
-    bypass field fails here instead of shipping."""
-    client, _agents = built
+@pytest.mark.parametrize("field", ["full_access", "skip_permissions", "bypass"])
+def test_a_session_turn_cannot_ask_for_bypass_in_its_body(built, field):
+    """A chat's full access is /sessions/{id}/bypass alone. The body's
+    full_access/skip_permissions are a one-shot run's own (``gaia -p``), so a
+    request naming a session is refused rather than letting it outlive the turn;
+    any other bypass-shaped field is unknown (extra='forbid')."""
+    client, agents = built
 
-    r = client.post("/v1/gaia/query", json=_body(full_access=True))
+    r = client.post(
+        "/v1/gaia/query", json=_body(session_id=f"s-{uuid.uuid4()}", **{field: True})
+    )
 
     assert r.status_code == 422, r.text
+    assert agents == []
 
 
 def test_session_bypass_is_full_access_shell_included(built):

@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Activity, Edit3, Download, Upload, ArrowDown, FolderSearch, Clock } from 'lucide-react';
 import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent } from './MessageBubble';
@@ -260,6 +260,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Load messages on mount, then poll for external changes (MCP, API)
     const lastMsgCountRef = useRef<number>(0);
+    // True once this chat's history has loaded, so a chat with no messages shows its empty state, not a flash of it.
+    const [historyLoaded, setHistoryLoaded] = useState(false);
     // Messages sent from this view; a history load that started before one must not replace it.
     const sentRef = useRef<number>(0);
 
@@ -298,6 +300,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     setMessages(keepFailedReply(shown, msgs));
                     lastMsgCountRef.current = msgs.length;
                 }
+                if (isInitial) setHistoryLoaded(true);
             } catch (err) {
                 if (cancelled) return;
                 if (isInitial) {
@@ -341,7 +344,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
     // is never missed.  Only fires when the user hasn't scrolled away.
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (!isNearBottomRef.current) return;
 
         const now = Date.now();
@@ -356,15 +359,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
         };
 
-        if (elapsed >= THROTTLE_MS) {
-            // Enough time passed — scroll immediately
-            doScroll();
-        }
+        // A loaded history lands on its end before it paints; only streaming chunks wait.
+        if (!isStreaming || elapsed >= THROTTLE_MS) doScroll();
 
         // Always schedule a trailing scroll so the very last update is caught
         if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
         scrollTimerRef.current = setTimeout(doScroll, THROTTLE_MS);
-    }, [messages, streamingContent, agentSteps]);
+    }, [messages, streamingContent, agentSteps, isStreaming]);
 
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
@@ -1070,6 +1071,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         historyNotice,
                         libraryNotices: event.library_notices,
                         failure: event.failed ? event.failure : undefined,
+                        agentProgram: event.failed ? event.agent_program : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     settledIdsRef.current.add(assistantMsg.id);
@@ -1112,6 +1114,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     cards: prev?.cards ?? m.cards,
                                     stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
                                     failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
+                                    agentProgram: m.agentProgram ?? prevMsgs.find((p) => p.id === m.id)?.agentProgram,
                                 };
                             });
                             carryMessageKeys(prevMsgs, msgs, messageKeysRef.current);
@@ -1618,10 +1621,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (e.dataTransfer.files.length === 0) return;
 
         const dropped = Array.from(e.dataTransfer.files);
-        // A recording is transcribed by the agent, not indexed as a document.
-        const recordings = dropped.filter((file) => isMediaFile(file.name));
-        if (recordings.length > 0) attach.addFiles(recordings);
-        const documents = dropped.filter((file) => !isMediaFile(file.name));
+        // Recordings and photos ride with the message, as on the message box; the rest are indexed.
+        const isAttachment = (file: File) => isMediaFile(file.name) || file.type.startsWith('image/');
+        const attachments = dropped.filter(isAttachment);
+        if (attachments.length > 0) attach.addFiles(attachments);
+        const documents = dropped.filter((file) => !isAttachment(file));
         if (documents.length === 0) return;
 
         if (!(await ensureModel('embedding'))) return;
@@ -1674,7 +1678,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDropCapture={() => setIsDragOver(false)}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            aria-label={shownTitle(session?.title) || 'Chat'}
+            aria-label={shownTitle(t, session) || 'Chat'}
         >
             <TurnAnnouncer busy={busy} />
             <header className="task-header">
@@ -1697,7 +1701,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         />
                     ) : (
                         <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
-                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(session?.title)}</span>
+                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(t, session)}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}
@@ -1749,6 +1753,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     </div>
                                 </div>
                             ))}
+                        </div>
+                    )}
+
+                    {historyLoaded && rows.length === 0 && !isStreaming && !openingShown && !pendingPrompt && (
+                        <div className="chat-empty">
+                            <h2 className="chat-empty-title">{t('chat.empty.title')}</h2>
+                            {!retiredAgent && <p className="chat-empty-hint">{t('chat.empty.hint')}</p>}
                         </div>
                     )}
 

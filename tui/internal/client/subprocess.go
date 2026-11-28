@@ -78,7 +78,7 @@ func detectLemonadeURL() string {
 // child gets the terminal UI's decision for each and never an inherited value:
 // a key this process chose not to use would otherwise ride along to a server
 // it was not meant for.
-var nativeEnvOwned = []string{"LEMONADE_BASE_URL", "LEMONADE_API_KEY", "GAIA_BASE_URL", "GAIA_API_KEY"}
+var nativeEnvOwned = []string{"LEMONADE_BASE_URL", "LEMONADE_API_KEY", "GAIA_LEMONADE_EMBEDDED", "GAIA_BASE_URL", "GAIA_API_KEY"}
 
 // nativeEnv is the environment for gaiacpp: inherited, minus nativeEnvOwned,
 // plus the model server's address and its key when it has one. The Python

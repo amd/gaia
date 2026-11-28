@@ -1672,6 +1672,17 @@ TEST(ModelLoadTest, HealthReportsThisClientsModelNotTheFirstOneListed) {
     EXPECT_EQ(other.healthCheck().modelId, kToolCallingModel);
 }
 
+TEST(ModelLoadTest, AServerWithNothingLoadedIsRunning) {
+    // What Lemonade answers before its first load.
+    bench::MockLlmServer mock;
+    mock.setHealth(R"({"status":"ok","model_loaded":null,"all_models_loaded":[]})");
+    LemonadeClient client(LemonadeClientConfig{mock.baseUrl(), kToolCallingModel, 65536, false});
+    const LemonadeHealth h = client.healthCheck();
+    EXPECT_TRUE(h.running);
+    EXPECT_TRUE(h.error.empty()) << h.error;
+    EXPECT_EQ(h.modelId, "");
+}
+
 TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {
     bench::MockLlmServer mock(/*reportModelLoaded=*/false);
     mock.setLoadStatus(500);

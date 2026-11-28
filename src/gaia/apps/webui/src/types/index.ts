@@ -504,6 +504,8 @@ export interface Message {
     failureText?: string;
     /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */
     failure?: string;
+    /** Client-side: `gaiacpp` when the failed turn ran on the native agent (`done.agent_program`). */
+    agentProgram?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
@@ -593,8 +595,12 @@ export interface AgentProgram {
     unavailable_reason: string | null;
     /** Set when the reason is one the UI has its own words for; any other reason is shown as it is. */
     unavailable_code?: 'no_release' | 'unreachable' | 'unverifiable' | null;
-    /** A newer build is offered; not shown yet. */
+    /** The gaiacpp on this PC is from another GAIA release than this one; `can_download` then offers this release's. */
     update_available?: boolean;
+    /** The version of the copy on this PC; null when it couldn't be read. */
+    version?: string | null;
+    /** The version this GAIA release's copy has; null on a development build. */
+    release_version?: string | null;
 }
 
 /** `GET /api/agent-programs`: both agent programs and any running download. */
@@ -1066,7 +1072,15 @@ export interface ActiveModel {
     inference_description?: string | null;
     /** `pending` while the model server is still starting; ask again. */
     /** `retry`: a failed cloud restore the backend checks again on the next read. */
-    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null; retry?: boolean };
+    restore?: {
+        status: 'restored' | 'failed' | 'none' | 'pending';
+        message: string | null;
+        retry?: boolean;
+        /** A failed restore's parts, so the UI can word it in the user's language. */
+        model?: string;
+        reason?: string;
+        reason_code?: string | null;
+    };
 }
 
 export interface ProvidersResponse {

@@ -35,8 +35,8 @@ _SLASH_LOOKALIKES = "\u2044\u2215\u29f5\u29f8\u29f9\ufe68\uff0f\uff3c"
 _JOINERS = "\u200c\u200d"
 
 
-def _unsafe_name_char(c: str) -> bool:
-    """Whether *c* must not appear in a stored attachment name."""
+def unsafe_name_char(c: str) -> bool:
+    """Whether *c* must not appear in a stored attachment or document name."""
     return (
         c in _ILLEGAL_NAME_CHARS
         or c in _SHELL_QUOTING_CHARS
@@ -67,7 +67,7 @@ def upload_copy_stem(original_name: str) -> str:
     """
     base = re.split(r"[\\/]", original_name)[-1]
     stem = "".join(
-        "_" if _unsafe_name_char(c) else c
+        "_" if unsafe_name_char(c) else c
         for c in unicodedata.normalize("NFC", Path(base).stem)
     )
     stem = _clip_name(stem).strip(" ._-")

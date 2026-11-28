@@ -46,6 +46,51 @@ function toQuery(params: Record<string, unknown>): string {
     return parts.length ? `?${parts.join('&')}` : '';
 }
 
+// ── Which agent's memory ────────────────────────────────────────────────────
+
+export type MemoryAgent = 'gaiapy' | 'gaiacpp';
+
+/** What the store being shown can do; a false flag hides that control. */
+export interface MemoryStoreSupports {
+    due_dates: boolean;
+    sources: boolean;
+    sensitive_toggle: boolean;
+    recategorize: boolean;
+    goals: boolean;
+    profile: boolean;
+    advanced: boolean;
+}
+
+/** Whose memory the endpoints below serve: the selected agent's. */
+export interface MemoryStore {
+    agent: MemoryAgent;
+    /** True when the other agent keeps a memory of its own on this PC. */
+    other_available: boolean;
+    supports: MemoryStoreSupports;
+}
+
+/** The backend answered without naming an agent. */
+export class MemoryStoreUnknownError extends Error {
+    constructor() {
+        super('The memory store answer names no agent');
+        this.name = 'MemoryStoreUnknownError';
+    }
+}
+
+const SUPPORT_FLAGS: (keyof MemoryStoreSupports)[] = [
+    'due_dates', 'sources', 'sensitive_toggle', 'recategorize', 'goals', 'profile', 'advanced',
+];
+
+export async function getMemoryStore(): Promise<MemoryStore> {
+    const store = await memFetch<MemoryStore>('GET', '/memory/store');
+    const known = store && (store.agent === 'gaiapy' || store.agent === 'gaiacpp')
+        && typeof store.other_available === 'boolean' && store.supports
+        && SUPPORT_FLAGS.every((flag) => typeof store.supports[flag] === 'boolean');
+    // An older backend has no such endpoint; guessing an agent would show the wrong memory.
+    if (!known) throw new MemoryStoreUnknownError();
+    return store;
+}
+
 // ── Stats & Activity ────────────────────────────────────────────────────────
 
 export function getMemoryStats() {

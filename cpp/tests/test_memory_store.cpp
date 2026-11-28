@@ -149,3 +149,16 @@ TEST(MemoryStoreTest, Tools) {
     EXPECT_EQ(bad["status"], "error");
     EXPECT_EQ(reg.executeTool("forget", json{{"id", r["id"]}})["status"], "success");
 }
+
+// The Memory page lists up to 1000; the model's own recall tool stays at 100.
+TEST(MemoryStoreTest, AListingReachesPastAHundredButTheModelsRecallDoesNot) {
+    MemoryStore m(":memory:");
+    for (int i = 0; i < 150; ++i) m.remember("Project milestone number " + std::to_string(i) + " is done");
+    EXPECT_EQ(m.recall("", "", 1000, true).size(), 150u);
+    EXPECT_EQ(m.recall("milestone", "", 1000, true).size(), 150u);
+
+    ToolRegistry reg;
+    m.registerTools(reg);
+    const json q = reg.executeTool("recall", json{{"query", "milestone"}, {"limit", 500}});
+    EXPECT_EQ(q["count"], 100) << q.dump().substr(0, 300);
+}

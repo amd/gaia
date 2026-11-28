@@ -434,37 +434,8 @@ class ToolLoader:
         return self._embed_docs(self.tool_docs(registry))
 
     def _embed_docs(self, docs: Dict[str, str]) -> Dict[str, "np.ndarray"]:
-        """Return ``name -> vector`` for *docs*, embedding what is not cached.
-
-        Uses the content-keyed cache so unchanged docs are embedded once per
-        process. Missing docs are batched into a single embed call when an
-        ``embed_batch_fn`` was provided, else embedded per-doc.
-        """
-        keys: Dict[str, Tuple[str, str]] = {
-            name: (name, _sha256(text)) for name, text in docs.items()
-        }
-
-        missing = [name for name, key in keys.items() if key not in self._embed_cache]
-        if missing:
-            if self._embed_batch_fn is not None:
-                vecs = self._embed_batch_fn([docs[n] for n in missing])
-                if len(vecs) != len(missing):
-                    # A warming-up embedder can answer 200 with fewer vectors
-                    # than texts; a bare zip would silently drop entries and
-                    # surface later as a misleading KeyError.
-                    raise RuntimeError(
-                        f"embedding batch returned {len(vecs)} vectors for "
-                        f"{len(missing)} texts — embedder still loading?"
-                    )
-                for name, vec in zip(missing, vecs):
-                    self._embed_cache[keys[name]] = np.asarray(vec, dtype=np.float32)
-            else:
-                for name in missing:
-                    self._embed_cache[keys[name]] = np.asarray(
-                        self._embed_fn(docs[name]), dtype=np.float32
-                    )
-
-        return {name: self._embed_cache[keys[name]] for name in docs}
+        """Return ``name -> vector`` for *docs* — see :func:`embed_docs`."""
+        return embed_docs(docs, self._embed_cache, self._embed_fn, self._embed_batch_fn)
 
     @staticmethod
     def _doc_text(name: str, info: dict) -> str:
@@ -493,6 +464,43 @@ class ToolLoader:
                 }
             ),
         )
+
+
+def embed_docs(
+    docs: Dict[str, str],
+    cache: Dict[Tuple[str, str], "np.ndarray"],
+    embed_fn: Callable[[str], "np.ndarray"],
+    embed_batch_fn: Optional[Callable[[Sequence[str]], "np.ndarray"]],
+) -> Dict[str, "np.ndarray"]:
+    """Return ``name -> vector`` for *docs*, embedding what *cache* lacks.
+
+    *cache* is keyed by ``(name, sha256(text))`` so unchanged docs are embedded
+    once per process. Missing docs go to *embed_batch_fn* in one call when it is
+    given, else to *embed_fn* one at a time. Shared by ToolLoader and SkillLoader.
+    """
+    keys: Dict[str, Tuple[str, str]] = {
+        name: (name, _sha256(text)) for name, text in docs.items()
+    }
+
+    missing = [name for name, key in keys.items() if key not in cache]
+    if missing:
+        if embed_batch_fn is not None:
+            vecs = embed_batch_fn([docs[n] for n in missing])
+            if len(vecs) != len(missing):
+                # A warming-up embedder can answer 200 with fewer vectors
+                # than texts; a bare zip would silently drop entries and
+                # surface later as a misleading KeyError.
+                raise RuntimeError(
+                    f"embedding batch returned {len(vecs)} vectors for "
+                    f"{len(missing)} texts — embedder still loading?"
+                )
+            for name, vec in zip(missing, vecs):
+                cache[keys[name]] = np.asarray(vec, dtype=np.float32)
+        else:
+            for name in missing:
+                cache[keys[name]] = np.asarray(embed_fn(docs[name]), dtype=np.float32)
+
+    return {name: cache[keys[name]] for name in docs}
 
 
 def _sha256(text: str) -> str:

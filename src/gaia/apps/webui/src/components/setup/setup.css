@@ -725,6 +725,7 @@
 .agent-choice-detail { display: grid; gap: 4px; color: var(--text-secondary); font-size: 13px; }
 .agent-choice-detail[hidden] { display: none; }
 .agent-choice-detail p { margin: 0; }
+.agent-choice-diffs { display: grid; gap: 2px; margin: 0; padding-inline-start: 18px; }
 .agent-choice-error { color: var(--danger); font-size: 13px; }
 .setup-agent-download { display: grid; gap: 8px; }
 /* A gaiacpp to download: its Download button sits on the row's end, beside the radio rather than in it. */

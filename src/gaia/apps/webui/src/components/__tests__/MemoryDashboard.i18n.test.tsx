@@ -15,6 +15,7 @@ import { translator } from '../../i18n/useT';
 import * as memoryApi from '../../services/memoryApi';
 import { useChatStore } from '../../stores/chatStore';
 import { readsAs } from '../../test/readsAs';
+import { PYTHON_MEMORY_STORE } from '../../test/memoryStore';
 
 vi.mock('../../services/memoryApi');
 
@@ -82,6 +83,7 @@ beforeEach(() => {
     mockedApi.getEntities.mockResolvedValue([{ entity: 'place:calgary', count: 1, last_updated: '' }]);
     mockedApi.listGoals.mockResolvedValue({ goals: [GOAL, SUGGESTED], total: 2 } as never);
     mockedApi.getGoalStats.mockResolvedValue({ goals: { in_progress: 1, pending_approval: 1 }, tasks: {} });
+    mockedApi.getMemoryStore.mockResolvedValue(PYTHON_MEMORY_STORE);
     mockedApi.getMemorySettings.mockImplementation(async () => ({
         memory_enabled: memoryEnabled, mcp_memory_enabled: false, system_discovery_consent: false,
     }));
@@ -248,7 +250,7 @@ describe('Memory dashboard in Arabic', () => {
         mockedApi.openDiscoveryStream.mockReturnValue(es as never);
         render(<MemoryDashboard />);
         tab(/إعداد الملف الشخصي/);
-        expect(screen.getByRole('button', { name: /ابدأ الفحص/ })).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: /ابدأ الفحص/ })).toBeInTheDocument();
         expect(leftoverEnglish()).toEqual([]);
 
         fireEvent.click(screen.getByRole('button', { name: /ابدأ الفحص/ }));

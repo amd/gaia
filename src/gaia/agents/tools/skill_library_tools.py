@@ -72,6 +72,7 @@ from typing import Any, Dict, List, Set
 from gaia.agents.base.model_features import FULL
 from gaia.agents.tools.search_scope import in_env_scope
 from gaia.logger import get_logger
+from gaia.rag.text_units import estimate_tokens
 
 logger = get_logger(__name__)
 
@@ -88,9 +89,6 @@ SKILL_LIBRARY_TOOL_NAMES = (
     "unload_skill",
     "skill_status",
 )
-
-#: Same 4-chars-per-token estimate the rest of GAIA uses (``ApiAgent.estimate_tokens``).
-_CHARS_PER_TOKEN = 4
 
 _DOCS_URL = "https://amd-gaia.ai/docs/spec/agent-skills"
 
@@ -133,8 +131,8 @@ def uncaptured_skill_path(request: str, tools_called: Set[str]) -> str:
 
 
 def estimate_prompt_tokens(text: str) -> int:
-    """Approximate prompt tokens for *text* (4 chars ≈ 1 token)."""
-    return len(text) // _CHARS_PER_TOKEN
+    """Approximate prompt tokens for *text*, one per CJK character, else 4 chars."""
+    return estimate_tokens(text)
 
 
 def _failure(action: str, exc: Exception) -> Dict[str, Any]:

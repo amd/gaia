@@ -213,3 +213,19 @@ def test_enable_rag_names_why_a_document_failed(monkeypatch):
     assert chat.enable_rag(documents=["missing.pdf"]) is False
     warned = " ".join(str(c.args[0]) for c in chat.log.warning.call_args_list)
     assert "missing.pdf" in warned and "File not found" in warned
+
+
+def test_cjk_context_is_charged_per_character():
+    chat = _sdk()
+    assert chat._estimate_tokens("a" * 400) == 100
+    assert chat._estimate_tokens("文" * 400) == 400
+
+
+def test_cjk_context_is_truncated_to_its_token_budget():
+    chat = _sdk()
+    truncated = chat._truncate_rag_context("文" * 2000, max_tokens=500)
+
+    assert chat._estimate_tokens(truncated) <= 500
+    ascii_kept = chat._truncate_rag_context("a" * 4000, max_tokens=500)
+    assert ascii_kept.startswith("a" * 1980)
+    assert not ascii_kept.startswith("a" * 1981)

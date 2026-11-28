@@ -8,6 +8,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryDashboard } from '../MemoryDashboard';
 import * as memoryApi from '../../services/memoryApi';
 import { useGoalHealthStore } from '../../stores/goalHealthStore';
+import { PYTHON_MEMORY_STORE } from '../../test/memoryStore';
 
 vi.mock('../../services/memoryApi');
 
@@ -32,6 +33,7 @@ beforeEach(() => {
     mockedApi.getEntities.mockResolvedValue([]);
     mockedApi.listGoals.mockResolvedValue({ goals: [], total: 0 });
     mockedApi.getGoalStats.mockResolvedValue({ goals: {}, tasks: {} });
+    mockedApi.getMemoryStore.mockResolvedValue(PYTHON_MEMORY_STORE);
     mockedApi.getMemorySettings.mockResolvedValue({ memory_enabled: true, mcp_memory_enabled: false, system_discovery_consent: false });
     mockedApi.getGoalStoreHealth.mockResolvedValue({ error: null, damaged: false });
     useGoalHealthStore.setState({ error: null, damaged: false });

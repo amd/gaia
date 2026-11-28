@@ -50,7 +50,13 @@ from gaia.agents.tools.path_access import (
     read_refusal,
     readable_entry,
 )
-from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
+from gaia.agents.tools.text_files import (
+    match_excerpt,
+    read_exact,
+    read_text,
+    text_encoding,
+    write_exact,
+)
 from gaia.agents.tools.workspace_paths import (
     _project_target_for,
     _resolve_target,
@@ -61,30 +67,6 @@ from gaia.logger import get_logger
 from gaia.security import BackupError
 
 logger = get_logger(__name__)
-
-
-def _read_exact(path) -> str:
-    """Read *path* as text without translating its line endings.
-
-    ``open()`` in text mode, and ``Path.read_text``, default to universal
-    newlines: every CRLF in the file arrives as a bare LF. Paired with
-    :func:`_write_exact` this keeps a read/modify/write round trip
-    byte-exact, so a one-line edit stays a one-line diff on every platform.
-    """
-    with open(path, "r", encoding="utf-8", newline="") as fh:
-        return fh.read()
-
-
-def _write_exact(path, content: str) -> None:
-    """Write *content* to *path* with its line endings left alone.
-
-    ``open()`` in text mode, and ``Path.write_text``, translate every LF to
-    ``os.linesep`` on write. On Windows that silently turns an LF-terminated
-    file into a CRLF one, which no byte-comparing tool treats as a no-op: a
-    three-line edit to a 400-line file is reported as 400 lines changed.
-    """
-    with open(path, "w", encoding="utf-8", newline="") as fh:
-        fh.write(content)
 
 
 def _match_newlines(block: str, reference: str) -> str:
@@ -1365,7 +1347,7 @@ class FileIOToolsMixin:
                     path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Write content to file
-                _write_exact(path, content)
+                write_exact(path, content)
                 reads.note(path)
 
                 console = getattr(self, "console", None)
@@ -1507,7 +1489,7 @@ class FileIOToolsMixin:
                     return refusal
 
                 # Read current content
-                current_content = _read_exact(path)
+                current_content = read_exact(path)
 
                 updated_content, edit_error = apply_unique_replacement(
                     str(path), current_content, old_content, new_content
@@ -1537,7 +1519,7 @@ class FileIOToolsMixin:
 
                 before_change(path, "edit_file")
                 # Write updated content
-                _write_exact(path, updated_content)
+                write_exact(path, updated_content)
                 reads.note(path)
                 reads.note_edit(path, old_content, new_content, turn_of(self))
 

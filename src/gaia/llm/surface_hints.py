@@ -101,6 +101,10 @@ TUI_SERVER_RESTART_HINT = (
 AGENT_UI_SERVER_RESTART_HINT = (
     "Press Start the model server below, then send your message again."
 )
+#: gaiacpp's remedy for the same thing, as its readiness check (`/init`) words
+#: it: that check can't be told which front-end asks. gaiacpp's own test
+#: (ModelCheck.UnreachableGaiaServerSaysHowToStartGaia) pins the same sentence.
+NATIVE_SERVER_START_HINT = "Open GAIA, or run `gaia daemon start`, then try again."
 
 #: How a user repairs GAIA's install (a missing or broken Lemonade Server).
 TUI_SETUP_HINT = "Run /setup in the TUI to repair GAIA's setup, then try again."
@@ -236,6 +240,7 @@ _SWAPS = {
         (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
         (VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_STEP),
         (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
+        (NATIVE_SERVER_START_HINT, AGENT_UI_SERVER_RESTART_HINT),
         (TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, AGENT_UI_PROVIDER_AUTH_HINT),
         (TUI_PROVIDER_SETTINGS, AGENT_UI_PROVIDER_SETTINGS),
