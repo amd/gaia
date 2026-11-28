@@ -1734,6 +1734,7 @@ textarea.mem-input { resize: vertical; }
 .mem-priority-medium { background: color-mix(in srgb, var(--accent-yellow) 15%, transparent); }
 .mem-priority-low    { background: color-mix(in srgb, var(--accent-blue) 15%, transparent); }
 .mem-goal-cancelled-label { background: var(--bg-hover); border: 1px solid var(--border); }
+.mem-goal-failed-label { background: color-mix(in srgb, var(--danger) 15%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); }
 
 .mem-goal-source-badge {
     display: flex; align-items: center; gap: 3px;

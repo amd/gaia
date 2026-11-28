@@ -4037,6 +4037,8 @@ export const enMessages = {
     'mem.goals.acceptFailed': "Couldn't accept the goal",
     'mem.goals.createFailed': "Couldn't create the goal",
     'mem.goals.cancelFailed': "Couldn't cancel the goal",
+    'mem.goals.retry': 'Try again',
+    'mem.goals.retryFailed': "Couldn't retry the goal",
     'mem.goals.deleteFailed': "Couldn't delete the goal",
     'mem.goals.storeError': "Approved goals aren't running",
     'mem.goals.storeDamaged': "GAIA's goal list is damaged, so goals can't be shown, saved or run.",

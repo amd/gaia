@@ -612,10 +612,52 @@ class TestGoalTransitionsEnforced:
             store.cancel_goal(goal.id)
         assert store.get_goal(goal.id).status == state
 
+    def _failed_goal(self, store):
+        goal = _make_goal(store, source="user")
+        for _ in range(3):
+            store.record_unfinished_run(goal.id, "blocked", max_tries=3, first_wait_s=0)
+        assert store.get_goal(goal.id).status == "failed"
+        return goal
+
+    def test_retry_requeues_a_failed_goal_with_a_fresh_budget(self, store):
+        goal = self._failed_goal(store)
+
+        retried = store.retry_goal(goal.id)
+
+        assert retried.status == "queued"
+        assert retried.attempts == 0 and retried.check_backs == 0
+        assert retried.retry_at is None
+
+    def test_retry_twice_leaves_the_requeued_goal_alone(self, store):
+        goal = self._failed_goal(store)
+        store.retry_goal(goal.id)
+        store.record_unfinished_run(goal.id, "blocked", max_tries=3, first_wait_s=60)
+
+        again = store.retry_goal(goal.id)
+
+        assert again.status == "queued" and again.attempts == 1
+        assert again.retry_at is not None
+
+    @pytest.mark.parametrize(
+        "state", ["in_progress", "completed", "cancelled", "rejected"]
+    )
+    def test_retry_refused_unless_failed(self, store, state):
+        from gaia.agents.base.goal_store import GoalTransitionError
+
+        goal = self._failed_goal(store)
+        store.update_goal_status(goal.id, "queued")
+        store.record_unfinished_run(goal.id, "blocked", max_tries=3, first_wait_s=0)
+        store.update_goal_status(goal.id, state)
+        with pytest.raises(GoalTransitionError):
+            store.retry_goal(goal.id)
+        kept = store.get_goal(goal.id)
+        assert kept.status == state and kept.attempts == 1
+
     def test_missing_goal_still_returns_none(self, store):
         assert store.approve_goal("nope") is None
         assert store.reject_goal("nope") is None
         assert store.cancel_goal("nope") is None
+        assert store.retry_goal("nope") is None
 
     def test_transition_error_is_a_value_error(self):
         from gaia.agents.base.goal_store import GoalTransitionError

@@ -4034,6 +4034,8 @@ const messages: Messages = {
     'mem.goals.acceptFailed': 'تعذّر قبول الهدف',
     'mem.goals.createFailed': 'تعذّر إنشاء الهدف',
     'mem.goals.cancelFailed': 'تعذّر إلغاء الهدف',
+    'mem.goals.retry': 'إعادة المحاولة',
+    'mem.goals.retryFailed': 'تعذّرت إعادة محاولة الهدف',
     'mem.goals.deleteFailed': 'تعذّر حذف الهدف',
     'mem.goals.storeError': 'الأهداف المعتمدة لا تعمل',
     'mem.goals.storeDamaged': 'قائمة أهداف GAIA تالفة، لذا لا يمكن عرض الأهداف أو حفظها أو تشغيلها.',
