@@ -64,6 +64,14 @@ const std::map<std::string, std::string> kPromptIntros{
     {"update_draft", "Save this draft as:\n\n"},
 };
 
+// Mail leaves the mailbox: a person approves each one, Full access or not.
+const std::set<std::string> kSendTools{"send_draft", "send_now", "reply_to_message", "forward_message"};
+
+const char* const kNobodyToSendMessage =
+    "Not sent: email needs a person's approval, and this run approves tools automatically with nobody to ask. "
+    "Turn Full access off in this chat, or start the request from the GAIA terminal UI or Agent UI without "
+    "--dangerously-skip-permissions or GAIA_AUTO_APPROVE_TOOLS. Tell the user the mail did not go out.";
+
 const char* const kMaybeSentWarning =
     "An earlier try at sending this exact email may already have gone out. Check Sent before approving it "
     "again.\n\n";
@@ -462,12 +470,19 @@ void SendEmailTools::registerAll(ToolRegistry& registry) {
         };
         if (build) {
             info.policy = ToolPolicy::CONFIRM;
+            const bool sends = kSendTools.count(tool) > 0;
+            // Stricter than Python, which asks a person only for a send: a draft edit can't be undone either.
             info.personMustApprove = true;
             // Built before the prompt: anything that would fail is refused without asking anyone.
-            info.preflight = [state, tool, params, build, willSend](const json& args) -> std::optional<json> {
+            info.preflight = [&registry, state, tool, params, build, willSend,
+                              sends](const json& args) -> std::optional<json> {
                 std::lock_guard<std::mutex> lock(state->mu);
                 OutgoingMessage message;
                 try {
+                    if (sends) {
+                        state->email->activeProvider();
+                        if (registry.nobodyToAsk()) return json{{"status", "error"}, {"error", kNobodyToSendMessage}};
+                    }
                     message = ((*state).*build)(args);
                     // Deleting needs no sendable message: a disguised draft must stay removable.
                     if (willSend) message = outgoing::checked(message);

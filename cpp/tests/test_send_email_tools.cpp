@@ -363,6 +363,22 @@ TEST_F(SendEmailToolsTest, ADeclinedCardDropsTheMessageItShowed) {
     EXPECT_TRUE(router->writes.empty()) << "nothing reaches the mailbox after a decline";
 }
 
+TEST_F(SendEmailToolsTest, WithNobodyToAskASendIsRefusedBeforeTheMailboxIsRead) {
+    const json& c = caseNamed("gmail_reply_and_forward");
+    connect(c["connections"], c["grants"]);
+    router = std::make_shared<Router>(c["routes"]);
+    build();
+    registry.setEnabled("send-email/reply_to_message", true);
+    registry.setNobodyToAsk([] { return true; });
+    const json refused =
+        registry.executeTool("send-email/reply_to_message", {{"message_id", "msg1"}, {"body", "Yes, confirmed."}});
+    EXPECT_EQ(refused.value("status", ""), "error") << refused.dump(1);
+    EXPECT_NE(refused.value("error", "").find("Tell the user the mail did not go out."), std::string::npos)
+        << refused.dump(1);
+    for (int hits : router->used) EXPECT_EQ(hits, 0) << "the mailbox was read before the refusal";
+    EXPECT_TRUE(router->writes.empty());
+}
+
 TEST_F(SendEmailToolsTest, ACardForACallThatWasNeverPreparedIsAnError) {
     build();
     EXPECT_THROW(tool("send_now").promptArgs({{"to", "dana@example.com"}}), std::logic_error);
