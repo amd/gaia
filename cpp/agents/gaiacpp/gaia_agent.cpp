@@ -1501,13 +1501,13 @@ bool reportsOutstandingFailure(const std::string& text) {
 // Sentence by sentence and clause by clause, as the Python agent reads it: a negation or a
 // piece of advice ("run pytest to confirm the tests pass") only covers its own clause, and a
 // sentence that also reports a failure still standing is an honest mixed report.
-std::string passingTestClaim(const std::string& answer) {
+std::string passingTestClaim(const std::string& answer, bool allowShorthand) {
     // "Pass" with an object is the verb of a call, not a result: "the test passes an empty list".
 #define GAIA_PASS                                                                                              \
     R"(pass(?:es|ed|ing)?\b(?!\s+(?:a|an|the|to|into|through|along|none|null|nil|true|false|it|them|this|that|)" \
     R"(these|those|its|their|his|her|my|our|your|some|every|one|two|three|several)\b|\s+[`'"]))"
-    static const std::regex claim(
-        R"(\b(?:\d+\s+(?:(?:sub)?tests?\s+)" GAIA_PASS R"(|pass(?:ed|ing)\b))"
+    static const std::regex explicitClaim(
+        R"(\b(?:\d+\s+(?:sub)?tests?\s+)" GAIA_PASS
         R"(|(?:sub)?tests?:?(?:\s+(?:in|for|of)\s+\S+)?\s+(?:suite\s+)?)"
         R"((?:(?:are|is|all|now|still|were|have|has|both|each|successfully)\s+)*(?:)" GAIA_PASS
         R"(|green|succeed(?:s|ed)?))"
@@ -1517,8 +1517,6 @@ std::string passingTestClaim(const std::string& answer) {
         R"(|test\s+results?:?\s+(?:(?:are|is|all|now)\s+)*(?:green\b|)" GAIA_PASS R"())"
         R"(|confirmed\s+(?:[\w-]+\s+){0,3}?by\s+(?:re-?)?running\s+the\s+(?:unit\s+)?tests?)"
         R"(|(?:test\s+)?suite\s+(?:is\s+)?(?:green|)" GAIA_PASS R"())"
-        R"(|everything\s+(?:is\s+)?(?:green\b|)" GAIA_PASS R"())"
-        R"(|all\s+green\b)"
         R"(|tests?\s+(?:were|was)\s+(?:(?:then|also|again|subsequently|afterwards?)\s+)?(?:re-?run|run|executed)\b)"
         R"((?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:(?:they|all|both|each)\s+)*pass(?:ed)?)"
         R"(|\b(?:ran|run|running)\s+(?:the\s+)?(?:(?:unit|whole|full|entire)\s+)?(?:tests?|test\s+suite|suite))"
@@ -1526,6 +1524,10 @@ std::string passingTestClaim(const std::string& answer) {
         R"((?:(?:all|now)\s+)*)" GAIA_PASS
         R"(|(?:ran|running|run)\s+the\s+tests?\s+successfully))"
         R"(\b)",
+        std::regex::icase);
+    // Shorthand phrases without a "test"/"suite" noun only count in a code or test turn.
+    static const std::regex shorthandClaim(
+        R"(\b(?:\d+\s+pass(?:ed|ing)\b|everything\s+(?:is\s+)?(?:green\b|)" GAIA_PASS R"()|all\s+green\b))",
         std::regex::icase);
 #undef GAIA_PASS
     static const std::regex negation(
@@ -1552,7 +1554,9 @@ std::string passingTestClaim(const std::string& answer) {
         for (std::sregex_token_iterator c(cleaned.begin(), cleaned.end(), contrast, -1); c != end; ++c) {
             const std::string clause = *c;
             std::smatch m;
-            if (!std::regex_search(clause, m, claim)) continue;
+            const bool matched = std::regex_search(clause, m, explicitClaim) ||
+                                 (allowShorthand && std::regex_search(clause, m, shorthandClaim));
+            if (!matched) continue;
             // "..., confirming the change did not break anything" says what the pass shows, not that it failed.
             std::string judged = clause;
             std::smatch shows;
@@ -2122,9 +2126,38 @@ std::string GaiaAgent::workSoFar() const {
     return describeWork(seen);
 }
 
-std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestClaim(const std::string& answer,
-                                                                                    const std::vector<CallSeen>& calls) {
-    const std::string claim = passingTestClaim(answer);
+namespace {
+
+bool hasTestOrCodeContext(const std::string& answer, const std::vector<GaiaAgent::CallSeen>& calls,
+                          const std::string& request) {
+    static const std::regex contextWords(
+        R"(\b(?:tests?|testing|suites?|pytest|py\.test|unittest|jest|vitest|mocha|ctest|gtest|catch2|rspec|phpunit|ci|builds?|lint(?:er|ing)?|typecheck|specs?|assertions?|regressions?|codebase|repo(?:sitory)?)\b)"
+        R"(|\w\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|c|cc|cpp|cxx|h|hpp|java|kt|rb|php|cs|swift)\b)",
+        std::regex::icase);
+    if (std::regex_search(request, contextWords)) return true;
+    static const std::regex answerFail(R"(\b(?:failed|failures?)\b)", std::regex::icase);
+    if (std::regex_search(answer, contextWords) || std::regex_search(answer, answerFail)) return true;
+    for (const auto& c : calls) {
+        if (changesCode(c)) return true;
+        if (c.name != "bash_execute" || !c.args.is_object() || !c.args.contains("command") ||
+            !c.args["command"].is_string()) {
+            continue;
+        }
+        const std::string command = c.args["command"].get<std::string>();
+        if (namesTestRunner(command) || shellChangesCode(command) || std::regex_search(command, contextWords)) {
+            return true;
+        }
+        const ShellRun run = readShellRun(c.output);
+        if (run.ran && readRunnerSummary(run.text, command).found) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestClaim(
+    const std::string& answer, const std::vector<CallSeen>& calls, const std::string& request) {
+    const std::string claim = passingTestClaim(answer, hasTestOrCodeContext(answer, calls, request));
     if (claim.empty()) return std::nullopt;
     struct Run {
         size_t at;
@@ -2879,10 +2912,75 @@ std::optional<std::string> GaiaAgent::unresolvedClaims(const std::string& answer
     return reviewAnswer(reviewedPart(answer), true);
 }
 
+std::optional<std::string> GaiaAgent::unrunCommandNote(const std::string& request,
+                                                       const std::string& answer,
+                                                       const std::vector<CallSeen>& calls) {
+    const bool bashRan = std::any_of(calls.begin(), calls.end(), [](const CallSeen& c) {
+        return c.name == "bash_execute" && c.succeeded;
+    });
+    if (bashRan) return std::nullopt;
+
+    static const std::string execNoun =
+        R"((?:tests?|test\s+suite|suite|scripts?|commands?|programs?|code|builds?|compil(?:e|ation)|)"
+        R"(lint(?:er|ing)?|typecheck(?:er)?|benchmarks?|migrations?|pipelines?|binaries|binary|)"
+        R"(executables?|install(?:er|ation)?))";
+    static const std::string cliTool =
+        R"((?:pytest|py\.test|unittest|python[0-9.]*|py|pip[0-9.]*|uv|poetry|node|npm|npx|yarn|pnpm|bun|)"
+        R"(jest|vitest|mocha|cargo|rustc|go|gcc|g\+\+|clang|cmake|ctest|make|ninja|mvn|gradle|dotnet|)"
+        R"(swift|ruby|rspec|php|phpunit|perl|bash|sh|zsh|powershell|pwsh|git|gh|docker|kubectl|curl|)"
+        R"(wget|ruff|flake8|pylint|black|isort|mypy|pyright|eslint|tsc))";
+    static const std::string notPhrasal =
+        R"((?!\s+(?:into|out|across|over|through|past|by|for|to|from|away|back|up|down|around|with|against|before|after)\b))";
+    static const std::string execObject =
+        R"((?:`[^`\n]+`|(?:(?:the|this|that|your|my|our|a|an|all|both|some|each|every)\s+)?(?:[\w-]+\s+){0,2}?)" +
+        execNoun + R"(\b|)" + cliTool +
+        R"(\b|[\w./\\~-]+\.(?:py|sh|bash|zsh|ps1|bat|cmd|js|ts|mjs|cjs|rb|pl|php|exe|out|sql)\b))";
+    static const std::regex explicitRan(
+        R"(\b(?:(?:I|we)(?:\s+(?:also|already|just|now))?\s+(?:(?:re-?)?ran|(?:re-?)?executed))"
+        R"(|(?:I|we)(?:'ve|\s+have)(?:\s+(?:also|already|just|now))?\s+(?:(?:re-?)?run|(?:re-?)?executed)))" +
+            notPhrasal + R"(\s+)" + execObject +
+            R"(|\b(?:re-?)?(?:ran|executed)\s+(?:the|this|that)\s+(?:[\w-]+\s+){0,2}?)" + execNoun + R"(\b)",
+        std::regex::icase);
+    static const std::regex pronounRan(
+        R"(\b(?:(?:I|we)(?:\s+(?:also|already|just|now))?\s+(?:(?:re-?)?ran|(?:re-?)?executed))"
+        R"(|(?:I|we)(?:'ve|\s+have)(?:\s+(?:also|already|just|now))?\s+(?:(?:re-?)?run|(?:re-?)?executed))"
+        R"(\s+(?:it|them)\b(?!\s+(?:by|past|through|over|into|out)\b)))",
+        std::regex::icase);
+    // A file name starts after a character that can't be in one, so a long run is tried once, not at every letter.
+    static const std::regex commandRequest(
+        R"(\b(?:run|execute|tests?|pytest|scripts?|commands?|builds?|lint(?:er)?|compil(?:e|es|ed|ing|ation)|migrations?)\b)"
+        R"(|`[^`\n]+`|(?:^|[^\w./\\~-])[\w./\\~-]+\.(?:py|sh|bash|zsh|ps1|bat|cmd|js|jsx|ts|tsx|mjs|cjs|rb|pl|php|exe|out|sql|)"
+        R"(c|cc|cpp|cxx|h|hpp|go|rs|java|kt|cs|swift)\b)",
+        std::regex::icase);
+    static const std::regex negationOrConditional(
+        R"(n't\b|\b(?:not|never|without|if|unless|would|could|should|might|before|once|suppose|imagine)\b)",
+        std::regex::icase);
+    static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
+    static const std::regex clauseBreak(R"([,;:\n]|\s-\s|\b(?:but|however|though|whereas)\b)", std::regex::icase);
+
+    const bool expectsCommand = std::regex_search(plainPunctuation(request, "-"), commandRequest);
+    const std::string plain = plainPunctuation(answer, "-");
+    for (std::sregex_token_iterator s(plain.begin(), plain.end(), sentenceBreak, -1), end; s != end; ++s) {
+        const std::string sentence = *s;
+        for (std::sregex_token_iterator c(sentence.begin(), sentence.end(), clauseBreak, -1); c != end; ++c) {
+            const std::string clause = *c;
+            std::smatch m;
+            const bool matched = std::regex_search(clause, m, explicitRan) ||
+                                 (expectsCommand && std::regex_search(clause, m, pronounRan));
+            if (!matched) continue;
+            const std::string lead = clause.substr(0, static_cast<size_t>(m.position(0)));
+            if (std::regex_search(lead, negationOrConditional)) continue;
+            return "Your answer says a command or the tests ran, but no command ran "
+                   "successfully in this request. Run it, or say it wasn't run.";
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> GaiaAgent::unconfirmedClaims(const std::string& answer) {
     std::vector<CallSeen> seen;
     for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output, c.succeeded});
-    const auto test = unsupportedTestClaim(reviewedPart(answer), seen);
+    const auto test = unsupportedTestClaim(reviewedPart(answer), seen, turnRequest());
     if (!test) return std::nullopt;
     std::string why = test->second;
     why[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(why[0])));
@@ -3047,19 +3145,15 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
 
     std::vector<CallSeen> seen;
     for (const auto& c : calls) seen.push_back({c.name, c.args, c.output, c.succeeded});
-    const auto testClaim = unsupportedTestClaim(answer, seen);
+    const auto testClaim = unsupportedTestClaim(answer, seen, turnRequest());
     if (testClaim) {
         notes.push_back("Your answer says \"" + testClaim->first + "\", but " + testClaim->second +
                         ". Either run the tests now with the project's test runner (for example `python -m "
                         "pytest`), or drop the claim. Then give your complete answer again: it replaces the one "
                         "above, which the user will not see.");
     }
-    static const std::regex ranClaim(
-        R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the))",
-        std::regex::icase);
-    if (!testClaim && std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
-        notes.push_back("Your answer says a command or the tests ran, but no command ran "
-                        "successfully in this request. Run it, or say it wasn't run.");
+    if (!testClaim) {
+        if (auto note = unrunCommandNote(turnRequest(), answer, seen)) notes.push_back(*note);
     }
 
     bool lookedNote = false;
