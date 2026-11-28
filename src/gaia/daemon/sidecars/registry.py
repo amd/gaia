@@ -29,6 +29,7 @@ from gaia.daemon.sidecars.errors import (
 from gaia.daemon.sidecars.manager import AgentSidecarManager
 from gaia.daemon.sidecars.spec import (
     AgentSidecarSpec,
+    dev_mode_applies,
     repo_root_from_agent_binary_lock_path,
     repo_root_from_agent_dev_src_dir,
     spec_for,
@@ -306,7 +307,7 @@ class SidecarRegistry:
         """
         if dev_src_dir is None or spec.dev_src_dir is None:
             return
-        if self._resolve_mode(spec, mode) != "dev":
+        if self._resolve_mode(spec, mode) != "dev" or not dev_mode_applies(agent_id):
             return
         caller_path = Path(dev_src_dir)
         if not caller_path.is_absolute():
