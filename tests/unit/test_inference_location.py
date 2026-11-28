@@ -222,14 +222,14 @@ def test_the_prompt_composes_before_the_chat_client_exists():
 
 
 def test_a_claude_session_names_the_claude_model_before_the_client_exists():
-    """``model_id`` holds the LOCAL id on a Claude session; the config knows."""
+    """``model_id`` holds the LOCAL id on a Claude session; the agent kept both."""
     cfg = ChatAgentConfig(rag_documents=[], streaming=False, silent_mode=True)
-    cfg.use_claude = True
-    cfg.claude_model = "claude-sonnet-5"
-    cfg.model_id = "Gemma-4-E4B-it-GGUF"
     with patch("gaia.agents.base.agent.Agent.__init__", return_value=None):
         agent = ChatAgent.__new__(ChatAgent)
         agent.config = cfg
+        agent._use_claude = True
+        agent._claude_model = "claude-sonnet-5"
+        agent.model_id = "Gemma-4-E4B-it-GGUF"
         agent.rag = type("R", (), {"indexed_files": set()})()
         agent.library_documents = []
 

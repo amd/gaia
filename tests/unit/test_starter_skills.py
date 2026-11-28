@@ -216,6 +216,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
     from gaia.agents.tools.shell_tools import ShellToolsMixin
+    from gaia.agents.tools.user_input_tools import UserInputToolsMixin
     from gaia.agents.tools.wait_tools import WaitToolsMixin
     from gaia.sd.mixin import SDToolsMixin
 
@@ -245,6 +246,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         (MemoryMixin, "register_memory_tools"),
         (EmailToolsMixin, "register_email_tools"),
         (WaitToolsMixin, "register_wait_tools"),
+        (UserInputToolsMixin, "register_user_input_tools"),
         (DictationToolsMixin, "register_dictation_tools"),
     ]
 
@@ -281,10 +283,6 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     each name is instead verified against the agent's source: the ``def``
     must exist in ``agent.py`` or the name is dropped — keeping this list
     incapable of drifting past a rename.
-
-    ``request_user_input`` comes from ``_register_loop_control_tools``, which
-    every non-``chat`` profile runs, so a skill that has to ask the user a
-    question before acting can legitimately declare it.
     """
     # Ships with the flagship gaia-agent-gaia wheel, which the core-only test
     # job does not install; skip rather than judge the list against nothing.
@@ -297,7 +295,6 @@ def _chat_agent_inline_tools() -> frozenset[str]:
         "execute_python_file",
         "run_python",
         "list_files",
-        "request_user_input",
         "text_to_speech",
     }
     return frozenset(t for t in inline if f"def {t}(" in source)
