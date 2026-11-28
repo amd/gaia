@@ -14,7 +14,18 @@ import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, get_args
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    get_args,
+)
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -29,6 +40,7 @@ from gaia.agents.tools.path_access import (
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
+from gaia.rag.keyword_search import _MIN_SCORE as _KEYWORD_MIN_SCORE
 from gaia.rag.keyword_search import keyword_index
 from gaia.rag.normalize import search_form
 from gaia.rag.sdk import (
@@ -672,6 +684,7 @@ def _spread_over_documents(
         return rag.chunk_to_file.get((owner.get(chunk) or [-1])[0])
 
     top, rest = list(ranked[:limit]), list(ranked[limit:])
+    top_floor = top[-1][1] if top else None
     docs = {doc_of(chunk) for chunk, _ in top}
     held = {chunk for chunk, _ in top}
     added: List[tuple] = []
@@ -681,7 +694,10 @@ def _spread_over_documents(
         doc = doc_of(chunk)
         if doc is None or doc in docs or chunk in held:
             continue
-        added.append((chunk, score))
+        # Never let a per-document fallback outscore the main ranked top when
+        # the caller sorts kept chunks by relevance_score.
+        capped_score = min(score, top_floor) if top_floor is not None else score
+        added.append((chunk, capped_score))
         docs.add(doc)
         held.add(chunk)
     rest = [item for item in rest if item[0] not in held]
@@ -726,79 +742,103 @@ def _adaptive_max(total_chunks: int, max_chunks: int) -> int:
     return max_chunks  # Default (5) for small docs
 
 
-#: Reciprocal-rank-fusion constant: each list contributes 1 / (k + rank).
-_RRF_K = 60
+#: Reciprocal-rank-fusion constant: each list contributes
+#: ``relative_score / (k + rank)``. GAIA fuses short lists (5-25 chunks), not
+#: 1000-item TREC lists: with k = 60, rank 1 (1/61) and rank 25 (1/85) are
+#: nearly flat, so any weak deep-pool overlap (e.g. PDF headers/footers) scores
+#: ~1.7x higher than rank 1 on either channel. With k = 1, strong top-3
+#: consensus still beats a one-sided rank 1, while deep tail overlap cannot.
+_RRF_K = 1
 
-#: Rescale for fused scores: a chunk ranked first by both lists scores
-#: 1 / (k + 1) from each, so multiplying by (k + 1) / 2 puts the fused
-#: score on a 0-1 scale (a chunk first in both lists scores 1.0). The
+#: Rescale for fused scores: a chunk ranked first with peak strength in both
+#: lists scores 1 / (k + 1) from each, so multiplying by (k + 1) / 2 puts the
+#: fused score on a 0-1 scale (a chunk first in both lists scores 1.0). The
 #: factor is positive, so the ordering is unchanged; only the reported
-#: ``relevance_score`` stops reading near zero.
+#: ``relevance_score`` stays in 0-1.
 _RRF_RESCALE = (_RRF_K + 1) / 2
 
 
-def _keyword_ranks(keyword: List[str]) -> Dict[str, int]:
-    """1-based rank of each chunk in a keyword ranking, best first."""
-    return {chunk: rank for rank, chunk in enumerate(keyword, start=1)}
+def _keyword_entries(
+    keyword: Sequence[Union[str, Tuple[str, float]]],
+) -> List[Tuple[str, Optional[float]]]:
+    """Normalize keyword items into ``(chunk, optional_strength)`` pairs."""
+    entries: List[Tuple[str, Optional[float]]] = []
+    for item in keyword:
+        if isinstance(item, tuple):
+            entries.append((item[0], float(item[1])))
+        else:
+            entries.append((item, None))
+    return entries
 
 
 def _fuse_dense_and_keyword(
     dense: List[Tuple[str, float]],
-    keyword: List[str],
+    keyword: Sequence[Union[str, Tuple[str, float]]],
 ) -> List[Tuple[str, float]]:
-    """Fuse a dense ranking and a keyword ranking by rank, not raw score.
+    """Fuse dense and keyword rankings by score-weighted reciprocal rank.
 
-    *dense* is (chunk, dense_score) pairs, best first; *keyword* is chunk
-    texts in keyword-rank order. A chunk scores 1 / (k + rank) from each
-    ranking it appears in, so the top of each list competes on equal terms
-    and a chunk both rankings like wins outright. That replaces the old
-    fixed 0.6-0.8 keyword boost, which outranked every dense score
-    (typically 0.3-0.6), so any keyword hit filled the slots ahead of the
-    semantic matches.
+    *dense* is ``(chunk, dense_score)`` pairs, best first; *keyword* is either
+    chunk texts or ``(chunk, strength)`` pairs in keyword-rank order. Each
+    ranking contributes ``relative_score / (k + rank)`` where
+    ``relative_score = score / top_score`` in ``(0, 1]`` (or ``1.0`` when
+    scores are absent or non-positive). Both channels peak at ``1 / (k + 1)``,
+    so top dense and top keyword matches still compete on equal terms and a
+    chunk both rankings strongly favor wins outright, while weak tail hits
+    (such as PDF running headers/footers in an expanded keyword pool) are
+    downweighted instead of burying rank-1 evidence.
 
-    Returns (chunk, fused_score) pairs, best first, with fused scores on
-    a 0-1 scale (a chunk ranked first by both lists scores 1.0). Ties
-    break toward the better dense score, then the better keyword rank.
+    Returns ``(chunk, fused_score)`` pairs, best first, with fused scores on
+    a 0-1 scale (a chunk ranked first by both lists scores 1.0). Ties break
+    toward the better dense score, then the better keyword rank.
     """
     fused: Dict[str, float] = {}
     dense_scores: Dict[str, float] = {}
+    top_dense = max((score for _, score in dense), default=0.0)
     for rank, (chunk, score) in enumerate(dense, start=1):
-        fused[chunk] = fused.get(chunk, 0.0) + 1.0 / (_RRF_K + rank)
+        rel = max(0.0, score) / top_dense if top_dense > 0.0 else 1.0
+        fused[chunk] = fused.get(chunk, 0.0) + rel / (_RRF_K + rank)
         dense_scores[chunk] = max(score, dense_scores.get(chunk, 0.0))
-    ranks = _keyword_ranks(keyword)
-    for chunk, rank in ranks.items():
-        fused[chunk] = fused.get(chunk, 0.0) + 1.0 / (_RRF_K + rank)
+
+    kw_entries = _keyword_entries(keyword)
+    ranks: Dict[str, int] = {}
+    top_kw = max(
+        (weight for _, weight in kw_entries if weight is not None),
+        default=0.0,
+    )
+    for rank, (chunk, weight) in enumerate(kw_entries, start=1):
+        if chunk in ranks:
+            continue
+        ranks[chunk] = rank
+        rel = max(0.0, weight) / top_kw if weight is not None and top_kw > 0.0 else 1.0
+        fused[chunk] = fused.get(chunk, 0.0) + rel / (_RRF_K + rank)
+
     return sorted(
         ((chunk, score * _RRF_RESCALE) for chunk, score in fused.items()),
         key=lambda item: (
             -item[1],
             -dense_scores.get(item[0], 0.0),
-            ranks.get(item[0], len(keyword) + 1),
+            ranks.get(item[0], len(kw_entries) + 1),
         ),
     )
 
 
 def _fuse_extra_scores(
     dense_count: int,
-    keyword: List[str],
     extra: List[Tuple[str, float]],
 ) -> List[Tuple[str, float]]:
     """Per-file best chunks on the same fused scale as :func:`_fuse_dense_and_keyword`.
 
-    *extra* is (chunk, dense_score) pairs from per-file searches, best first.
-    Each keeps its dense order, ranked just after the global dense list, plus
-    its keyword term when the keyword ranking likes it too. They are scored,
-    not ranked against the main list: the caller adds them after the top, so
-    a document the search leaves out still gets its best passage in.
+    *extra* is ``(chunk, dense_score)`` pairs from per-file searches, best
+    first. Each keeps its dense order, ranked strictly after the global dense
+    list without adding a second keyword term: a chunk that missed the global
+    dense top-k and did not make the main top from its keyword score alone must
+    not be promoted above the main top as a per-document fallback.
     Scores are rescaled to the same 0-1 scale as
     :func:`_fuse_dense_and_keyword`.
     """
-    ranks = _keyword_ranks(keyword)
     scored = []
     for position, (chunk, _score) in enumerate(extra):
         fused = 1.0 / (_RRF_K + dense_count + 1 + position)
-        if chunk in ranks:
-            fused += 1.0 / (_RRF_K + ranks[chunk])
         scored.append((chunk, fused * _RRF_RESCALE))
     return sorted(scored, key=lambda item: item[1], reverse=True)
 
@@ -1493,6 +1533,7 @@ class RAGToolsMixin:
                 # The pool covers every slot instead of stopping at 5.
                 keyword_boost_info = []
                 keyword_chunks = []
+                keyword_scored: List[Tuple[str, float]] = []
                 keywords = keyword_index(rag)
                 owners = dict(rag.chunk_to_file) if left_out else {}
                 for chunk_idx, boost_score, matching_terms in keywords.rank(
@@ -1501,7 +1542,11 @@ class RAGToolsMixin:
                 ):
                     if owners.get(chunk_idx) in left_out:
                         continue
-                    keyword_chunks.append(keywords.texts[chunk_idx])
+                    chunk_text = keywords.texts[chunk_idx]
+                    keyword_chunks.append(chunk_text)
+                    keyword_scored.append(
+                        (chunk_text, max(0.0, boost_score - _KEYWORD_MIN_SCORE))
+                    )
 
                     # Get source file for this chunk
                     source_file = rag.chunk_to_file.get(chunk_idx, "Unknown")
@@ -1580,7 +1625,7 @@ class RAGToolsMixin:
                 dense_ranked = sorted(
                     dense_best.items(), key=lambda item: item[1], reverse=True
                 )
-                sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_chunks)
+                sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_scored)
 
                 # Update debug info after deduplication - track which chunks remain
                 if debug_info:
@@ -1604,7 +1649,6 @@ class RAGToolsMixin:
                 # after the top so no document the search ranked is pushed out.
                 extra_fused = _fuse_extra_scores(
                     len(dense_ranked),
-                    keyword_chunks,
                     sorted(
                         zip(per_doc_chunks, per_doc_scores),
                         key=lambda item: item[1],
@@ -2007,6 +2051,7 @@ class RAGToolsMixin:
                 # The pool covers every slot instead of stopping at 5.
                 file_keyword_info = []
                 keyword_chunks = []
+                keyword_scored: List[Tuple[str, float]] = []
                 if (
                     str(target_file) in rag.file_metadata
                     and "full_text" in rag.file_metadata[str(target_file)]
@@ -2020,7 +2065,11 @@ class RAGToolsMixin:
                         [i for i in file_chunk_indices if i < len(keywords)],
                         limit=_adaptive_max(len(rag.chunks), self.max_chunks),
                     ):
-                        keyword_chunks.append(keywords.texts[chunk_idx])
+                        chunk_text = keywords.texts[chunk_idx]
+                        keyword_chunks.append(chunk_text)
+                        keyword_scored.append(
+                            (chunk_text, max(0.0, boost_score - _KEYWORD_MIN_SCORE))
+                        )
                         file_keyword_info.append(
                             {
                                 "chunk_index": chunk_idx,
@@ -2086,7 +2135,7 @@ class RAGToolsMixin:
                 dense_ranked = sorted(
                     dense_best.items(), key=lambda item: item[1], reverse=True
                 )
-                sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_chunks)
+                sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_scored)
 
                 # Update debug info after deduplication - track which chunks remain
                 if debug_info:
