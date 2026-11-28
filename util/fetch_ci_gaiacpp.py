@@ -112,6 +112,8 @@ def _get(url: str, token: str, follow: bool = True) -> Any:
         ) from e
     except urllib.error.URLError as e:
         raise FetchError(f"GET {url} failed: {e.reason}") from e
+    except ConnectionError as e:
+        raise FetchError(f"GET {url} failed: the connection dropped ({e})") from e
 
 
 def _json(url: str, token: str) -> dict:
@@ -173,7 +175,7 @@ def _artifact_zip(artifact: dict, name: str, token: str) -> bytes:
     try:
         with urllib.request.urlopen(location, timeout=300) as reply:
             return reply.read()
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, ConnectionError) as e:
         raise FetchError(f"downloading {name} failed: {e}") from e
 
 

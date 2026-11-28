@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 import time
 import uuid
@@ -34,6 +33,7 @@ from typing import Optional
 
 import pytest
 
+from gaia.ui.local_models import friendly_name
 from tests.integration.harness_contract.surfaces import (
     SURFACES,
     WEB_TOOL,
@@ -326,7 +326,9 @@ def test_no_download_without_consent(request, world, surface):
         assert {r["model"] for r in world.chats(since)} <= {SAVED_MODEL, LAST_MODEL}
         return
     assert ANSWER not in turn.answer
-    assert ABSENT_MODEL in turn.said and "download" in turn.said.lower(), turn.said
+    named = {ABSENT_MODEL, friendly_name(ABSENT_MODEL)}
+    assert any(n in turn.said for n in named), turn.said
+    assert "download" in turn.said.lower(), turn.said
 
 
 @pytest.mark.parametrize("surface", ["ui", "stdio"])
@@ -555,22 +557,9 @@ def test_setup_names_the_agent_when_gaiacpp_cannot_reach_the_server(fresh_pc):
     ), "gaiacpp was expected to look on the standard port"
 
 
-# Keep this one last: on gaiacpp it leaves a turn waiting on an approval.
 @pytest.mark.parametrize("surface", ["cli"])
-def test_gated_tool_with_nobody_to_ask_is_refused(request, world, surface):
+def test_gated_tool_with_nobody_to_ask_is_refused(world, surface):
     """`gaia -p` without a permission flag refuses a write and says which flag allows it."""
-    if world.harness == "gaiacpp":
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                raises=subprocess.TimeoutExpired,
-                reason=(
-                    "gaiacpp behind the daemon waits on an approval nobody can give: "
-                    "`gaia -p` with no permission flag hangs on a gated tool instead "
-                    "of refusing it, as docs/reference/cli.mdx says it does"
-                ),
-            )
-        )
     target = world.work / "unapproved.txt"
     said = _marker("write-inside")
     world.play(
@@ -582,9 +571,6 @@ def test_gated_tool_with_nobody_to_ask_is_refused(request, world, surface):
             }
         ]
     )
-    # Long enough to tell a refusal from a hang; a refusal takes a second or two.
-    turn = ask_cli(
-        world, f"{said} please", timeout=12 if world.harness == "gaiacpp" else 60
-    )
+    turn = ask_cli(world, f"{said} please")
     assert turn.exit_code == 1 and not target.exists()
     assert "--dangerously-skip-permissions" in turn.error, turn.said

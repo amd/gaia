@@ -58,8 +58,7 @@ type ownServer struct {
 	mu       sync.Mutex
 	models   []string
 	refused  []string
-	writeTo  string
-	writeArg string
+	writeTo string
 }
 
 type chatMessage struct {
