@@ -3956,6 +3956,11 @@ for (const locale of ['en', 'ar']) {
             expect((await chip.boundingBox())!.height).toBeLessThan(24);
         }
         await shot(page, `run-mode-menu-open-${locale}`);
+        // A Latin model name that doesn't fit fades at its end, even in Arabic.
+        const fadedStart = await menu.locator('.popover-item-title.is-model').evaluateAll((els) => els
+            .filter((el) => el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).getPropertyValue('--fade-to').trim() !== 'right')
+            .map((el) => el.textContent));
+        expect(fadedStart, 'model names faded at their start').toEqual([]);
         expect(await audit(page)).toEqual([]);
         await menu.getByRole('option', { name: /gpt-oss 20B/ }).click();
         await expect(menu.locator('.model-download-confirm')).toContainText('3 GB');

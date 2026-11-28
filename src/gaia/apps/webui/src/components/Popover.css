@@ -67,6 +67,8 @@
 html[dir='rtl'] .popover-item-title.is-model {
     direction: ltr;
     text-align: left;
+    /* :dir() still reads the page's rtl here, so name the side the cut is on. */
+    --fade-to: right;
 }
 
 .popover-item-note {
