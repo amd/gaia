@@ -368,6 +368,18 @@ def cancel_goal(goal_id: str):
     return _goal_to_dict(goal)
 
 
+@router.put("/api/goals/{goal_id}/retry")
+def retry_goal(goal_id: str):
+    """Queue a failed goal again with a fresh retry budget."""
+    try:
+        goal = _get_store().retry_goal(goal_id)
+    except GoalTransitionError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    if goal is None:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return _goal_to_dict(goal)
+
+
 @router.put("/api/goals/{goal_id}/status")
 def update_goal_status(goal_id: str, body: GoalStatusUpdate):
     """Update goal status and optionally append progress notes."""

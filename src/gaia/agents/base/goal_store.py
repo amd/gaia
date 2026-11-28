@@ -539,11 +539,14 @@ class GoalStore:
         allowed_from: tuple,
         status: GoalStatus,
         approve: bool = False,
+        reset_budget: bool = False,
     ) -> Optional[Goal]:
         """Move a goal to ``status`` only from one of ``allowed_from``, atomically.
 
         A goal already in ``status`` is returned unchanged (with ``approve``,
-        it is also marked approved). Returns None when the goal does not exist.
+        it is also marked approved). ``reset_budget`` clears the run and
+        check-back counts and any retry pause on the move. Returns None when
+        the goal does not exist.
 
         Raises:
             GoalTransitionError: the goal exists but is in another state.
@@ -551,6 +554,8 @@ class GoalStore:
         now = _now_iso()
         placeholders = ",".join("?" * len(allowed_from))
         approval = ", approved_for_auto=1" if approve else ""
+        if reset_budget:
+            approval += ", attempts=0, check_backs=0, retry_at=NULL"
         with self._lock:
             conn = self._get_conn()
             cursor = conn.execute(
@@ -614,6 +619,19 @@ class GoalStore:
         """
         return self._transition_goal(
             goal_id, "cancel", ("queued", "in_progress"), "cancelled"
+        )
+
+    def retry_goal(self, goal_id: str) -> Optional[Goal]:
+        """Queue a failed goal again with a fresh retry budget.
+
+        Retrying a goal that is already queued just returns it, so a double
+        click can't reset a goal that has started running again.
+
+        Raises:
+            GoalTransitionError: the goal is neither failed nor already queued.
+        """
+        return self._transition_goal(
+            goal_id, "retry", ("failed",), "queued", reset_budget=True
         )
 
     def delete_goal(self, goal_id: str) -> bool:
