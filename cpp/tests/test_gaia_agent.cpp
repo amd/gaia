@@ -1527,6 +1527,7 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     EXPECT_FALSE(has(compactTools, "git_status"));
     EXPECT_FALSE(has(compactTools, "search_code"));
     EXPECT_FALSE(has(compactTools, "env_inspect"));
+    EXPECT_FALSE(has(compactTools, "list_inbox")) << "no compact model has passed the email evals";
     EXPECT_TRUE(has(compactTools, "bash_execute"));
     EXPECT_TRUE(has(compactTools, "file_read"));
     EXPECT_EQ(compactBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
@@ -1537,6 +1538,9 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     agent.processQuery("hello again");
     const json fullBody = json::parse(mock.receivedBodies().back());
     EXPECT_TRUE(has(toolNamesIn(fullBody), "git_status")) << "the tier follows the config each turn";
+    EXPECT_TRUE(has(toolNamesIn(fullBody), "list_inbox"));
+    EXPECT_FALSE(has(toolNamesIn(fullBody), "send-email/send_now")) << "a skill's tools wait for the skill to load";
+    EXPECT_FALSE(has(compactTools, "send-email/send_now"));
     EXPECT_NE(fullBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
     EXPECT_GT(fullBody.dump().size(), compactBody.dump().size() + 4000);
 }
@@ -2510,6 +2514,144 @@ TEST(GaiaAgentTest, EveryToolIsOnTheListTheAppsWordInPlainLanguage) {
         }
     }
     for (const auto& name : gated) EXPECT_TRUE(tools.count(name)) << name;
+}
+
+namespace {
+// A clean install: GAIA_HOME and HOME are empty folders, so no skill is on disk.
+struct EmptyHomes {
+    Workdir dir;
+    std::string savedHome;
+    EmptyHomes() {
+        const char* home = std::getenv("HOME");
+        savedHome = home ? home : "";
+        set("GAIA_HOME", (dir.path / "gaia").u8string());
+        set("HOME", dir.path.u8string());
+    }
+    ~EmptyHomes() {
+        set("GAIA_HOME", "");
+        set("HOME", savedHome);
+    }
+    static void set(const char* name, const std::string& v) {
+#ifdef _WIN32
+        _putenv_s(name, v.c_str());
+#else
+        if (!v.empty()) setenv(name, v.c_str(), 1); else unsetenv(name);
+#endif
+    }
+};
+}  // namespace
+
+TEST(GaiaAgentTest, TheCalendarToolsTurnOnWhenTheSkillLoads) {
+    Workdir w;
+    EmptyHomes home;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";
+    GaiaAgent agent(cfg, o);
+    ASSERT_FALSE(cfg.compactFeatures());
+    for (const auto& name : CalendarTools::toolNames()) EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+    json listed = agent.toolRegistry().executeTool("list_skills", json::object());
+    ASSERT_EQ(listed["status"], "success") << listed.dump();
+    bool calendarListed = false;
+    for (const auto& skill : listed["skills"]) calendarListed |= skill.value("name", "") == "calendar";
+    EXPECT_TRUE(calendarListed) << "built in, so a clean install lists it: " << listed.dump();
+
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "calendar"}});
+    ASSERT_EQ(loaded["status"], "success") << loaded.dump();
+    EXPECT_NE(loaded["instructions"].get<std::string>().find("calendar"), std::string::npos);
+    EXPECT_EQ(loaded["tools_available"], json(CalendarTools::toolNames()));
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : CalendarTools::toolNames()) {
+        EXPECT_TRUE(agent.toolRegistry().isEnabled(name)) << name << " stays on for the chat";
+    }
+
+    cfg.modelId = "Gemma-4-E4B-it-GGUF";
+    agent.setConfig(cfg);
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : CalendarTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " is withheld from a compact model";
+    }
+    json refused = agent.toolRegistry().executeTool("load_skill", json{{"name", "calendar"}});
+    EXPECT_EQ(refused["status"], "error");
+    EXPECT_EQ(refused["error_type"], "SkillUnavailableError");
+    EXPECT_NE(refused["error"].get<std::string>().find("needs a larger model"), std::string::npos) << refused.dump();
+    for (const auto& name : CalendarTools::toolNames()) EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+}
+
+TEST(GaiaAgentTest, TheSendEmailToolsTurnOnWhenTheSkillLoads) {
+    Workdir w;
+    EmptyHomes home;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";
+    GaiaAgent agent(cfg, o);
+    for (const auto& name : SendEmailTools::toolNames()) {
+        ASSERT_TRUE(agent.toolRegistry().hasTool(name)) << name;
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+    }
+    json listed = agent.toolRegistry().executeTool("list_skills", json::object());
+    bool sendListed = false;
+    for (const auto& skill : listed["skills"]) sendListed |= skill.value("name", "") == "send-email";
+    EXPECT_TRUE(sendListed) << "built in, so a clean install lists it: " << listed.dump();
+
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "send-email"}});
+    ASSERT_EQ(loaded["status"], "success") << loaded.dump();
+    EXPECT_EQ(loaded["tools_available"], json(SendEmailTools::toolNames()));
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : SendEmailTools::toolNames()) {
+        EXPECT_TRUE(agent.toolRegistry().isEnabled(name)) << name << " stays on for the chat";
+    }
+    for (const auto& name : CalendarTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " waits for its own skill";
+    }
+
+    cfg.modelId = "Gemma-4-E4B-it-GGUF";
+    agent.setConfig(cfg);
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : SendEmailTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " is withheld from a compact model";
+    }
+    json refused = agent.toolRegistry().executeTool("load_skill", json{{"name", "send-email"}});
+    EXPECT_EQ(refused["error_type"], "SkillUnavailableError") << refused.dump();
+
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";
+    agent.setConfig(cfg);
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : SendEmailTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " needs the skill loaded again";
+    }
+}
+
+TEST(GaiaAgentTest, TheMailToolsDoNotRunWhileTheInternetIsOff) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.internetOff = std::make_shared<std::atomic<bool>>(true);
+    GaiaAgent agent(cfgFor(mock), o);
+    for (const auto& name : EmailTools::toolNames()) {
+        ASSERT_TRUE(agent.toolRegistry().hasTool(name)) << name;
+        if (name == "list_connected_mailboxes") {  // reads only this PC, as on the Python agent
+            EXPECT_FALSE(agent.toolRegistry().findTool(name)->onlineService);
+            continue;
+        }
+        json args = json::object();
+        for (const auto& p : agent.toolRegistry().allTools().at(name).parameters) {
+            if (p.required) args[p.name] = "x";
+        }
+        json r = agent.toolRegistry().executeTool(name, args);
+        EXPECT_EQ(r.value("executed", true), false) << name << ": " << r.dump();
+        EXPECT_NE(r.value("error", "").find(name + ", which calls an online service"), std::string::npos)
+            << name << ": " << r.dump();
+    }
 }
 
 TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInternetIsOff) {

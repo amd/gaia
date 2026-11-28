@@ -10,6 +10,7 @@
 #include <fstream>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 #include "gaia/http_client.h"
@@ -33,6 +34,7 @@ namespace gaia {
 
 namespace {
 
+constexpr const char* kBuiltInRoot = "built-in";
 // Mirrors Python's skill_catalog.CATALOG_HEADER in intent.
 constexpr const char* kCatalogHeader =
     "==== SKILLS ====\n"
@@ -160,6 +162,7 @@ void SkillLibrary::refresh() {
             }
         }
     }
+    addBuiltIns();
     std::lock_guard<std::mutex> lock(loadedMutex_);
     for (auto it = loaded_.begin(); it != loaded_.end();) {
         if (skills_.find(it->first) == skills_.end()) it = loaded_.erase(it);
@@ -167,13 +170,28 @@ void SkillLibrary::refresh() {
     }
 }
 
+void SkillLibrary::addBuiltIns() {
+    // One on disk wins, as an earlier root's does.
+    for (const auto& [name, skill] : builtIn_) {
+        auto it = skills_.find(name);
+        if (it != skills_.end()) {
+            shadowed_.push_back(name + " (" + std::string(kBuiltInRoot) + ") shadowed by " + it->second.root);
+            continue;
+        }
+        Skill meta = skill;
+        meta.body.clear();
+        skills_.emplace(name, std::move(meta));
+    }
+}
+
 std::string SkillLibrary::renderPrompt() const {
     std::ostringstream out;
     bool any = false;
     for (const auto& [name, skill] : skills_) {
-        const bool listed = std::any_of(roots_.begin(), roots_.end(), [&](const SkillRoot& r) {
-            return r.label == skill.root && r.listed;
-        });
+        const bool listed = skill.root == kBuiltInRoot ||
+                            std::any_of(roots_.begin(), roots_.end(), [&](const SkillRoot& r) {
+                                return r.label == skill.root && r.listed;
+                            });
         if (!listed) continue;
         if (!any) out << kCatalogHeader << "\n";
         any = true;
@@ -199,6 +217,7 @@ Skill SkillLibrary::loadFull(const std::string& name) const {
         throw SkillError("No installed skill named '" + name + "'. Installed: " +
                          (known.empty() ? "none" : known) + ".");
     }
+    if (it->second.root == kBuiltInRoot) return builtIn_.at(name);
     return parseSkillFile(it->second.directory(), it->second.root, it->second.readOnly);
 }
 
@@ -239,12 +258,29 @@ void SkillLibrary::registerTools(ToolRegistry& registry) {
         } catch (const std::exception& e) {
             return json{{"status", "error"}, {"error", e.what()}};
         }
+        const auto native = native_.find(s.name);
+        if (native != native_.end()) {
+            const std::string refused = native->second.refusal ? native->second.refusal() : "";
+            if (!refused.empty()) {
+                return json{{"status", "error"},
+                            {"action", "load_skill"},
+                            {"error_type", "SkillUnavailableError"},
+                            {"error", refused}};
+            }
+        }
         json out = {{"status", "success"},
                     {"name", s.name},
                     {"directory", s.directory()},
                     {"tier", s.securityTier()},
                     {"instructions", s.body}};
-        if (!s.isInstructionOnly()) {
+        if (native != native_.end()) {
+            native->second.activate();
+            out["registered_tools"] = native->second.tools;
+            out["tools_available"] = native->second.tools;
+            out["tools_hint"] =
+                "These tools are on your tool list now and stay there for this chat. Call them directly, as the "
+                "skill's instructions say.";
+        } else if (!s.isInstructionOnly()) {
             out["note"] = "This skill also ships Python tools (" +
                           json(s.toolNames()).dump() +
                           "), which need the Python GAIA runtime. Follow the instructions with "
@@ -253,6 +289,21 @@ void SkillLibrary::registerTools(ToolRegistry& registry) {
         return out;
     };
     registry.registerTool(std::move(load));
+}
+
+void SkillLibrary::setNativeTools(const std::string& name, NativeSkillTools tools) {
+    if (!tools.activate) throw std::invalid_argument("setNativeTools needs activate for skill '" + name + "'");
+    if (!tools.builtIn.empty()) {
+        Skill skill = parseSkill(tools.builtIn, "built-in " + name + "/SKILL.md");
+        if (skill.name != name) {
+            throw std::invalid_argument("built-in SKILL.md is named '" + skill.name + "', not '" + name + "'");
+        }
+        skill.root = kBuiltInRoot;
+        skill.readOnly = true;
+        builtIn_[name] = std::move(skill);
+        refresh();
+    }
+    native_[name] = std::move(tools);
 }
 
 std::string SkillLibrary::userRoot() {

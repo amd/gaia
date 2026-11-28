@@ -247,6 +247,8 @@ struct ToolParameter {
     /// The JSON schema sent for this parameter in place of the bare type, for an array or
     /// object whose shape the model must be told. Null = type and description only.
     json schema = nullptr;
+    /// The tool refuses a value of the wrong type itself, in its own words.
+    bool toolChecksType = false;
 };
 
 // Callback type for tool functions.
@@ -268,6 +270,13 @@ constexpr ToolPolicy stricterPolicy(ToolPolicy a, ToolPolicy b) {
                   "ToolPolicy must stay ordered by severity");
     return a < b ? b : a;
 }
+
+/// An exception that names its Python class, for messages that quote type(exc).__name__.
+class GAIA_API PythonNamedError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+    virtual const char* pythonName() const = 0;
+};
 
 // DENY is a person's no. UNATTENDED means nobody could be asked or nobody
 // answered: the call is not run, and it is not remembered as declined.
@@ -306,6 +315,23 @@ struct ToolInfo {
     /// True when one result may take a quarter of the context window instead of the usual cap:
     /// for a tool whose result is already the short form of a lot of reading.
     bool wideResult = false;
+
+    /// True for a tool that always calls an online service (a mailbox, a
+    /// calendar), so it is refused while the internet is off.
+    bool onlineService = false;
+
+    /// Runs before the approval card. A returned object is the call's result and the
+    /// tool doesn't run (an argument a person should never be asked about).
+    std::function<std::optional<json>(const json& args)> preflight;
+
+    /// What the approval card shows for this call. Unset = the arguments.
+    std::function<json(const json& args)> promptArgs;
+
+    /// Every call needs a person: no "always allow", and full access still asks.
+    bool personMustApprove = false;
+
+    /// Called when a call that passed its preflight is not run (declined or unanswered).
+    std::function<void(const json& args)> forget;
 };
 
 // ---- LLM Usage Statistics ----

@@ -24,6 +24,8 @@ on:
     tags: [ 'v*' ]
     paths:
       - 'cpp/**'
+      - 'hub/skills/calendar/SKILL.md'  # built into gaiacpp
+      - 'hub/skills/send-email/SKILL.md'  # built into gaiacpp
       - 'util/check_glibc_floor.py'
       - '.github/workflows/build_agents.yml'
       # The suite the build job runs on the gaiacpp it built.
@@ -34,6 +36,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'cpp/**'
+      - 'hub/skills/calendar/SKILL.md'  # built into gaiacpp
+      - 'hub/skills/send-email/SKILL.md'  # built into gaiacpp
       - 'util/check_glibc_floor.py'
       - '.github/workflows/build_agents.yml'
       # The suite the build job runs on the gaiacpp it built.

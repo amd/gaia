@@ -109,6 +109,11 @@ struct GAIA_API HttpClientConfig {
     /// caller can vet each redirect target itself.
     bool returnRedirects = false;
 
+    /// get, post, patch, del and postMultipart return every status, 4xx and 5xx included,
+    /// instead of throwing, so a caller can classify each answer itself. A
+    /// request that got no answer still throws.
+    bool returnErrorStatuses = false;
+
     /// https only: custom CA bundle path (empty → system trust store).
     std::string caCertPath;
 
@@ -184,6 +189,25 @@ public:
     HttpResponse post(const std::string& path, const std::string& body,
                       const HttpHeaders& headers = {}, int timeoutSec = 0,
                       int connectTimeoutSec = 0);
+
+    /// PUT `body` to `path`. Content-Type defaults to "application/json"
+    /// unless `headers` supplies one.
+    /// @throws HttpError on connection failure, timeout, or non-2xx status
+    HttpResponse put(const std::string& path, const std::string& body,
+                     const HttpHeaders& headers = {}, int timeoutSec = 0,
+                     int connectTimeoutSec = 0);
+
+    /// PATCH `body` to `path`. Content-Type defaults to "application/json"
+    /// unless `headers` supplies one.
+    /// @throws HttpError on connection failure, timeout, or non-2xx status
+    HttpResponse patch(const std::string& path, const std::string& body,
+                       const HttpHeaders& headers = {}, int timeoutSec = 0,
+                       int connectTimeoutSec = 0);
+
+    /// DELETE `path`, with no body.
+    /// @throws HttpError on connection failure, timeout, or non-2xx status
+    HttpResponse del(const std::string& path, const HttpHeaders& headers = {},
+                     int timeoutSec = 0, int connectTimeoutSec = 0);
 
     /// POST `body` to `path` and hand each response chunk to `onChunk` as it
     /// arrives (SSE and other streamed responses).

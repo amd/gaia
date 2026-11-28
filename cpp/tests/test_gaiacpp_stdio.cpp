@@ -7,6 +7,8 @@
 
 #include <gtest/gtest.h>
 
+#include <gaia/person_approval.h>
+
 #include <algorithm>
 #include <cctype>
 #include <atomic>
@@ -1234,6 +1236,38 @@ TEST_F(GaiacppStdio, FullAccessAtLaunchSkipsPrompts) {
     ASSERT_TRUE(waitTerminal(1).is_object());
     EXPECT_TRUE(fs::exists(out));
     EXPECT_EQ(count("needs_confirmation"), 0u);
+}
+
+TEST_F(GaiacppStdio, FullAccessNeverAnswersACallOnlyAPersonMayApprove) {
+    mock_.pushResponse(toolCall("book_room", {{"room", "Pay\xE2\x80\xAEroll"}}));
+    mock_.pushResponse(answer("Booked."));
+    Start s;
+    s.fullAccess = true;
+    start(s);
+    std::atomic<int> ran{0};
+    ToolInfo info;
+    info.name = "book_room";
+    info.description = "Book a room.";
+    info.parameters = {{"room", ToolParamType::STRING, true, "Room."}};
+    info.policy = ToolPolicy::CONFIRM;
+    info.personMustApprove = true;
+    info.grantScope = [](const json&) { return std::string("any"); };
+    info.promptArgs = [](const json& args) { return json{{"room", approval::visible(args.value("room", ""))}}; };
+    info.callback = [&ran](const json&) {
+        ++ran;
+        return json{{"status", "success"}};
+    };
+    agent_->toolRegistry().registerTool(std::move(info));
+    ask("book it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object()) << "full access must still ask a person";
+    EXPECT_EQ(prompt["action"], "book_room");
+    EXPECT_FALSE(prompt.contains("always_scope")) << prompt.dump();
+    EXPECT_EQ(prompt["summary"].get<std::string>().find("_needs_person"), std::string::npos) << prompt.dump();
+    EXPECT_NE(prompt["summary"].get<std::string>().find("[U+202E]"), std::string::npos) << prompt.dump();
+    decide("always", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_EQ(ran.load(), 1);
 }
 
 TEST_F(GaiacppStdio, AcceptEditsCoversEditsInTheFolderButNotHiddenOnes) {

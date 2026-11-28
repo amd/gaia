@@ -46,7 +46,22 @@ NATIVE_TOOL_LABELS: Dict[str, str] = {
     "get_mcp_prompt": "Reading a connector's prompt",
     "list_mcp_resources": "Listing a connector's resources",
     "read_mcp_resource": "Reading a connector's resource",
+    # The calendar skill's tools, which the Python agent loads with the skill.
+    "calendar/list_calendar_events": "Reading your calendar",
+    "calendar/check_calendar_availability": "Checking when you're free",
+    "calendar/create_calendar_event": "Adding a calendar event",
+    "calendar/update_calendar_event": "Changing a calendar event",
+    "calendar/cancel_calendar_event": "Cancelling a calendar event",
 }
+
+#: Tools above that change something the user keeps.
+NATIVE_CHANGE_TOOLS = frozenset(
+    {
+        "calendar/create_calendar_event",
+        "calendar/update_calendar_event",
+        "calendar/cancel_calendar_event",
+    }
+)
 
 #: Tools both agents name the same way, whose gaiacpp argument names differ.
 _SAME_NAME_ARG_RENAMES: Dict[str, Dict[str, str]] = {

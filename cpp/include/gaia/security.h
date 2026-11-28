@@ -97,6 +97,9 @@ GAIA_API std::string gaiaHome();
 /// Auto-installed by Agent for interactive (non-silent) agents.
 GAIA_API ToolConfirmCallback makeStdinConfirmCallback();
 
+/// True when stdin and stderr are both terminals, so a person can answer the stdin prompt.
+GAIA_API bool stdinIsAPerson();
+
 // ---------------------------------------------------------------------------
 // AllowedToolsStore — persistent "always allow" permissions
 // ---------------------------------------------------------------------------

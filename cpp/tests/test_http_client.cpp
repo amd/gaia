@@ -222,6 +222,17 @@ TEST(HttpClientTest, PostSendsBodyAndDefaultsToJsonContentType) {
     EXPECT_EQ(res.header("X-Gaia-Content-Type"), "application/json");
 }
 
+TEST(HttpClientTest, AnEmptyBodyCarriesNoContentType) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+
+    EXPECT_EQ(http.post("/test/echo", "").header("X-Gaia-Has-Content-Type"), "no");
+    EXPECT_EQ(http.put("/test/echo", "").header("X-Gaia-Has-Content-Type"), "no");
+    HttpResponse put = http.put("/test/echo", R"({"k":"v"})");
+    EXPECT_EQ(put.body, R"({"k":"v"})");
+    EXPECT_EQ(put.header("X-Gaia-Content-Type"), "application/json");
+}
+
 TEST(HttpClientTest, PostHonoursExplicitContentTypeAndHeaders) {
     bench::MockLlmServer server;
     HttpClient http(server.baseUrl());
@@ -333,6 +344,27 @@ TEST(HttpClientTest, ErrorStatusThrowsHttpErrorCarryingStatusAndBody) {
         EXPECT_NE(what.find("returned HTTP 500"), std::string::npos);
         EXPECT_NE(what.find("boom: upstream exploded"), std::string::npos);
     }
+}
+
+TEST(HttpClientTest, ReturnErrorStatusesHandsBackEveryAnswer) {
+    bench::MockLlmServer server;
+    HttpClientConfig config;
+    config.baseUrl = server.baseUrl();
+    config.returnErrorStatuses = true;
+    HttpClient http(config);
+
+    const HttpResponse got = http.get("/test/boom");
+    EXPECT_EQ(got.status, 500);
+    EXPECT_EQ(got.body, "boom: upstream exploded");
+    EXPECT_EQ(got.header("retry-after"), "7");
+    EXPECT_EQ(http.post("/test/does-not-exist", "{}").status, 404);
+
+    HttpClientConfig unreachable;
+    unreachable.baseUrl = kUnreachableUrl;
+    unreachable.returnErrorStatuses = true;
+    unreachable.connectTimeoutSec = 2;
+    HttpClient down(unreachable);
+    EXPECT_THROW(down.get("/x"), HttpError);
 }
 
 TEST(HttpClientTest, UnknownPathThrowsNotFound) {

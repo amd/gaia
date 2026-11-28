@@ -384,6 +384,15 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "get_thread": "Reading conversation",
     "list_connected_mailboxes": "Checking connected mailboxes",
     "list_waiting_on_you": "Finding mail waiting on you",
+    # Drafting and sending, by the send-email skill
+    "send-email/list_drafts": "Listing drafts",
+    "send-email/create_draft": "Saving draft",
+    "send-email/update_draft": "Changing draft",
+    "send-email/discard_draft": "Deleting draft",
+    "send-email/send_draft": "Sending draft",
+    "send-email/send_now": "Sending email",
+    "send-email/reply_to_message": "Sending reply",
+    "send-email/forward_message": "Forwarding email",
     # Memory — the agent's own long-term store
     "remember": "Saving to memory",
     "forget": "Deleting from memory",
