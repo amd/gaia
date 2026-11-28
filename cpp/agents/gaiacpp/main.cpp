@@ -459,6 +459,7 @@ Settings buildSettings(const Cli& cli) {
     std::string mcpConfig;
     std::string settingsFrom = "The settings";
     bool fileSetsWindow = false;
+    bool userTemperature = false;  // a temperature the user chose keeps its place over the card's sampling
 
     const fs::path file = cli.configFile.empty() ? defaultConfigPath() : fs::path(cli.configFile);
     std::error_code ec;
@@ -476,6 +477,7 @@ Settings buildSettings(const Cli& cli) {
             throw std::runtime_error("Settings file " + file.string() + " must hold a JSON object");
         }
         checkSettingsFile(j, "Settings file " + file.string());
+        if (j.contains("temperature")) userTemperature = true;
         settingsFrom = "Settings file " + file.string();
         if (j.contains("baseUrl")) server = {gaia::ServerSource::SettingsFile, settingsFrom};
         if (j.contains("mcpConfig")) {
@@ -529,6 +531,8 @@ Settings buildSettings(const Cli& cli) {
     if (cli.maxTokens > 0) merged["maxTokens"] = cli.maxTokens;
     if (cli.maxSteps > 0) merged["maxSteps"] = cli.maxSteps;
     if (cli.temperature) merged["temperature"] = *cli.temperature;
+    if (cli.temperature) userTemperature = true;
+    merged["cardSampling"] = !userTemperature;
     if (!cli.mcpConfig.empty()) mcpConfig = cli.mcpConfig;
     if (!cli.embeddingModel.empty()) merged["embeddingModel"] = cli.embeddingModel;
     if (!cli.transcribeModel.empty()) merged["transcribeModel"] = cli.transcribeModel;

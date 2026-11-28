@@ -281,6 +281,22 @@ TEST(WorkspaceTest, JudgeNamesThePlaceToAskAboutAndAddRootOpensIt) {
     EXPECT_FALSE(listing.refusal.empty());
     EXPECT_EQ(listing.askPath, fs::canonical(d.other).u8string());
     EXPECT_TRUE(ws.judgeCommand("ls /*").askPath.empty()) << "a wildcard in the root asks about no whole disk";
+#ifndef _WIN32
+    // A virtual environment's python is asked about as its environment, not the interpreter it links to.
+    fs::create_directories(d.other / "venv" / "bin");
+    std::ofstream(d.other / "venv" / "pyvenv.cfg") << "home = /usr/bin\n";
+    // As uv does: the interpreter lives elsewhere, outside the system folders.
+    fs::create_directories(d.base / "store");
+    std::ofstream(d.base / "store" / "python3.12") << "#!/bin/sh\n";
+    fs::permissions(d.base / "store" / "python3.12", fs::perms::owner_all);
+    fs::create_symlink(d.base / "store" / "python3.12", d.other / "venv" / "bin" / "python");
+    const std::string venvPy = (d.other / "venv" / "bin" / "python").string();
+    const Workspace::Outside venvRun = ws.judgeCommand(venvPy + " -m pytest -q");
+    EXPECT_EQ(venvRun.askPath, fs::canonical(d.other / "venv").u8string());
+    Workspace afterVenv({d.work.string()});
+    afterVenv.addRoot(venvRun.askPath);
+    EXPECT_TRUE(afterVenv.checkCommand(venvPy + " -m pytest -q").empty()) << "the environment it was asked about is open";
+#endif
 #ifdef _WIN32
     for (const char* root : {"ls C:/*", "ls C:\\*", "ls /c/*"}) {
         EXPECT_TRUE(ws.judgeCommand(root).askPath.empty()) << root;

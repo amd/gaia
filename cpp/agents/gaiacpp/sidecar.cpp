@@ -548,6 +548,7 @@ private:
         cfg.maxTokensFromWindow = true;  // GAIA_MAX_TOKENS still sets it
         cfg.replyLimitRemedy = GaiaAgent::kChatReplyLimitRemedy;
         cfg.temperature = 0.2;
+        cfg.cardSampling = true;  // the model's published sampling, as the Python agent sends
         cfg.silentMode = true;
         cfg.streaming = true;
         cfg.maxHistoryMessages = 0;  // the UI fits history to the window

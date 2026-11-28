@@ -259,6 +259,7 @@ void Agent::setTemperature(double temperature) {
         throw std::invalid_argument("temperature must be in [0.0, 2.0]");
     std::lock_guard<std::mutex> lock(configMutex_);
     config_.temperature = temperature;
+    config_.cardSampling = false;  // a chosen temperature replaces the card's sampling
 }
 
 void Agent::setDebug(bool debug) {
@@ -737,6 +738,11 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     requestBody["model"] = cfg.modelId;
     requestBody["max_tokens"] = cfg.replyTokenLimit();
     requestBody["temperature"] = cfg.temperature;
+    if (cfg.cardSampling) {
+        if (const auto sampling = knownSampling(cfg.modelId)) {
+            for (const auto& [key, value] : sampling->items()) requestBody[key] = value;
+        }
+    }
     if (const auto thinking = knownThinking(cfg.modelId)) {
         requestBody["chat_template_kwargs"] = {{"enable_thinking", *thinking}};
     }
