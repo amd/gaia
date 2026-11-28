@@ -1018,7 +1018,7 @@ bool opensQuotedPath(const std::string& s, size_t at) {
 
 bool isThirdPartyAgentAfterPassive(const std::string& text, size_t afterVerb) {
     static const std::regex byThirdParty(
-        R"(\s+by\s+(?!(?:me|us|gaia|(?:the\s+)?(?:agent|assistant|script|command|tool|code|program|python|pipeline|build|system))\b)[A-Za-z])",
+        R"(\s+by\s+(?!(?:me|us|gaia|(?:the\s+)?(?:agent|assistant|script|command|tool|code|program|python|pipeline|build|system))\b|\w+ing\b)[A-Za-z])",
         std::regex::icase);
     return std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(afterVerb), text.end(), byThirdParty,
                              std::regex_constants::match_continuous);
@@ -1030,14 +1030,14 @@ bool isThirdPartyPronoun(const std::string& w) {
     return pronouns.count(w) > 0;
 }
 
-std::string stripWordEdge(std::string w) {
+std::string stripWordEdgeRaw(std::string w) {
     auto isEdge = [](unsigned char c) { return !std::isalnum(c) && c != '_' && c != '\''; };
     while (!w.empty() && isEdge(static_cast<unsigned char>(w.front()))) w.erase(w.begin());
     while (!w.empty() && isEdge(static_cast<unsigned char>(w.back()))) w.pop_back();
-    return asciiLower(std::move(w));
+    return w;
 }
 
-std::vector<std::string> splitWords(const std::string& s) {
+std::vector<std::string> splitRawWords(const std::string& s) {
     std::vector<std::string> out;
     size_t i = 0;
     while (i < s.size()) {
@@ -1045,7 +1045,7 @@ std::vector<std::string> splitWords(const std::string& s) {
         const size_t start = i;
         while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) ++i;
         if (i > start) {
-            std::string w = stripWordEdge(s.substr(start, i - start));
+            std::string w = stripWordEdgeRaw(s.substr(start, i - start));
             if (!w.empty()) out.push_back(std::move(w));
         }
     }
@@ -1066,12 +1066,18 @@ bool isThirdPartyWrite(const std::string& text, size_t verb, size_t verbEnd) {
     }
 
     const std::string verbWord = asciiLower(text.substr(verb, verbEnd - verb));
-    std::vector<std::string> words = splitWords(text.substr(clauseStart, verb - clauseStart));
+    std::vector<std::string> rawWords = splitRawWords(text.substr(clauseStart, verb - clauseStart));
+    std::vector<std::string> words;
+    words.reserve(rawWords.size());
+    for (const auto& w : rawWords) words.push_back(asciiLower(w));
 
     static const std::set<std::string> adverbs = {
         "now", "already", "just", "also", "then", "successfully", "finally", "actually", "still", "automatically",
         "recently", "quickly", "quietly", "secretly", "carefully"};
-    while (!words.empty() && adverbs.count(words.back())) words.pop_back();
+    while (!words.empty() && adverbs.count(words.back())) {
+        words.pop_back();
+        rawWords.pop_back();
+    }
 
     static const std::set<std::string> passiveAux = {"was", "were", "is", "are", "been", "be", "got", "gets"};
     if (!words.empty() && passiveAux.count(words.back())) {
@@ -1079,7 +1085,10 @@ bool isThirdPartyWrite(const std::string& text, size_t verb, size_t verbEnd) {
     }
 
     static const std::set<std::string> perfAux = {"have", "has", "had"};
-    while (!words.empty() && (perfAux.count(words.back()) || adverbs.count(words.back()))) words.pop_back();
+    while (!words.empty() && (perfAux.count(words.back()) || adverbs.count(words.back()))) {
+        words.pop_back();
+        rawWords.pop_back();
+    }
 
     if (words.empty()) return false;
 
@@ -1089,9 +1098,10 @@ bool isThirdPartyWrite(const std::string& text, size_t verb, size_t verbEnd) {
     }
     if (isThirdPartyPronoun(last)) return true;
 
-    // Reduced passive ("File created: x.xlsx", "Report saved to out.md") names the artifact, not a third-party actor.
+    // Reduced passive ("File created: x.xlsx", "Presentation created with 5 slides in deck.pptx").
     if (verbWord != "wrote") {
-        static const std::regex reducedPassive(R"(^\s*(?::|(?:to|in|into|at|as)\b))", std::regex::icase);
+        static const std::regex reducedPassive(
+            R"(^\s*(?::|(?:to|in|into|at|as|with|for|from|using|via)\b|by\s+\w+ing\b))", std::regex::icase);
         if (std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(verbEnd), text.end(), reducedPassive,
                               std::regex_constants::match_continuous)) {
             return false;
@@ -1100,8 +1110,9 @@ bool isThirdPartyWrite(const std::string& text, size_t verb, size_t verbEnd) {
 
     static const std::set<std::string> conjunctions = {"and", "but", "or", "so", "then"};
     if (conjunctions.count(last)) {
-        const std::vector<std::string> prior = splitWords(text.substr(sentStart, clauseStart - sentStart));
-        if (!prior.empty() && isThirdPartyPronoun(prior.front())) return true;
+        const std::vector<std::string> prior = splitRawWords(text.substr(sentStart, clauseStart - sentStart));
+        if (!prior.empty() && isThirdPartyPronoun(asciiLower(prior.front()))) return true;
+        if (words.size() > 1 && isThirdPartyPronoun(words.front())) return true;
         return false;
     }
 
@@ -1113,7 +1124,21 @@ bool isThirdPartyWrite(const std::string& text, size_t verb, size_t verbEnd) {
         "file_write", "bash_execute", "file", "files",    "report",    "summary",  "output",    "result",
         "results",  "table",     "chart",     "document", "draft",     "notes",    "data",      "copy",
         "backup",   "log",       "nothing",   "none"};
-    return agentSubjects.count(last) == 0;
+    if (agentSubjects.count(last) > 0) return false;
+
+    static const std::set<std::string> determiners = {
+        "the", "a", "an", "my", "his", "her", "their", "our", "that", "this", "each", "every", "one", "some",
+        "another"};
+    if ((words.size() >= 2 && determiners.count(words[words.size() - 2])) ||
+        (words.size() >= 3 && determiners.count(words[words.size() - 3]))) {
+        return true;
+    }
+
+    const bool startsUpper = !rawWords.back().empty() &&
+                             std::isupper(static_cast<unsigned char>(rawWords.back().front())) != 0;
+    if (startsUpper && (words.size() >= 2 || verbWord == "wrote")) return true;
+
+    return false;
 }
 
 struct ExtractedPath {
@@ -1126,7 +1151,7 @@ ExtractedPath findNextClaimedPath(const std::string& prose, size_t from) {
     constexpr size_t kWindow = 180;
     const size_t limit = std::min(prose.size(), from + kWindow);
     size_t stop = from;
-    while (stop < limit && prose[stop] != '\n') ++stop;
+    while (stop < limit && prose[stop] != '\n' && !endsSentence(prose, stop)) ++stop;
     const std::string window = prose.substr(from, stop - from);
 
     ExtractedPath best;
