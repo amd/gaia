@@ -49,7 +49,7 @@ func gateError(m ChatModel) string {
 var worksOnGaiacpp = map[string]bool{
 	"/help": true, "/clear": true, "/memory": true, "/full-access": true, "/setup": true,
 	"/connectors": true, "/models": true, "/gpu": true, "/slack": true, "/discord": true,
-	"/automations": true, "/model": true, "/provider": true, "/gateway": true, "/cost": true,
+	"/automations": true, "/model": true, "/mode": true, "/provider": true, "/gateway": true, "/cost": true,
 	"/copy": true, "/copy all": true, "/read-aloud": true, "/voice": true, "/agent": true,
 	"/agents": true, "/update": true, "/quit": true,
 	"/skills": false, "/research": false, "/context": false, "/image": false,
