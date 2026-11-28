@@ -90,10 +90,23 @@ def _count(n: int, one: str, many: str) -> str:
 def native_result_summary(tool: str, data: Any) -> Optional[str]:
     """A gaiacpp tool's result in plain words, or None to summarize it generically.
 
-    *tool* is gaiacpp's own name. Failures return None: their ``error`` text is
-    already a sentence and the generic path shows it.
+    *tool* is gaiacpp's own name. Failures generally return None so the generic
+    path shows them; ``web_fetch`` returns its plain error text directly so the
+    UI does not prepend ``error: `` or clip it mid-word.
     """
-    if not isinstance(data, dict) or data.get("error"):
+    if not isinstance(data, dict):
+        return None
+    if tool == "web_fetch" and data.get("error"):
+        err = str(data["error"]).strip()
+        http_status = data.get("http_status")
+        if (
+            isinstance(http_status, int)
+            and http_status > 0
+            and str(http_status) not in err
+        ):
+            return f"HTTP {http_status}: {err}"
+        return err
+    if data.get("error"):
         return None
     path = data.get("path")
     name = str(path).replace("\\", "/").rsplit("/", 1)[-1] if path else "the file"

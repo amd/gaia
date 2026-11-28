@@ -339,9 +339,19 @@ def test_a_failed_chat_names_where_the_model_runs_not_always_the_gpu(
 _SIDECAR_WHY = "gaiacpp stopped: the tool call could not be read."
 
 
-def _failed_agent_row(monkeypatch, why=_SIDECAR_WHY):
+def _failed_agent_row(monkeypatch, why=_SIDECAR_WHY, binary="present"):
+    from pathlib import Path
+
+    from gaia.daemon.sidecars import fetch
+    from gaia.daemon.sidecars.errors import IntegrityError
     from gaia.ui import warmup
 
+    def verified():
+        if binary == "damaged":
+            raise IntegrityError("gaiacpp no longer matches its download.")
+        return Path("gaiacpp.exe") if binary == "present" else None
+
+    monkeypatch.setattr(fetch, "verified_native_flagship", verified)
     monkeypatch.setattr(warmup, "_device_for", lambda *_a: "gpu")
     monkeypatch.setattr(sr, "_agent_turn_problem", lambda _model: why)
     runner = sr.SetupRunner()
@@ -363,6 +373,33 @@ def test_a_chat_that_fails_on_gaiacpp_blames_the_agent_not_the_model(monkeypatch
     assert "could not be read. " in problem and ".." not in problem
     assert "Finish setup on the Python agent" in problem
     assert "choose another chat model" not in problem
+
+
+def test_a_missing_gaiacpp_says_so_and_carries_the_recovery(monkeypatch):
+    """#8772: the sidecar's start failure is generic, so setup names the missing binary."""
+    _save(flagship_agent="gaiacpp")
+    problem, row = _failed_agent_row(
+        monkeypatch, "GAIA's agent couldn't start.", binary="missing"
+    )
+    assert row["agent"] == "gaiacpp" and row["kind"] == "agent"
+    assert row["agent_problem"]["code"] == "gaiacpp_missing"
+    assert "not installed on this PC" in row["agent_error"]
+    assert "not installed on this PC" in problem
+    assert "Download gaiacpp again" in problem
+    assert "couldn't start" not in problem and ".." not in problem
+
+
+def test_a_damaged_gaiacpp_carries_the_recovery(monkeypatch):
+    _save(flagship_agent="gaiacpp")
+    problem, row = _failed_agent_row(monkeypatch, "it crashed", binary="damaged")
+    assert row["agent_problem"]["code"] == "gaiacpp_invalid"
+    assert "no longer matches its download" in problem
+
+
+def test_a_gaiacpp_that_is_installed_carries_no_recovery(monkeypatch):
+    _save(flagship_agent="gaiacpp")
+    _problem, row = _failed_agent_row(monkeypatch)
+    assert "agent_problem" not in row
 
 
 def test_a_model_server_outage_on_gaiacpp_is_not_blamed_on_the_agent(monkeypatch):

@@ -213,6 +213,60 @@ class TestActivityLines:
         assert handler.events[0]["tool"] == "run_shell_command"
         assert handler.events[0]["narration"] == "Running command: pytest -q"
         assert handler.events[-1]["summary"] == "3 passed"
+        assert handler.events[-1]["success"] is True
+
+    @pytest.mark.parametrize(
+        "data,summary",
+        [
+            (
+                {
+                    "stdout": "",
+                    "stderr": "ls: missing: No such file or directory",
+                    "exit_code": 1,
+                    "timed_out": False,
+                    "cwd": "/tmp",
+                },
+                "Command failed (exit 1): ls: missing: No such file or directory",
+            ),
+            (
+                {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": True,
+                    "cwd": "/tmp",
+                },
+                "Command timed out",
+            ),
+            (
+                {
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": False,
+                    "cancelled": True,
+                    "cwd": "/tmp",
+                },
+                "Command stopped",
+            ),
+        ],
+    )
+    def test_a_failed_command_step_is_marked_unsuccessful(self, data, summary):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "bash_execute",
+                "args": {"command": "ls missing"},
+            },
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": data,
+            },
+        )
+        result = handler.events[-1]
+        assert result["success"] is False
+        assert result["summary"] == summary
 
     def test_a_search_result_is_named_as_its_call_was(self):
         handler = _relay(
@@ -280,6 +334,28 @@ def test_a_finished_step_reads_in_plain_words(tool, data, summary):
 def test_a_failed_step_keeps_the_tools_own_sentence():
     data = {"error": "old_string not found in file: a.py", "replacements": 0}
     assert native_result_summary("file_edit", data) is None
+
+
+def test_a_failed_web_fetch_uses_plain_error_without_status_prefix():
+    data = {
+        "status": "error",
+        "url": "https://nonexistent.invalid/demo",
+        "error": "Could not look up nonexistent.invalid. Check the host name and network connection.",
+    }
+    assert (
+        native_result_summary("web_fetch", data)
+        == "Could not look up nonexistent.invalid. Check the host name and network connection."
+    )
+
+
+def test_a_failed_web_fetch_preserves_http_status_when_missing_from_text():
+    data = {
+        "status": "error",
+        "url": "https://example.com/private",
+        "http_status": 403,
+        "error": "Forbidden",
+    }
+    assert native_result_summary("web_fetch", data) == "HTTP 403: Forbidden"
 
 
 @pytest.fixture(scope="module")

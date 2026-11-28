@@ -3161,6 +3161,18 @@ def _listing_summary(data: Dict[str, Any]) -> str:
     return f"{display_msg}\n{listed}" if display_msg else f"Found {found}:\n{listed}"
 
 
+def _truncate_summary(text: str, limit: int = 200) -> str:
+    """Shorten *text* to at most *limit* chars on a word boundary with an ellipsis."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    if " " in cut and text[limit - 1] != " ":
+        head = cut.rsplit(" ", 1)[0].rstrip()
+        if head:
+            cut = head
+    return f"{cut}…"
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
@@ -3264,10 +3276,10 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         status = data["status"]
         # Written for the user; message may be written for the model.
         if data.get("display_message"):
-            return str(data["display_message"])[:200]
+            return _truncate_summary(str(data["display_message"]))
         msg = data.get("message", data.get("error", ""))
         if msg:
-            return f"{status}: {str(msg)[:200]}"
+            return f"{status}: {_truncate_summary(str(msg))}"
         # A bare "success" tells the user nothing. Report what came back
         # instead, when the payload carries a countable collection (#2804).
         return _count_summary(data) or str(status)

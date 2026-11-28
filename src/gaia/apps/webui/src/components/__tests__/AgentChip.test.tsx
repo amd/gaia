@@ -5,6 +5,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentChip } from '../AgentChip';
+import composerCss from '../Composer.css?raw';
 import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
@@ -71,5 +72,9 @@ describe('AgentChip', () => {
         await screen.findByRole('button', { name: 'Fast and light · Beta' });
         act(() => useActiveAgentStore.getState().setCurrent('gaiapy'));
         expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    });
+
+    it('omits English gloss inside compact agent and memory chip labels so RTL clipping never slices their start', () => {
+        expect(composerCss).toMatch(/:is\(\.composer-chip-agent,\s*\.composer-chip-memory\)\s+\.composer-chip-label\s+\.i18n-gloss\.i18n-gloss\s*\{[^}]*display:\s*none/);
     });
 });

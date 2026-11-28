@@ -2189,7 +2189,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             if (const std::optional<std::string> note = announcedStepNote(answer)) {
                 ++announcePushes;
                 if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
-                console_->printWarning("Answer sent back: " + *note);
+                console_->printAnswerRetracted("Answer sent back: " + *note);
                 Message m;
                 m.role = MessageRole::USER;
                 m.content = "[Not done yet] " + *note;
@@ -2202,7 +2202,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             const std::optional<std::string> still = unresolvedClaims(answer);
             if (!still || still->empty()) return std::nullopt;
             if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *still}});
-            console_->printWarning("Answer sent back: " + *still);
+            console_->printAnswerRetracted("Answer sent back: " + *still);
             Message m;
             m.role = MessageRole::USER;
             m.content = "[Not done yet] " + *still +
@@ -2215,7 +2215,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         if (!note) return std::nullopt;
         answerSentBack = true;
         if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
-        console_->printWarning("Answer sent back: " + *note);
+        console_->printAnswerRetracted("Answer sent back: " + *note);
         Message m;
         m.role = MessageRole::USER;
         m.content = "[Check before answering] " + *note;
@@ -2633,7 +2633,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             if (const std::optional<std::string> note = strandedCallNote(response, tools_)) {
                 strandedCallSentBack = true;
                 if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
-                console_->printWarning("Reply sent back: " + *note);
+                console_->printAnswerRetracted("Reply sent back: " + *note);
                 Message retry;
                 retry.role = MessageRole::USER;
                 retry.content = "[Not done yet] " + *note;

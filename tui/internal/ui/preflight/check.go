@@ -312,6 +312,12 @@ func modeConflictRow(cfg Config, running *string) (Row, bool) {
 	if !explicit || running == nil || *running == "" || *running == want {
 		return Row{}, false
 	}
+	// gaiacpp starts the same in either mode, so a dev request never conflicts.
+	if want == "dev" {
+		if applies, err := daemon.DevModeApplies(cfg.AgentID); err == nil && !applies {
+			return Row{}, false
+		}
+	}
 
 	envVar := daemon.ModeEnvVar(cfg.AgentID)
 	row := Row{Key: KeySidecar}
