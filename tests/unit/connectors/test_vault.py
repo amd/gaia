@@ -447,8 +447,8 @@ class TestLegacyMirrorScope:
         keyring.set_password(vault.SERVICE_NAME, username, "old-value")
         assert store.peek_secret("bg") == "old-value"
 
-        def refuse(_username, _value):
-            raise ConnectorsError("Keyring set_password failed: denied")
+        def refuse(_username, value):
+            raise ConnectorsError(f"backend-detail-text {value}")
 
         monkeypatch.setattr(store, "_kr_legacy_set", refuse)
         with caplog.at_level("WARNING", logger="gaia.connectors.vault"):
@@ -456,8 +456,39 @@ class TestLegacyMirrorScope:
 
         assert store.peek_secret("bg") == "new-value"
         assert "could not update" in caplog.text
+        assert "ConnectorsError" in caplog.text
+        # Neither the secret nor the exception message reaches the log.
         assert "new-value" not in caplog.text
+        assert "old-value" not in caplog.text
+        assert "backend-detail-text" not in caplog.text
         assert keyring.get_password(vault.SERVICE_NAME, username) == "old-value"
+
+        # Still stale, so the next save retries even with the same value.
+        monkeypatch.undo()
+        vault.put(username, "new-value", mirror=vault.MIRROR_BACKGROUND)
+        assert keyring.get_password(vault.SERVICE_NAME, username) == "new-value"
+
+    def test_vault_stores_no_digest_of_a_secret(self, _autouse_in_memory_keyring):
+        username = store._secret_username("flag")
+        keyring.set_password(vault.SERVICE_NAME, username, "legacy-val")
+        assert store.peek_secret("flag") == "legacy-val"
+        store.save_secret("flag", "next-val")
+
+        key = bytes.fromhex(
+            keyring.get_password(vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+        )
+        _, legacy_mirror = vault._decrypt_payload(key, vault.vault_path().read_bytes())
+        assert legacy_mirror == {username: "synced"}
+
+    def test_refresh_then_unchanged_user_save_brings_legacy_current(
+        self, _autouse_in_memory_keyring
+    ):
+        username = self._migrate_ms_connection("legacy-rt")
+        self._save_ms("rotated-rt", background_refresh=True)
+        assert '"legacy-rt"' in store._kr_legacy_get(username)
+        # Same value as the vault, but the legacy item is behind it.
+        self._save_ms("rotated-rt")
+        assert '"rotated-rt"' in store._kr_legacy_get(username)
 
     def test_delete_forgets_the_migration_so_a_re_save_creates_nothing(
         self, _autouse_in_memory_keyring

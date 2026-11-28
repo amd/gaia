@@ -31,14 +31,13 @@ Envelope wire format (version 1, language-neutral for C++ portability):
     bytes[19:]   = AES-256-GCM ciphertext + 16-byte tag
     AAD          = b"gaia.connections:vault:v1"
     plaintext    = UTF-8 JSON ``{"entries": {"<slot>": "<value>"}, "v": 1}``,
-                   plus ``"legacy_mirror": {"<slot>": "<sha256 hex>"}`` once a
-                   slot has been migrated from a legacy item (the hash is of
-                   the value that item holds)
+                   plus ``"legacy_mirror": {"<slot>": "synced"|"stale"}`` for
+                   slots migrated from a legacy item (whether that item still
+                   holds the vault value)
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -75,6 +74,8 @@ MIRROR_USER = "user"
 MIRROR_BACKGROUND = "background"
 MIRROR_NEVER = "never"
 _MIRROR_MODES = (MIRROR_USER, MIRROR_BACKGROUND, MIRROR_NEVER)
+_SYNCED = "synced"
+_STALE = "stale"
 
 _thread_lock = threading.Lock()
 
@@ -206,10 +207,6 @@ def _decrypt_payload(key: bytes, blob: bytes) -> tuple[Dict[str, str], Dict[str,
             "Remove the file and reconnect your accounts."
         ) from e
     return dict(raw_entries), dict(raw_mirror)
-
-
-def _value_hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _parse_master_key(raw: str) -> bytes:
@@ -498,11 +495,12 @@ def _write_entries_locked(
 ) -> tuple[bool, str, Optional[str]]:
     """Persist ``username -> value`` into ``path`` while holding ``_vault_locked``.
 
-    Returns ``(written, effective_value, mirrored_hash)``. ``mirrored_hash`` is
-    the recorded hash of what the slot's legacy item holds, or ``None`` when
-    the slot was never migrated from one. When ``only_if_absent`` is True and
-    ``username`` is already present, the existing value is kept (a slow legacy
-    migration must not overwrite a newer token) and ``written`` is False.
+    Returns ``(written, effective_value, mirror_state)``. ``mirror_state`` is
+    ``"synced"`` or ``"stale"`` for a slot migrated from a legacy item (whether
+    that item still holds the vault value), else ``None``. When
+    ``only_if_absent`` is True and ``username`` is already present, the
+    existing value is kept (a slow legacy migration must not overwrite a newer
+    token) and ``written`` is False.
 
     ``migrated_from_legacy`` marks ``value`` as just read from a legacy item,
     so later user saves keep that item current for a downgrade.
@@ -510,14 +508,15 @@ def _write_entries_locked(
     key, entries, legacy_mirror = _open_locked(
         path, preloaded_key=preloaded_key, keyring_mod=keyring_mod
     )
-    marked = False
-    if migrated_from_legacy and username not in legacy_mirror:
-        legacy_mirror[username] = _value_hash(value)
-        marked = True
     if only_if_absent and username in entries:
-        if marked:
+        if migrated_from_legacy and username not in legacy_mirror:
+            legacy_mirror[username] = _SYNCED if entries[username] == value else _STALE
             _write_private(path, _encrypt_payload(key, entries, legacy_mirror))
         return False, entries[username], legacy_mirror.get(username)
+    if migrated_from_legacy and username not in legacy_mirror:
+        legacy_mirror[username] = _SYNCED
+    elif username in legacy_mirror and entries.get(username) != value:
+        legacy_mirror[username] = _STALE
     entries[username] = value
     _write_private(path, _encrypt_payload(key, entries, legacy_mirror))
     return True, value, legacy_mirror.get(username)
@@ -539,7 +538,7 @@ def _record_mirrored_locked(
     )
     if username not in legacy_mirror or entries.get(username) != value:
         return
-    legacy_mirror[username] = _value_hash(value)
+    legacy_mirror[username] = _SYNCED
     _write_private(path, _encrypt_payload(key, entries, legacy_mirror))
 
 
@@ -590,9 +589,10 @@ def put(
     legacy item keeps that item current during the transition release:
 
     - ``MIRROR_USER`` (sign-in, API-key save, messaging setup): rewrite it if
-      the value changed; a failure raises so the user can act and retry.
-    - ``MIRROR_BACKGROUND``: rewrite it if the value changed; a failure is
-      logged as a warning and the save still succeeds.
+      it no longer matches the vault; a failure raises so the user can act and
+      retry.
+    - ``MIRROR_BACKGROUND``: rewrite it if it no longer matches the vault; a
+      failure is logged as a warning and the save still succeeds.
     - ``MIRROR_NEVER`` (background token refresh): vault only.
 
     A slot never migrated from a legacy item is never mirrored, so a fresh
@@ -622,18 +622,14 @@ def put(
             preloaded_key = _parse_master_key(raw_key)
 
     with _vault_locked():
-        _, _, mirrored_hash = _write_entries_locked(
+        _, _, mirror_state = _write_entries_locked(
             path,
             username,
             value,
             preloaded_key=preloaded_key,
             keyring_mod=keyring_mod,
         )
-    if (
-        mirror == MIRROR_NEVER
-        or mirrored_hash is None
-        or mirrored_hash == _value_hash(value)
-    ):
+    if mirror == MIRROR_NEVER or mirror_state != _STALE:
         return
     try:
         _mirror_legacy_slot(username, value, keyring_mod=keyring_mod)
@@ -644,7 +640,7 @@ def put(
                 "older per-item entry kept for downgrades (%s); the next save "
                 "retries it.",
                 username,
-                e,
+                type(e).__name__,
             )
             return
         raise ConnectorsError(
@@ -665,8 +661,12 @@ def put(
     except (ConnectorsError, OSError) as e:
         if mirror != MIRROR_BACKGROUND:
             raise
-        # Unrecorded, the next changed-value save just rewrites the item again.
-        logger.warning("Could not record the legacy mirror of %s: %s", username, e)
+        # Left "stale", so the next save just rewrites the item again.
+        logger.warning(
+            "Could not record the legacy mirror of %s (%s)",
+            username,
+            type(e).__name__,
+        )
 
 
 def get(
