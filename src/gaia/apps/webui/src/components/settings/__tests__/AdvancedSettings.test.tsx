@@ -61,13 +61,27 @@ describe('AdvancedSettings', () => {
     it('offers no local model actions for a cloud model', async () => {
         mockedApi.getSystemStatus.mockResolvedValue(status({ default_model_is_cloud: true }));
         render(<AdvancedSettings />);
-        await screen.findByText('amd.o1-mini');
+        await screen.findByText('DeepSeek-V4.1-Flash');
 
         expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
         expect(screen.queryByText('Download again')).not.toBeInTheDocument();
         expect(screen.queryByText('Device')).not.toBeInTheDocument();
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
         expect(screen.queryByText(/Expected:/)).not.toBeInTheDocument();
+    });
+
+    it.each([
+        ['another local model is loaded', 'Gemma-4-E4B-it-GGUF'],
+        ['nothing is loaded', null],
+    ])('names the cloud model chats use, not the model server\'s, when %s', async (_name, loaded) => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: true, default_model_name: 'fireworks.deepseek-v4p1-flash', model_loaded: loaded,
+        }));
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('deepseek-v4p1-flash')).toBeInTheDocument();
+        expect(screen.queryByText('Gemma-4-E4B-it-GGUF')).not.toBeInTheDocument();
+        expect(screen.queryByText(/loads with the first message/)).not.toBeInTheDocument();
     });
 
     it('rounds the GPU memory Lemonade reports', async () => {

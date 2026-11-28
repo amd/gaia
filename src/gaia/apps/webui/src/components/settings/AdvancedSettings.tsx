@@ -7,7 +7,7 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
-import { syncModelAfterSettingChange, useModelStore } from '../../stores/modelStore';
+import { displayModelName, syncModelAfterSettingChange, useModelNames, useModelStore } from '../../stores/modelStore';
 import { formatGb } from '../../utils/modelLabels';
 import { useT, type Translate } from '../../i18n/useT';
 import { isolate, type MessageKey } from '../../i18n/registry';
@@ -31,6 +31,7 @@ function customModelNote(id: string, status: ModelStatus | null | undefined): Cu
 /** Model server status and choice, context size, custom model id, beta flags, MCP status. */
 export function AdvancedSettings() {
     const t = useT();
+    useModelNames();
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
@@ -196,11 +197,11 @@ export function AdvancedSettings() {
                             {needsLocalSetup(status) && <SetUpLocalButton className="btn-primary" />}
                             <StatusRow
                                 label={t('settings.section.model')}
-                                value={status.model_loaded || t('settings.advanced.noneLoaded')}
-                                ok={!!status.model_loaded && (cloudModel || status.expected_model_loaded !== false)}
-                                hint={!status.model_loaded
+                                value={cloudModel && modelName ? displayModelName(modelName) : status.model_loaded || t('settings.advanced.noneLoaded')}
+                                ok={cloudModel ? !!modelName : !!status.model_loaded && status.expected_model_loaded !== false}
+                                hint={cloudModel ? undefined : !status.model_loaded
                                     ? t(status.lemonade_running ? 'settings.advanced.loadsFirst' : 'settings.advanced.loadsWhenBack')
-                                    : !cloudModel && status.expected_model_loaded === false
+                                    : status.expected_model_loaded === false
                                     ? t('settings.advanced.expected', { name: modelName ?? '' })
                                     : undefined}
                             />
