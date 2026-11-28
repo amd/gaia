@@ -38,6 +38,7 @@ the signature earned.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import zipfile
@@ -476,6 +477,45 @@ def _remove_staging(
         )
 
 
+def _move_aside_for_removal(root: Path, name: str, target: Path) -> Path:
+    """Rename *target* into the staging area so a removal is all or nothing."""
+    parent = root / STAGING_DIRNAME
+    parent.mkdir(parents=True, exist_ok=True)
+    retired = Path(tempfile.mkdtemp(prefix=f"{name}.removed.", dir=parent))
+    retired.rmdir()
+    try:
+        replace_retrying(target, retired)
+    except OSError as exc:
+        held = _find_held_file(target)
+        what = f"{held} is open in another program" if held else f"{exc}"
+        raise SkillInstallError(
+            f"Could not remove skill '{name}': {what}. Nothing was deleted. "
+            f"Close the program using files in {target} (an editor, a terminal "
+            "open in that folder, a running tool) and try again."
+        ) from exc
+    return retired
+
+
+def _find_held_file(directory: Path) -> Optional[Path]:
+    """The first file under *directory* that cannot be renamed, if any.
+
+    Each file is renamed to a sibling name and straight back, which Windows
+    refuses for a file another program holds open.
+    """
+    try:
+        files = [p for p in sorted(directory.rglob("*")) if p.is_file()]
+    except OSError:
+        return None
+    for path in files:
+        probe = path.with_name(path.name + ".gaia-remove-probe")
+        try:
+            os.replace(path, probe)
+        except OSError:
+            return path
+        os.replace(probe, path)
+    return None
+
+
 def _gate_tier(
     skill: Skill,
     *,
@@ -673,10 +713,22 @@ def remove_skill(name: str, *, manager: Optional[SkillManager] = None) -> Remove
 
     with SkillLock.locked(root) as lock:
         entry = lock.get(name)
-        shutil.rmtree(target)
+        # One rename takes the whole folder or none of it; rmtree alone can
+        # stop halfway on a file another program holds open (Windows).
+        retired = _move_aside_for_removal(root, name, target)
         was_locked = lock.forget(name)
         if was_locked:
             lock.save()
+    try:
+        shutil.rmtree(retired)
+    except OSError as exc:
+        log.warning(
+            "Removed skill '%s', but could not delete its old files at %s: %s. "
+            "GAIA no longer loads them; delete the folder by hand.",
+            name,
+            retired,
+            exc,
+        )
     resolver.reload()
     log.info("Removed skill '%s' from %s", name, target)
 
