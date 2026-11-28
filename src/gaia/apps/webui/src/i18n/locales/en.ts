@@ -1763,6 +1763,7 @@ export const enMessages = {
     'settings.section.advanced': 'Advanced',
     'settings.section.images': "Image creation",
     'images.settings.lede': "When you ask GAIA for a picture, it makes it on this PC with a model from Lemonade. These are the defaults; asking for a size or model in the chat still works.",
+    'images.settings.fastAgentCannot': "Fast and light can't create images, so these settings only apply to Full-featured.",
     'images.settings.chatModelCannot': "{model}, the chat model, is too small to be offered image creation, so these settings won't be used until you switch.",
     'images.settings.chooseChatModel': "Choose a chat model",
     'images.settings.modelGone': "{model} is no longer on this PC's Lemonade. Choose another model.",
@@ -2628,6 +2629,7 @@ export const enMessages = {
 
     // Settings: the other panes
     'settings.memory.lede': 'GAIA remembers facts, preferences and past conversations across chats, on this PC only. Private chats (the eye icon in a chat) are never remembered.',
+    'settings.memory.fastAgentNotice': 'Fast and light keeps a separate memory from Full-featured and searches by words rather than vectors, so embedding model settings only apply to Full-featured.',
     'settings.memory.remember': 'Remember across chats',
     'settings.memory.dashboard': 'Open the memory dashboard',
     'settings.memory.dashboardHint': 'Search, edit and forget what GAIA remembers.',
