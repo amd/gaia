@@ -2094,13 +2094,20 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         messages.push_back(msg);
     }
 
+    std::vector<Message> turnMessages = userMessages;
+    struct TurnEndGuard {
+        Agent* self;
+        ~TurnEndGuard() { self->onTurnEnd(); }
+    } turnEndGuard{this};
+    prepareTurnMessages(turnMessages);
+
     const size_t turnStart = messages.size();
     // Append caller-supplied user messages verbatim (may contain image parts).
-    for (const auto& m : userMessages) {
+    for (const auto& m : turnMessages) {
         messages.push_back(m);
     }
 
-    const std::string userInput = summarizeUserInput(userMessages);
+    const std::string userInput = summarizeUserInput(turnMessages);
     turnRequest_ = textForChecks(userInput);
     onTurnStart();
 

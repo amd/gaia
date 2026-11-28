@@ -2357,9 +2357,11 @@ TEST_F(GaiacppSidecar, NoWebLeavesOutWebFetchAndTellsTheModel) {
     ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
     const auto withheld = events.back()["withheld_tools"].get<std::vector<std::string>>();
     EXPECT_NE(std::find(withheld.begin(), withheld.end(), "web_fetch"), withheld.end()) << t.describe();
+    EXPECT_NE(std::find(withheld.begin(), withheld.end(), "web_search"), withheld.end()) << t.describe();
     const auto bodies = mock().receivedBodies();
     ASSERT_FALSE(bodies.empty());
     EXPECT_EQ(bodies.front().find("- web_fetch("), std::string::npos) << "the model isn't offered it";
+    EXPECT_EQ(bodies.front().find("- web_search("), std::string::npos) << "the model isn't offered web_search";
     EXPECT_NE(bodies.front().find("Web access is off for this run"), std::string::npos);
 }
 

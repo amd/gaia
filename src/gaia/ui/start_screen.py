@@ -43,8 +43,6 @@ class Context:
     folder_name: str
     #: The chat works in GAIA's own documents folder, not a project of the user's.
     gaia_folder: bool = False
-    #: The active flagship agent can search the web (gaiacpp cannot yet).
-    web_search: bool = True
 
 
 def _documents(ctx: Context) -> Optional[Card]:
@@ -70,9 +68,7 @@ def _inbox(ctx: Context) -> Optional[Card]:
     )
 
 
-def _research(ctx: Context) -> Optional[Card]:
-    if not ctx.web_search:
-        return None
+def _research(_ctx: Context) -> Card:
     return Card(
         "research-report",
         "Research a topic",
@@ -185,7 +181,6 @@ def _mail_connected() -> bool:
 def start_screen(db, skills: List[Dict[str, Any]], choosable: bool) -> Dict[str, Any]:
     """The cards and working folder for a new chat; *skills* is ``/api/skills``."""
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    from gaia.daemon.sidecars import fetch
 
     folder = working_folder(choosable)
     ctx = Context(
@@ -196,6 +191,5 @@ def start_screen(db, skills: List[Dict[str, Any]], choosable: bool) -> Dict[str,
         mail_connected=_mail_connected(),
         folder_name=folder["name"],
         gaia_folder=folder["gaia_folder"],
-        web_search=fetch.saved_flagship() != fetch.NATIVE_FLAGSHIP,
     )
     return {"cards": pick_cards(ctx), "working_folder": folder}

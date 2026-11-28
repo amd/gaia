@@ -373,6 +373,15 @@ protected:
     /// capture what the system prompt should hold fixed for the whole query.
     virtual void onTurnStart() {}
 
+    /// Called before userMessages are appended to conversation history and before
+    /// onTurnStart(). Override to rewrite slash commands (such as /research) into
+    /// their clean user message and per-turn prompt state.
+    virtual void prepareTurnMessages(std::vector<Message>& /*userMessages*/) {}
+
+    /// Called once when processQueryInternal exits (normal return or exception),
+    /// to clear any per-turn state installed by prepareTurnMessages().
+    virtual void onTurnEnd() {}
+
     /// Model usage this turn outside the agent's own calls (its helpers'), added to the turn's usage.
     virtual UsageStats sideUsage() const { return {}; }
 

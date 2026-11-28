@@ -124,18 +124,22 @@ describe('a new chat takes the Research choice', () => {
 });
 
 describe('ResearchChip on gaiacpp', () => {
-    it('hides the chip and does not prepend /research when gaiacpp is active', () => {
+    it('renders the chip and prepends /research when gaiacpp is active', async () => {
         useChatStore.setState({ research: { [NEW_CHAT_RESEARCH]: true } });
         useActiveAgentStore.setState({ current: 'gaiacpp' });
 
         render(<ResearchChip sessionId={null} />);
-        expect(screen.queryByRole('button', { name: 'Research' })).toBeNull();
-        expect(listSkills).not.toHaveBeenCalled();
-        expect(withResearch('best coffee roasters', null)).toBe('best coffee roasters');
+        const chip = screen.getByRole('button', { name: 'Research' });
+        expect(chip).toBeInTheDocument();
+        expect(chip).toHaveAttribute('aria-pressed', 'true');
+        await waitFor(() => expect(listSkills).toHaveBeenCalled());
+        expect(withResearch('best coffee roasters', null)).toBe('/research best coffee roasters');
         expect(researchNeedsSkills('/docx draft a memo', null)).toBe(false);
+        forgetInstalledSkills();
+        expect(researchNeedsSkills('/docx draft a memo', null)).toBe(true);
     });
 
-    it('renders the chip again when Full-featured is active', () => {
+    it('renders the chip when Full-featured is active', () => {
         useActiveAgentStore.setState({ current: 'gaiapy' });
         render(<ResearchChip sessionId={null} />);
         expect(screen.getByRole('button', { name: 'Research' })).toBeInTheDocument();

@@ -29,6 +29,7 @@ _TWINS: Dict[str, Tuple[str, Dict[str, str]]] = {
         },
     ),
     "web_fetch": ("fetch_page", {}),
+    "web_search": ("search_web", {"max_results": "num_results"}),
     "transcribe_audio": ("transcribe_media", {"path": "file_path"}),
     "search_code": ("search_code_index", {}),
 }
@@ -134,7 +135,7 @@ def native_result_summary(tool: str, data: Any) -> Optional[str]:
         if data.get("already_declined") is True:
             return "Not run (declined earlier)"
         return "Declined by user"
-    if tool == "web_fetch" and data.get("error"):
+    if tool in ("web_fetch", "web_search") and data.get("error"):
         err = str(data["error"]).strip()
         http_status = data.get("http_status")
         if (
@@ -166,6 +167,11 @@ def native_result_summary(tool: str, data: Any) -> Optional[str]:
         cut = ", shortened" if data.get("truncated") else ""
         read = _count(data["total_chars"], "character", "characters")
         return f"Read {read} from the page{cut}"
+    if tool == "web_search" and isinstance(data.get("results"), list):
+        found = len(data["results"])
+        if found == 0:
+            return "No results found"
+        return f"Found {_count(found, 'result', 'results')}"
     return None
 
 
