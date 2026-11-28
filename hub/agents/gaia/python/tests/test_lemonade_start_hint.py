@@ -21,6 +21,7 @@ from gaiapy import caller_auth  # noqa: E402
 from gaiapy import server as server_mod  # noqa: E402
 from gaiapy import stdio as stdio_mod  # noqa: E402
 
+from gaia.agents.base import model_switch  # noqa: E402
 from gaia.llm.lemonade_launcher import StartHint  # noqa: E402
 
 _REMOVED_CLI = "lemonade-server serve"
@@ -159,9 +160,9 @@ def test_unknown_model_error_names_the_host_pull_instruction(monkeypatch):
     The "no models" branch used to hard-code ``lemonade-server pull``, the
     other half of the CLI Lemonade 10.7/10.8 removed.
     """
-    monkeypatch.setattr(stdio_mod, "_lemonade_models", lambda base_url: [])
+    monkeypatch.setattr(model_switch, "_lemonade_models", lambda base_url: [])
     monkeypatch.setattr(
-        stdio_mod,
+        model_switch,
         "describe_client_hint",
         lambda action, model: StartHint(
             instruction=f"Run: lemonade {action} {model}.",
@@ -184,7 +185,7 @@ def test_unknown_model_error_is_resolved_not_hard_coded(monkeypatch):
     tell is not that command's absence — it is that the model name is
     substituted. The hard-coded copy emitted a literal ``<model>``.
     """
-    monkeypatch.setattr(stdio_mod, "_lemonade_models", lambda base_url: [])
+    monkeypatch.setattr(model_switch, "_lemonade_models", lambda base_url: [])
 
     with pytest.raises(RuntimeError) as exc:
         stdio_mod._apply_local_switch(_fake_agent(), "Gemma-4-E4B-it-GGUF")
