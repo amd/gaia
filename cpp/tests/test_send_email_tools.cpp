@@ -12,8 +12,10 @@
 
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <random>
 #include <regex>
+#include <vector>
 
 #include "gaia/connectors.h"
 #include "gaia/email_tools.h"
@@ -95,10 +97,12 @@ struct Router {
     json routes;
     std::vector<int> used;
     json writes = json::array();
+    std::mutex mu;  // Gmail fetches message details on several threads at once
 
     explicit Router(json r) : routes(std::move(r)), used(routes.size(), 0) {}
 
     HttpResponse operator()(const mail::HttpCall& call) {
+        std::lock_guard<std::mutex> lock(mu);
         const std::string path = pathOf(call.url);
         if (call.method != "GET") {
             writes.push_back({{"method", call.method},
@@ -339,4 +343,32 @@ TEST_F(SendEmailToolsTest, TheRegistryRefusesTheToolsUntilTheSkillLoads) {
 TEST_F(SendEmailToolsTest, ACardForACallThatWasNeverPreparedIsAnError) {
     build();
     EXPECT_THROW(tool("send_now").promptArgs({{"to", "dana@example.com"}}), std::logic_error);
+}
+
+TEST_F(SendEmailToolsTest, AddressesPythonsMimeRefusesAreRefusedBeforeTheCard) {
+    const json& c = caseNamed("gmail_send_now");
+    connect(c["connections"], c["grants"]);
+    router = std::make_shared<Router>(c["routes"]);
+    build();
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"a..b@x.com", "local-part"},       {".a@x.com", "local-part"},  {"a.@x.com", "local-part"},
+        {"a\\b@x.com", "local-part"},       {"bob@x.com.", "domain"},    {"bob@.x.com", "domain"},
+        {"bob@x..com", "domain"},           {"bob@x\\y.com", "domain"},  {"=?utf-8?q?x?=@y.com", "local-part"},
+        {"=?utf-8?q?x?=b@y.com", "local-part"}, {"bob@=?utf-8?q?x?=.com", "domain"},
+    };
+    for (const auto& [address, part] : cases) {
+        SCOPED_TRACE(address);
+        const json got = run("send_now", {{"to", address}, {"subject", "s"}, {"body", "b"}}, "all");
+        ASSERT_TRUE(got["preflight"].is_object()) << got.dump(1);
+        const std::string error = got["preflight"].value("error", "");
+        EXPECT_NE(error.find("`to` has an address that can't be sent to"), std::string::npos) << error;
+        EXPECT_NE(error.find(part + " is not"), std::string::npos) << error;
+        EXPECT_TRUE(got["writes"].empty());
+    }
+    for (const std::string address : {"=?abc@x.com", "=?a?b?=@x.com", "a.=?utf-8?q?x?=@y.com", "bob@x_y.com",
+                                      "x!#$%&'*+/=?^_`{|}~-@y.com", "a@b"}) {
+        SCOPED_TRACE(address);
+        const json got = run("send_now", {{"to", address}, {"subject", "s"}, {"body", "b"}}, "preflight");
+        EXPECT_TRUE(got["preflight"].is_null()) << "Python sends this one: " << got.dump(1);
+    }
 }

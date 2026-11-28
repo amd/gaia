@@ -145,6 +145,26 @@ GMAIL_HTML = {
         ],
     },
 }
+GMAIL_HTML_ODD = {
+    "id": "msg6",
+    "threadId": "thr6",
+    "internalDate": "1788000300000",
+    "payload": {
+        "mimeType": "multipart/mixed",
+        "headers": headers(
+            From="Kit <kit@example.com>", To="me@example.com", Subject="Odd markup"
+        ),
+        "parts": [
+            text_part(
+                "<p>Kept</ >text</>here</1>.<!-->x<!--->y<!-- c --!>z"
+                "<xmp><b>&amp;</xmp><textarea>&lt;t&gt;</textarea >"
+                "<title>T<p>U</title/><script src=x/>gone</script><p b=c/>w"
+                "<a b'c>d'>e</p",
+                "text/html",
+            )
+        ],
+    },
+}
 GMAIL_THREAD = {
     "id": "msg5",
     "threadId": "thr5",
@@ -227,6 +247,7 @@ def gmail_base():
         get(f"{G}/messages/msg3", GMAIL_HTML),
         get(f"{G}/messages/msg4", GMAIL_NOBODY),
         get(f"{G}/messages/msg5", GMAIL_THREAD),
+        get(f"{G}/messages/msg6", GMAIL_HTML_ODD),
         get(f"{G}/drafts", {}),
         get(f"{G}/drafts/d1", gmail_draft("d1")),
         get(f"{G}/drafts/d3", GMAIL_MULTIPART),
@@ -413,6 +434,41 @@ gmail_case(
             subject="bad =?utf-8?q?=ZZhex?= =?utf-8?q?caf=C3=A9?=",
             body="ascii",
         ),
+        call(
+            "send_now",
+            to='"Smith," <u0@x.com>, '
+            + "x" * 40
+            + ' <u1@x.com>, "\\" '
+            + "ü" * 30
+            + '" <u2@x.com>',
+            subject="a folded word that started on a line the folder had already left",
+            body="b",
+        ),
+        call(
+            "send_now",
+            to="dana@example.com",
+            bcc="x" * 80 + " <b1@z.net>",
+            subject="a line already past the limit has no room left",
+            body="b",
+        ),
+        call(
+            "send_now",
+            to="dana@example.com",
+            subject='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 中文aa\') éa中文"é-    é:中文;,Bob:\\,\\("',
+            body="two encoded words the folder wrote side by side",
+        ),
+        call(
+            "send_now",
+            to="dana@example.com",
+            subject="=?utf-8?q?a=ZZ?= =?utf-8?b?SGk?= =?iso-8859-1?q?caf=E9?= =?UTF8?Q?x?= =?koi8-r?q?x?=",
+            body="encoded words Python reads in a subject",
+        ),
+        call(
+            "send_now",
+            to="dana@example.com",
+            subject="=?utf-8?q?no_space?=next a=?utf-8?q?x?=b \u00a0 =?utf-8?b?w6k=?=",
+            body="encoded words touching other text",
+        ),
     ],
 )
 
@@ -504,6 +560,7 @@ gmail_case(
         ),
         call("reply_to_message", message_id="bad id!", body="x"),
         call("forward_message", message_id="msg3", to="boss@example.com", note="FYI"),
+        call("forward_message", message_id="msg6", to="boss@example.com"),
         call(
             "forward_message",
             message_id="msg1",

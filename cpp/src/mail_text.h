@@ -38,6 +38,8 @@ std::string lower(const std::string& text);  // str.lower
 std::string strip(const std::string& text);  // str.strip()
 std::vector<std::string> split(const std::string& text);       // str.split()
 std::vector<std::string> splitlines(const std::string& text);  // str.splitlines()
+std::string join(const std::vector<std::string>& items, const std::string& sep);  // sep.join(items)
+bool isAscii(const std::string& bytes);  // str.isascii()
 std::string htmlUnescape(const std::string& text);              // html.unescape
 /// repr() of a JSON value the way Python prints the same value.
 std::string pyRepr(const json& value);

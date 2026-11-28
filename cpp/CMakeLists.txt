@@ -299,6 +299,8 @@ add_library(gaia_core
     src/mail_graph.cpp
     src/connect_card.cpp
     src/email_tools.cpp
+    src/mail_html.cpp
+    src/mail_mime.cpp
     src/mail_outgoing.cpp
     src/send_email_tools.cpp
 )

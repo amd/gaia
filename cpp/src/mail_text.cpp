@@ -723,4 +723,14 @@ std::string textField(const json& obj, const char* key) {
     return it->get<std::string>();
 }
 
+std::string join(const std::vector<std::string>& items, const std::string& sep) {
+    std::string out;
+    for (size_t i = 0; i < items.size(); ++i) out += (i ? sep : "") + items[i];
+    return out;
+}
+
+bool isAscii(const std::string& bytes) {
+    return std::all_of(bytes.begin(), bytes.end(), [](char c) { return static_cast<unsigned char>(c) < 0x80; });
+}
+
 }  // namespace gaia::mail::text

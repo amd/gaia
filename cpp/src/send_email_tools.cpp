@@ -134,38 +134,19 @@ std::vector<std::string> requestScopes(const std::string& provider, Operation op
     return needed;
 }
 
-connect::ConnectFault faultOf(std::exception_ptr error) {
+connect::ConnectFault faultOf(const std::exception& error) {
     connect::ConnectFault fault;
-    try {
-        std::rethrow_exception(error);
-    } catch (const mail::MailboxError& e) {
-        fault.connect = e.connect;
-        fault.reconnect = e.reconnect;
-        fault.scopes = e.scopes;
-        fault.setup = e.setup;
-    } catch (...) {
+    if (const auto* e = dynamic_cast<const mail::MailboxError*>(&error)) {
+        fault.connect = e->connect;
+        fault.reconnect = e->reconnect;
+        fault.scopes = e->scopes;
+        fault.setup = e->setup;
     }
     return fault;
 }
 
-std::string messageOf(std::exception_ptr error) {
-    try {
-        std::rethrow_exception(error);
-    } catch (const std::exception& e) {
-        return e.what();
-    } catch (...) {
-        return "unknown error";
-    }
-}
-
-bool isOutcomeUnknown(std::exception_ptr error) {
-    try {
-        std::rethrow_exception(error);
-    } catch (const mail::MailboxOutcomeUnknown&) {
-        return true;
-    } catch (...) {
-        return false;
-    }
+bool isOutcomeUnknown(const std::exception& error) {
+    return dynamic_cast<const mail::MailboxOutcomeUnknown*>(&error) != nullptr;
 }
 
 // ---- arguments ----
@@ -222,18 +203,18 @@ struct SendEmailTools::State {
                                    : mail::makeOutlookWriteBackend(token, email->transport());
     }
 
-    json withCard(json payload, std::exception_ptr error) {
+    json withCard(json payload, const std::exception& error) {
         connect::withConnectCard(payload, faultOf(error), EmailTools::kAgentId, surface(), kSendScopes);
         return payload;
     }
 
-    json fail(std::exception_ptr error, const std::string& action, json extra = json::object()) {
-        json payload{{"error", messageOf(error)}, {"action", action}, {"success", false}};
+    json fail(const std::exception& error, const std::string& action, json extra = json::object()) {
+        json payload{{"error", error.what()}, {"action", action}, {"success", false}};
         for (auto it = extra.begin(); it != extra.end(); ++it) payload[it.key()] = it.value();
         return withCard(std::move(payload), error);
     }
 
-    json sendFailed(std::exception_ptr error, const std::string& tool, const std::string& key) {
+    json sendFailed(const std::exception& error, const std::string& tool, const std::string& key) {
         if (!isOutcomeUnknown(error)) return fail(error, tool, {{"sent", false}});
         uncertain.insert(key);
         return fail(error, tool,
@@ -347,8 +328,8 @@ struct SendEmailTools::State {
         try {
             const json drafts = email->listDrafts(limitArg(a));
             return {{"success", true}, {"count", drafts.size()}, {"drafts", drafts}};
-        } catch (...) {
-            return fail(std::current_exception(), "list_drafts");
+        } catch (const std::exception& e) {
+            return fail(e, "list_drafts");
         }
     }
 
@@ -376,8 +357,8 @@ struct SendEmailTools::State {
             }
             message = outgoing::checked(message);
             return draftResult(w->createDraft(message), message);
-        } catch (...) {
-            return fail(std::current_exception(), "create_draft");
+        } catch (const std::exception& e) {
+            return fail(e, "create_draft");
         }
     }
 
@@ -394,8 +375,8 @@ struct SendEmailTools::State {
             }
             w->updateDraft(draftId, approved);
             return draftResult(draftId, approved);
-        } catch (...) {
-            return fail(std::current_exception(), "update_draft");
+        } catch (const std::exception& e) {
+            return fail(e, "update_draft");
         }
     }
 
@@ -405,8 +386,8 @@ struct SendEmailTools::State {
             const OutgoingMessage approved = takePrepared("discard_draft", key);
             approvedWriter(Operation::Draft, approved)->discardDraft(draftId);
             return {{"success", true}, {"discarded", draftId}};
-        } catch (...) {
-            return fail(std::current_exception(), "discard_draft");
+        } catch (const std::exception& e) {
+            return fail(e, "discard_draft");
         }
     }
 
@@ -422,8 +403,8 @@ struct SendEmailTools::State {
                                          "send-email/send_draft again to show the current version.");
             }
             return sent(w->sendDraft(draftId), approved);
-        } catch (...) {
-            return sendFailed(std::current_exception(), "send_draft", key);
+        } catch (const std::exception& e) {
+            return sendFailed(e, "send_draft", key);
         }
     }
 
@@ -432,8 +413,8 @@ struct SendEmailTools::State {
         try {
             const OutgoingMessage approved = takePrepared(tool, key);
             return sent(approvedWriter(Operation::Send, approved)->send(approved), approved);
-        } catch (...) {
-            return sendFailed(std::current_exception(), tool, key);
+        } catch (const std::exception& e) {
+            return sendFailed(e, tool, key);
         }
     }
 };
@@ -479,9 +460,8 @@ void SendEmailTools::registerAll(ToolRegistry& registry) {
                     // Deleting needs no sendable message: a disguised draft must stay removable.
                     if (willSend) message = outgoing::checked(message);
                     message.sender = state->email->accountLabel();
-                } catch (...) {
-                    return state->withCard({{"status", "error"}, {"error", messageOf(std::current_exception())}},
-                                           std::current_exception());
+                } catch (const std::exception& e) {
+                    return state->withCard({{"status", "error"}, {"error", e.what()}}, e);
                 }
                 state->prepared[callKey(tool, params, args)] = std::move(message);
                 return std::nullopt;

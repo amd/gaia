@@ -18,6 +18,7 @@
 #include <thread>
 
 #include "lower_ascii.h"
+#include "mail_mime.h"
 #include "mail_outgoing.h"
 
 namespace gaia::mail {
@@ -1066,7 +1067,7 @@ OutgoingMessage draftMessage(const json& draft) {
 }
 
 json messageResource(const OutgoingMessage& message) {
-    json resource = {{"raw", outgoing::rawMime(message)}};
+    json resource = {{"raw", mime::raw(message)}};
     if (message.threadId && !message.threadId->empty()) resource["threadId"] = *message.threadId;
     return resource;
 }

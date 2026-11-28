@@ -448,6 +448,41 @@
     },
     {
      "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "method": "GET",
      "path": "/gmail/v1/users/me/drafts",
      "status": 200,
      "json": {}
@@ -749,6 +784,52 @@
       "to": "dana@example.com",
       "subject": "bad =?utf-8?q?=ZZhex?= =?utf-8?q?caf=C3=A9?=",
       "body": "ascii"
+     },
+     "stage": "all"
+    },
+    {
+     "tool": "send_now",
+     "args": {
+      "to": "\"Smith,\" <u0@x.com>, xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx <u1@x.com>, \"\\\" üüüüüüüüüüüüüüüüüüüüüüüüüüüüüü\" <u2@x.com>",
+      "subject": "a folded word that started on a line the folder had already left",
+      "body": "b"
+     },
+     "stage": "all"
+    },
+    {
+     "tool": "send_now",
+     "args": {
+      "to": "dana@example.com",
+      "bcc": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx <b1@z.net>",
+      "subject": "a line already past the limit has no room left",
+      "body": "b"
+     },
+     "stage": "all"
+    },
+    {
+     "tool": "send_now",
+     "args": {
+      "to": "dana@example.com",
+      "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 中文aa') éa中文\"é-    é:中文;,Bob:\\,\\(\"",
+      "body": "two encoded words the folder wrote side by side"
+     },
+     "stage": "all"
+    },
+    {
+     "tool": "send_now",
+     "args": {
+      "to": "dana@example.com",
+      "subject": "=?utf-8?q?a=ZZ?= =?utf-8?b?SGk?= =?iso-8859-1?q?caf=E9?= =?UTF8?Q?x?= =?koi8-r?q?x?=",
+      "body": "encoded words Python reads in a subject"
+     },
+     "stage": "all"
+    },
+    {
+     "tool": "send_now",
+     "args": {
+      "to": "dana@example.com",
+      "subject": "=?utf-8?q?no_space?=next a=?utf-8?q?x?=b   =?utf-8?b?w6k=?=",
+      "body": "encoded words touching other text"
      },
      "stage": "all"
     }
@@ -1075,6 +1156,165 @@
        }
       }
      ]
+    },
+    {
+     "preflight": null,
+     "prompt": {
+      "_exact_text": "From: me@example.com (Google)\nTo: \"Smith,\" <u0@x.com>, \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" <u1@x.com>, \"\" üüüüüüüüüüüüüüüüüüüüüüüüüüüüüü\" <u2@x.com>\nSubject: a folded word that started on a line the folder had already left\n\nb"
+     },
+     "result": {
+      "success": true,
+      "sent": true,
+      "message_id": "sent2",
+      "thread_id": null,
+      "to": [
+       "\"Smith,\" <u0@x.com>",
+       "\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" <u1@x.com>",
+       "\"\" üüüüüüüüüüüüüüüüüüüüüüüüüüüüüü\" <u2@x.com>"
+      ],
+      "cc": [],
+      "bcc": [],
+      "subject": "a folded word that started on a line the folder had already left",
+      "body": "b",
+      "attachments": [],
+      "attachments_left_out": []
+     },
+     "writes": [
+      {
+       "method": "POST",
+       "path": "/gmail/v1/users/me/messages/send",
+       "json": {
+        "mime": "To: \"Smith,\" <u0@x.com>, xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx <u1@x.com>, \r\n =?utf-8?q?=22?= =?utf-8?b?w7zDvMO8w7zDvMO8w7zDvMO8w7zDvMO8w7zDvMO8w7zDvMO8?=\r\n =?utf-8?b?w7zDvMO8w7zDvMO8w7zDvMO8w7zDvMO8?= <u2@x.com>\r\nSubject: a folded word that started on a line the folder had already left\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nb\r\n",
+        "raw_is_base64url": true
+       }
+      }
+     ]
+    },
+    {
+     "preflight": null,
+     "prompt": {
+      "_exact_text": "From: me@example.com (Google)\nTo: dana@example.com\nBcc: \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" <b1@z.net>\nSubject: a line already past the limit has no room left\n\nb"
+     },
+     "result": {
+      "success": true,
+      "sent": true,
+      "message_id": "sent2",
+      "thread_id": null,
+      "to": [
+       "dana@example.com"
+      ],
+      "cc": [],
+      "bcc": [
+       "\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" <b1@z.net>"
+      ],
+      "subject": "a line already past the limit has no room left",
+      "body": "b",
+      "attachments": [],
+      "attachments_left_out": []
+     },
+     "writes": [
+      {
+       "method": "POST",
+       "path": "/gmail/v1/users/me/messages/send",
+       "json": {
+        "mime": "To: dana@example.com\r\nBcc:\r\n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n <b1@z.net>\r\nSubject: a line already past the limit has no room left\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nb\r\n",
+        "raw_is_base64url": true
+       }
+      }
+     ]
+    },
+    {
+     "preflight": null,
+     "prompt": {
+      "_exact_text": "From: me@example.com (Google)\nTo: dana@example.com\nSubject: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 中文aa') éa中文\"é-    é:中文;,Bob:\\,\\(\"\n\ntwo encoded words the folder wrote side by side"
+     },
+     "result": {
+      "success": true,
+      "sent": true,
+      "message_id": "sent2",
+      "thread_id": null,
+      "to": [
+       "dana@example.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 中文aa') éa中文\"é-    é:中文;,Bob:\\,\\(\"",
+      "body": "two encoded words the folder wrote side by side",
+      "attachments": [],
+      "attachments_left_out": []
+     },
+     "writes": [
+      {
+       "method": "POST",
+       "path": "/gmail/v1/users/me/messages/send",
+       "json": {
+        "mime": "To: dana@example.com\r\nSubject: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx =?utf-8?b?5Lit5paHYWEnKQ==?=\r\n =?utf-8?b?IMOpYeS4reaWhyLDqS0gICAgw6k65Lit5paHOyxCb2I6XCxcKCI=?=\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\ntwo encoded words the folder wrote side by side\r\n",
+        "raw_is_base64url": true
+       }
+      }
+     ]
+    },
+    {
+     "preflight": null,
+     "prompt": {
+      "_exact_text": "From: me@example.com (Google)\nTo: dana@example.com\nSubject: =?utf-8?q?a=ZZ?= =?utf-8?b?SGk?= =?iso-8859-1?q?caf=E9?= =?UTF8?Q?x?= =?koi8-r?q?x?=\n\nencoded words Python reads in a subject"
+     },
+     "result": {
+      "success": true,
+      "sent": true,
+      "message_id": "sent2",
+      "thread_id": null,
+      "to": [
+       "dana@example.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "subject": "=?utf-8?q?a=ZZ?= =?utf-8?b?SGk?= =?iso-8859-1?q?caf=E9?= =?UTF8?Q?x?= =?koi8-r?q?x?=",
+      "body": "encoded words Python reads in a subject",
+      "attachments": [],
+      "attachments_left_out": []
+     },
+     "writes": [
+      {
+       "method": "POST",
+       "path": "/gmail/v1/users/me/messages/send",
+       "json": {
+        "mime": "To: dana@example.com\r\nSubject: a=ZZHi=?utf-8?q?caf=C3=A9?=xx\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nencoded words Python reads in a subject\r\n",
+        "raw_is_base64url": true
+       }
+      }
+     ]
+    },
+    {
+     "preflight": null,
+     "prompt": {
+      "_exact_text": "From: me@example.com (Google)\nTo: dana@example.com\nSubject: =?utf-8?q?no_space?=next a=?utf-8?q?x?=b   =?utf-8?b?w6k=?=\n\nencoded words touching other text"
+     },
+     "result": {
+      "success": true,
+      "sent": true,
+      "message_id": "sent2",
+      "thread_id": null,
+      "to": [
+       "dana@example.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "subject": "=?utf-8?q?no_space?=next a=?utf-8?q?x?=b   =?utf-8?b?w6k=?=",
+      "body": "encoded words touching other text",
+      "attachments": [],
+      "attachments_left_out": []
+     },
+     "writes": [
+      {
+       "method": "POST",
+       "path": "/gmail/v1/users/me/messages/send",
+       "json": {
+        "mime": "To: dana@example.com\r\nSubject: no spacenext axb =?utf-8?b?wqAgw6k=?=\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nencoded words touching other text\r\n",
+        "raw_is_base64url": true
+       }
+      }
+     ]
     }
    ]
   },
@@ -1288,6 +1528,41 @@
        "body": {
         "data": "TG9uZyB0aHJlYWQu"
        }
+      }
+     }
+    },
+    {
+     "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
       }
      }
     },
@@ -2004,6 +2279,41 @@
     },
     {
      "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "method": "GET",
      "path": "/gmail/v1/users/me/drafts",
      "status": 200,
      "json": {}
@@ -2671,6 +2981,41 @@
     },
     {
      "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "method": "GET",
      "path": "/gmail/v1/users/me/drafts",
      "status": 200,
      "json": {}
@@ -2954,6 +3299,14 @@
     {
      "tool": "forward_message",
      "args": {
+      "message_id": "msg6",
+      "to": "boss@example.com"
+     },
+     "stage": "all"
+    },
+    {
+     "tool": "forward_message",
+     "args": {
       "message_id": "msg1",
       "to": "lee@example.com",
       "cc": "kit@example.com"
@@ -3174,6 +3527,37 @@
        "path": "/gmail/v1/users/me/messages/send",
        "json": {
         "mime": "To: boss@example.com\r\nSubject: Fwd: Invoice 4471\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\nFYI\r\n\r\n----- Forwarded message -----\r\nFrom: \"Acme Billing\" <billing@acme.com>\r\nDate: 2026-08-29T10:43:20Z\r\nSubject: Invoice 4471\r\nTo: me@example.com\r\n\r\nTotal: £120\r\nDue Friday\r\n\r\nOne\r\nTwo\r\n",
+        "raw_is_base64url": true
+       }
+      }
+     ]
+    },
+    {
+     "preflight": null,
+     "prompt": {
+      "_exact_text": "From: me@example.com (Google)\nTo: boss@example.com\nSubject: Fwd: Odd markup\n\n----- Forwarded message -----\nFrom: \"Kit\" <kit@example.com>\nDate: 2026-08-29T10:45:00Z\nSubject: Odd markup\nTo: me@example.com\n\nKepttexthere.yz<b>&amp;<t>\nwd'>e"
+     },
+     "result": {
+      "success": true,
+      "sent": true,
+      "message_id": "sent2",
+      "thread_id": null,
+      "to": [
+       "boss@example.com"
+      ],
+      "cc": [],
+      "bcc": [],
+      "subject": "Fwd: Odd markup",
+      "body": "----- Forwarded message -----\nFrom: \"Kit\" <kit@example.com>\nDate: 2026-08-29T10:45:00Z\nSubject: Odd markup\nTo: me@example.com\n\nKepttexthere.yz<b>&amp;<t>\nwd'>e",
+      "attachments": [],
+      "attachments_left_out": []
+     },
+     "writes": [
+      {
+       "method": "POST",
+       "path": "/gmail/v1/users/me/messages/send",
+       "json": {
+        "mime": "To: boss@example.com\r\nSubject: Fwd: Odd markup\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\n----- Forwarded message -----\r\nFrom: \"Kit\" <kit@example.com>\r\nDate: 2026-08-29T10:45:00Z\r\nSubject: Odd markup\r\nTo: me@example.com\r\n\r\nKepttexthere.yz<b>&amp;<t>\r\nwd'>e\r\n",
         "raw_is_base64url": true
        }
       }
@@ -3488,6 +3872,41 @@
        "body": {
         "data": "TG9uZyB0aHJlYWQu"
        }
+      }
+     }
+    },
+    {
+     "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
       }
      }
     },
@@ -4660,6 +5079,41 @@
     },
     {
      "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "method": "GET",
      "path": "/gmail/v1/users/me/drafts",
      "status": 200,
      "json": {}
@@ -5163,6 +5617,41 @@
        "body": {
         "data": "TG9uZyB0aHJlYWQu"
        }
+      }
+     }
+    },
+    {
+     "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
       }
      }
     },
@@ -5689,6 +6178,41 @@
     },
     {
      "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "method": "GET",
      "path": "/gmail/v1/users/me/drafts",
      "status": 200,
      "json": {}
@@ -6177,6 +6701,41 @@
        "body": {
         "data": "TG9uZyB0aHJlYWQu"
        }
+      }
+     }
+    },
+    {
+     "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
       }
      }
     },
@@ -6697,6 +7256,41 @@
        "body": {
         "data": "TG9uZyB0aHJlYWQu"
        }
+      }
+     }
+    },
+    {
+     "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
       }
      }
     },
@@ -7238,6 +7832,41 @@
        "body": {
         "data": "TG9uZyB0aHJlYWQu"
        }
+      }
+     }
+    },
+    {
+     "method": "GET",
+     "path": "/gmail/v1/users/me/messages/msg6",
+     "status": 200,
+     "json": {
+      "id": "msg6",
+      "threadId": "thr6",
+      "internalDate": "1788000300000",
+      "payload": {
+       "mimeType": "multipart/mixed",
+       "headers": [
+        {
+         "name": "From",
+         "value": "Kit <kit@example.com>"
+        },
+        {
+         "name": "To",
+         "value": "me@example.com"
+        },
+        {
+         "name": "Subject",
+         "value": "Odd markup"
+        }
+       ],
+       "parts": [
+        {
+         "mimeType": "text/html",
+         "body": {
+          "data": "PHA-S2VwdDwvID50ZXh0PC8-aGVyZTwvMT4uPCEtLT54PCEtLS0-eTwhLS0gYyAtLSE-ejx4bXA-PGI-JmFtcDs8L3htcD48dGV4dGFyZWE-Jmx0O3QmZ3Q7PC90ZXh0YXJlYSA-PHRpdGxlPlQ8cD5VPC90aXRsZS8-PHNjcmlwdCBzcmM9eC8-Z29uZTwvc2NyaXB0PjxwIGI9Yy8-dzxhIGInYz5kJz5lPC9w"
+         }
+        }
+       ]
       }
      }
     },

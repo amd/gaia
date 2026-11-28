@@ -440,10 +440,14 @@ Transport httpsTransport() {
         }
 
         auto cli = pool->take(t);
+        const auto started = std::chrono::steady_clock::now();
         httplib::Result result = cli->send(req);
         if (!result) {
             const httplib::Error err = result.error();
-            throw TransportError(kindOf(err), neverSent(err), describe(err, t.host));
+            // httplib reports a read that ran out of time as a plain Read error; the wait tells them apart.
+            const bool timedOut = err == httplib::Error::Read &&
+                                  std::chrono::steady_clock::now() - started >= std::chrono::seconds(kTimeoutSec);
+            throw TransportError(timedOut ? "ReadTimeout" : kindOf(err), neverSent(err), describe(err, t.host));
         }
 
         HttpResponse response;

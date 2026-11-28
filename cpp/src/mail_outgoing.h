@@ -1,9 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// src/gaia/agents/tools/_email/outgoing.py and gmail.raw_mime: building,
-// checking, showing and encoding a message on its way out. A ValueError there
-// is std::invalid_argument here, with the same wording.
+// src/gaia/agents/tools/_email/outgoing.py: building, checking and showing a
+// message on its way out; mail_mime.h encodes it. A ValueError there is
+// std::invalid_argument here, with the same wording.
 
 #pragma once
 
@@ -38,15 +38,5 @@ std::string renderPreview(const OutgoingMessage& message);
 
 /// The fields a tool result reports, so the model repeats real values.
 json describe(const OutgoingMessage& message);
-
-/// The RFC 5322 text Python's EmailMessage(policy=SMTP) writes for `message`.
-/// `boundary` is used only for a multipart message.
-std::string mimeText(const OutgoingMessage& message, const std::string& boundary);
-
-/// mimeText as the unpadded base64url Gmail's `raw` field takes, with a fresh boundary.
-std::string rawMime(const OutgoingMessage& message);
-
-/// `bytes` as base64 (standard alphabet, padded).
-std::string base64(const std::string& bytes);
 
 }  // namespace gaia::mail::outgoing
