@@ -1030,6 +1030,7 @@ export interface MessageResponse {
   content: string;
   created_at: string;
   failed?: boolean;
+  failure?: string | null;
   id: number;
   library_notices?: string[] | null;
   page_elements?: PageElement[] | null;

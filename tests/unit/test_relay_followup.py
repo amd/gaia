@@ -458,7 +458,7 @@ def test_gaiacpp_says_followups_unavailable_up_front(monkeypatch):
         )
         monkeypatch.setattr("gaia.daemon.client.deferred_restart_notice", lambda: None)
         monkeypatch.setattr(
-            chat_helpers_module, "_replay_cloud_key_for_relay", lambda *_a: None
+            chat_helpers_module, "_replay_cloud_key_for_relay", lambda *_a: True
         )
         monkeypatch.setattr("gaia.ui.sidecar.grants.reconcile", lambda *_a, **_kw: None)
         monkeypatch.setattr(

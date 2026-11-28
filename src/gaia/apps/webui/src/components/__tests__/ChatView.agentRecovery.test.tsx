@@ -149,6 +149,18 @@ describe('an open chat whose agent could not start', () => {
         expect(document.querySelector('.agent-recovery')).toBeNull();
     });
 
+    it('does not suggest Full-featured when the model, not the agent, is why the turn failed', async () => {
+        server = [question, { ...agentDown, agentProgram: 'gaiacpp', failure: 'model_unavailable' }];
+        useChatStore.setState({ messages: [...server] });
+        mockedApi.getStartScreen.mockResolvedValue({ ...MISSING, skills_error: null, agent_problem: null });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+        await act(async () => {});
+        expect(document.querySelector('.native-agent-notice')).toBeNull();
+        expect(document.querySelector('.agent-recovery')).toBeNull();
+    });
+
     it('keeps the Fast and light failure notice after a live failed turn reloads without failed flag', async () => {
         server = [];
         useChatStore.setState({ messages: [] });

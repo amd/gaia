@@ -286,6 +286,7 @@ _CHAT_SCHEMA_COLUMNS = {
         "agent_program",
         "agent_steps",
         "failed",
+        "failure",
         "inference_stats",
         "library_notices",
         "model_messages",
@@ -523,6 +524,8 @@ class ChatDatabase:
         self._add_column("messages", "agent_program", "TEXT")
         # 1 when a model failure ended this reply's turn; old rows read as not failed.
         self._add_column("messages", "failed", "INTEGER NOT NULL DEFAULT 0")
+        # The named cause of that failure (``model_server_down``), so a reload offers its fix.
+        self._add_column("messages", "failure", "TEXT")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -1018,6 +1021,7 @@ class ChatDatabase:
         stopped: bool = False,
         failed: bool = False,
         agent_program: str | None = None,
+        failure: str | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID.
 
@@ -1036,8 +1040,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary, library_notices, stopped, failed, agent_program)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped, failed, agent_program, failure)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1054,6 +1058,7 @@ class ChatDatabase:
                     int(stopped),
                     int(failed),
                     agent_program,
+                    failure if failed else None,
                 ),
             )
 
@@ -1086,6 +1091,7 @@ class ChatDatabase:
         stopped: bool = False,
         failed: bool = False,
         agent_program: str | None = None,
+        failure: str | None = None,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -1116,8 +1122,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary, library_notices, stopped, failed, agent_program)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped, failed, agent_program, failure)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1134,6 +1140,7 @@ class ChatDatabase:
                     int(stopped),
                     int(failed),
                     agent_program,
+                    failure if failed else None,
                 ),
             )
 

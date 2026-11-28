@@ -257,7 +257,7 @@ class TestGaiaDispatch:
     def _patch_cloud(self, monkeypatch, handle):
         """``_patch`` for a cloud model id, whose key replay is not under test."""
         monkeypatch.setattr(
-            chat_helpers_module, "_replay_cloud_key_for_relay", lambda *a: None
+            chat_helpers_module, "_replay_cloud_key_for_relay", lambda *a: True
         )
         return self._patch(monkeypatch, handle)
 

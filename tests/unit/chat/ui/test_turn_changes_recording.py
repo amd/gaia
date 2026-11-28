@@ -106,7 +106,7 @@ def _relay_to_a_sidecar_that_edits(monkeypatch, api_version, created, deleted):
     monkeypatch.setattr(daemon_client, "acquire_handle", lambda _agent: handle)
     monkeypatch.setattr(helpers, "_should_relay_to_sidecar", lambda *_a: True)
     monkeypatch.setattr(helpers, "_agent_type_unknown", lambda *_a: False)
-    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: None)
+    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: True)
     sent: list = []
 
     def sidecar(handler, _proxy, *, session_id=None, changes_turn_id=None, **_kw):

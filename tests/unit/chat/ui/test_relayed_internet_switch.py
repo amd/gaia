@@ -80,7 +80,7 @@ def _dispatch(monkeypatch, version, internet_off, agent_type="gaia"):
     proxy = _Proxy()
     handle = SimpleNamespace(api_version=version, proxy=lambda: proxy)
     monkeypatch.setattr(daemon_client, "acquire_handle", lambda _id: handle)
-    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: None)
+    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: True)
     handler = SSEOutputHandler()
     helpers._dispatch_sidecar_query(
         handler,
@@ -813,7 +813,7 @@ class _FlipDuringTurn(_Proxy):
 def _dispatch_old_agent(monkeypatch, relayed_db, proxy, session_id, version="2.22"):
     handle = SimpleNamespace(api_version=version, proxy=lambda: proxy)
     monkeypatch.setattr(daemon_client, "acquire_handle", lambda _id: handle)
-    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: None)
+    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: True)
     handler = SSEOutputHandler()
     helpers._active_sse_handlers[session_id] = handler
     helpers._dispatch_sidecar_query(

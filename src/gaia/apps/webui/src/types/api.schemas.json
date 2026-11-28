@@ -3467,6 +3467,17 @@
         "title": "Failed",
         "type": "boolean"
       },
+      "failure": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Failure"
+      },
       "id": {
         "title": "Id",
         "type": "integer"
