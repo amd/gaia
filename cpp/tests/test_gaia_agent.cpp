@@ -128,6 +128,24 @@ TEST(GaiaAgentTest, ExistingFileInASubfolderIsAccepted) {
     EXPECT_EQ(mock.receivedBodies().size(), 1u);
 }
 
+TEST(GaiaAgentTest, AStoryIsAnsweredInChatWithoutAFile) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    const std::string story =
+        "The Keeper of Thorn Point\n\nElias had kept the light for thirty-one years. Every evening he climbed "
+        "the one hundred and twelve steps, trimmed the wick and watched the beam sweep 19 miles out to sea.";
+    mock.pushResponse(answer(story));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("Write a 400-word story about a lighthouse keeper.");
+
+    // The story is the answer: it is not sent back for a file or for its figures.
+    EXPECT_EQ(r["result"], story);
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(system.find("a story, poem, essay, letter or explanation) goes in your reply, not in a file"),
+              std::string::npos);
+}
+
 TEST(GaiaAgentTest, ToolsAreConfinedByDefault) {
     Workdir w;
     bench::MockLlmServer mock;
