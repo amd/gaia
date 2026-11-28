@@ -109,7 +109,9 @@ def _cpp_sampling() -> dict:
     import json
 
     text = REGISTRY.read_text(encoding="utf-8")
-    body = text[text.index("kSampling = {") : text.index("for (const auto& row : kSampling)")]
+    body = text[
+        text.index("kSampling = {") : text.index("for (const auto& row : kSampling)")
+    ]
 
     def profile(literal: str):
         return None if literal == "nullptr" else json.loads(literal[3:-2])
@@ -128,7 +130,9 @@ def test_the_cpp_sampling_table_matches_python():
         model_id: (card.thinks_by_default, card.thinking, card.non_thinking)
         for model_id, card in MODEL_SAMPLING_PROFILES.items()
     }
-    assert python, "MODEL_SAMPLING_PROFILES is empty; the C++ table has nothing to mirror"
+    assert (
+        python
+    ), "MODEL_SAMPLING_PROFILES is empty; the C++ table has nothing to mirror"
     assert _cpp_sampling() == python, (
         "kSampling in cpp/src/model_registry.cpp and MODEL_SAMPLING_PROFILES "
         "differ; mirror the change in the same commit"
