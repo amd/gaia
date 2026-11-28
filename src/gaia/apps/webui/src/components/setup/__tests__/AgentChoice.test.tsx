@@ -66,7 +66,6 @@ describe('AgentChoice', () => {
             "File changes it makes can't be undone from the chat.",
             'Document search matches words, not meaning.',
             "It can't create images, transcribe audio or turn a document into speech.",
-            "It can read your email, but can't send it or use your calendar.",
             "The context meter doesn't show how full the conversation is.",
         ]);
         expect(screen.queryByText(/fewer tools and features/)).not.toBeInTheDocument();
@@ -203,6 +202,47 @@ describe('AgentChoice', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent(`Couldn't switch the agent: ${busy}`);
         await waitFor(() => expect(screen.getByRole('radio', { name: /gaiapy/ })).toHaveAttribute('aria-checked', 'true'));
         expect(mockedApi.getAgentPrograms).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ['agent_switch_chat_busy', 409, 'GAIA is answering in a chat', 'يجيب GAIA حاليًا في محادثة'],
+        ['agent_switch_setup_busy', 409, 'GAIA is still setting up', 'ما زال GAIA يكمِل الإعداد'],
+        ['gaiacpp_not_installed', 422, 'gaiacpp is not installed on this PC', 'غير مثبّت على هذا الجهاز'],
+    ] as const)('translates structured switch error %s into Arabic without leaking raw English', async (code, status, en, ar) => {
+        const raw = 'raw English from server';
+        mockedApi.updateSettings.mockRejectedValue(
+            new api.ApiError(raw, status, raw, code, [], { status: code, message: raw }),
+        );
+        const { unmount } = render(<AgentChoice inSettings />);
+        fireEvent.click(await radio(/gaiacpp/));
+        expect(await screen.findByRole('alert')).toHaveTextContent(en);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        render(<AgentChoice inSettings />);
+        fireEvent.click(await radio(/gaiacpp/));
+        const alert = await screen.findByRole('alert');
+        expect(stripIsolates(alert.textContent ?? '')).toContain(ar);
+        expect(alert.textContent).not.toContain(raw);
+    });
+
+    it('translates agent_stop_failed into Arabic while keeping the saved agent and cause', async () => {
+        const raw = 'raw stop failure from server';
+        mockedApi.updateSettings.mockRejectedValue(
+            new api.ApiError(raw, 500, raw, 'agent_stop_failed', [], {
+                status: 'agent_stop_failed', agent: 'gaiacpp', error: 'daemon offline', message: raw,
+            }),
+        );
+        mockedApi.getAgentPrograms.mockResolvedValueOnce(AGENT_PROGRAMS).mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp' });
+        useChatStore.setState({ locale: 'ar' });
+        render(<AgentChoice inSettings />);
+        fireEvent.click(await radio(/gaiacpp/));
+        const alert = await screen.findByRole('alert');
+        const text = stripIsolates(alert.textContent ?? '');
+        expect(text).toContain('تم حفظ اختيار الوكيل');
+        expect(text).toContain('gaiacpp');
+        expect(text).toContain('daemon offline');
+        expect(text).not.toContain(raw);
     });
 
     it('waits while setup is busy', async () => {

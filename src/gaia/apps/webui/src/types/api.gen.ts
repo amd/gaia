@@ -1025,6 +1025,7 @@ export interface MessageListResponse {
  * A single message.
  */
 export interface MessageResponse {
+  agent_program?: string | null;
   agent_steps?: AgentStepResponse[] | null;
   content: string;
   created_at: string;

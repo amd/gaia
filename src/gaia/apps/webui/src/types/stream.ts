@@ -63,6 +63,8 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_tools, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On a `reasoning` phase: words of reasoning streamed so far. */
+    words?: number;
     /** On a `model_queue` phase: where the turn stands in line for the model. */
     queue?: { event?: string; scope?: string; position?: number; queue_length?: number; holder?: string | null; waited_s?: number };
     /** On a `recording` phase: which stage, and how it stands. */

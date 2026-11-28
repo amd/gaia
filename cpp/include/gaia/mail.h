@@ -122,7 +122,7 @@ struct GAIA_API SourceMessage {
 // ---- HTTP ----
 
 struct HttpCall {
-    std::string method;  // GET, POST, PUT, PATCH, DELETE
+    std::string method;  // GET or POST
     std::string url;     // absolute, query string included
     HttpHeaders headers;
     std::string body;

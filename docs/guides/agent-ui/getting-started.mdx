@@ -169,9 +169,8 @@ fraction of a second and uses a few megabytes of memory, but is less tested.
 **Compare the two** under the choice lists what changes on Fast and light: its
 memory is separate from Full-featured's, file changes can't be undone from the
 chat, document search matches words and not meaning, it can't create images,
-transcribe audio or turn a document into speech, it can read your email but
-can't send it or use your calendar, and the context meter doesn't show how full
-the conversation is. Your pick is saved when you press **Continue**, before
+transcribe audio or turn a document into speech, and the context meter doesn't
+show how full the conversation is. Your pick is saved when you press **Continue**, before
 setup's test chat, so that chat talks to the agent you chose. If gaiacpp isn't
 on the PC, the **Download** step gets it first, with its own progress bar,
 while the models wait; then it becomes the agent and the models download. If
@@ -232,6 +231,11 @@ names Fast and light instead of the model, shows what the agent said went wrong,
 and offers **Finish setup on Full-featured** beside **Test again**. That button saves
 gaiapy as your agent and runs the tests again on it; setup is ready only when
 they pass. You can switch back in Settings › Agent & model.
+
+If the message fails because Fast and light's file is missing or fails its
+check, setup says so and offers the same two buttons as the new-chat screen:
+**Download gaiacpp again**, which runs the tests again once it's in, and **Use
+Full-featured**, which saves gaiapy and runs them again on it.
 
 ### If setup has trouble
 

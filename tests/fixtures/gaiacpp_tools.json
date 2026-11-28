@@ -3,6 +3,11 @@
   "tools": [
     "analyze_image",
     "bash_execute",
+    "calendar/cancel_calendar_event",
+    "calendar/check_calendar_availability",
+    "calendar/create_calendar_event",
+    "calendar/list_calendar_events",
+    "calendar/update_calendar_event",
     "check_mailbox_access",
     "delegate_task",
     "env_inspect",
@@ -52,6 +57,9 @@
   ],
   "gated": [
     "bash_execute",
+    "calendar/cancel_calendar_event",
+    "calendar/create_calendar_event",
+    "calendar/update_calendar_event",
     "file_edit",
     "file_write",
     "forget",

@@ -7,6 +7,8 @@
 
 #include <gtest/gtest.h>
 
+#include <gaia/person_approval.h>
+
 #include <algorithm>
 #include <cctype>
 #include <atomic>
@@ -261,7 +263,8 @@ json wireFixture() {
 // Keys an event of this type may carry over stdio, from the fixture.
 std::set<std::string> allowedKeys(const json& spec) {
     std::set<std::string> keys = {"type"};
-    for (const char* list : {"fields", "stdio_extension", "phase_extension", "history_cut_extension"}) {
+    for (const char* list : {"fields", "stdio_extension", "phase_extension", "history_cut_extension",
+                             "retracts_answer_extension"}) {
         if (!spec.contains(list)) continue;
         for (const auto& k : spec[list]) keys.insert(k.get<std::string>());
     }
@@ -672,6 +675,43 @@ TEST_F(GaiacppStdio, AStreamedAnswerArrivesAsTokensWithReasoningLeftOut) {
     }
     EXPECT_EQ(streamed, "Hi there");
     EXPECT_EQ(final["answer"].get<std::string>().find("secret"), std::string::npos) << final.dump();
+}
+
+TEST_F(GaiacppStdio, AnswerCheckRetractsStreamedDraftWithoutLeakingReviewPrompt) {
+    mock_.enableSseStreaming(true);
+    mock_.pushSseStream(sse({"All done: ", "I saved the summary to report.md."}));
+    mock_.pushSseStream(sse({"Correction: ", "no file was written."}));
+    Start s;
+    s.streaming = true;
+    start(s);
+    ask("summarize");
+    const json final = waitTerminal(1);
+    ASSERT_TRUE(final.is_object());
+    EXPECT_EQ(final["type"], "final") << final.dump();
+
+    const auto all = events();
+    int firstDraftToken = -1;
+    int retractIndex = -1;
+    std::string afterRetract;
+    for (size_t i = 0; i < all.size(); ++i) {
+        const auto& e = all[i];
+        if (e.value("type", "") == "status") {
+            const std::string msg = e.value("message", "");
+            EXPECT_EQ(msg.find("Answer sent back"), std::string::npos) << e.dump();
+            EXPECT_EQ(msg.find("no such file exists"), std::string::npos) << e.dump();
+            if (e.value("phase", "") == "answer_check" && e.value("retracts_answer", false)) {
+                retractIndex = static_cast<int>(i);
+                EXPECT_EQ(msg, "Checking the answer");
+            }
+        } else if (e.value("type", "") == "token") {
+            if (firstDraftToken < 0) firstDraftToken = static_cast<int>(i);
+            if (retractIndex >= 0) afterRetract += e["delta"].get<std::string>();
+        }
+    }
+    EXPECT_GE(firstDraftToken, 0);
+    EXPECT_GT(retractIndex, firstDraftToken);
+    EXPECT_EQ(afterRetract, "Correction: no file was written.");
+    EXPECT_EQ(final["answer"], "Correction: no file was written.");
 }
 
 // The model server answered; the model ran out of reply limit. Not "did not answer", and no
@@ -1196,6 +1236,38 @@ TEST_F(GaiacppStdio, FullAccessAtLaunchSkipsPrompts) {
     ASSERT_TRUE(waitTerminal(1).is_object());
     EXPECT_TRUE(fs::exists(out));
     EXPECT_EQ(count("needs_confirmation"), 0u);
+}
+
+TEST_F(GaiacppStdio, FullAccessNeverAnswersACallOnlyAPersonMayApprove) {
+    mock_.pushResponse(toolCall("book_room", {{"room", "Pay\xE2\x80\xAEroll"}}));
+    mock_.pushResponse(answer("Booked."));
+    Start s;
+    s.fullAccess = true;
+    start(s);
+    std::atomic<int> ran{0};
+    ToolInfo info;
+    info.name = "book_room";
+    info.description = "Book a room.";
+    info.parameters = {{"room", ToolParamType::STRING, true, "Room."}};
+    info.policy = ToolPolicy::CONFIRM;
+    info.personMustApprove = true;
+    info.grantScope = [](const json&) { return std::string("any"); };
+    info.promptArgs = [](const json& args) { return json{{"room", approval::visible(args.value("room", ""))}}; };
+    info.callback = [&ran](const json&) {
+        ++ran;
+        return json{{"status", "success"}};
+    };
+    agent_->toolRegistry().registerTool(std::move(info));
+    ask("book it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object()) << "full access must still ask a person";
+    EXPECT_EQ(prompt["action"], "book_room");
+    EXPECT_FALSE(prompt.contains("always_scope")) << prompt.dump();
+    EXPECT_EQ(prompt["summary"].get<std::string>().find("_needs_person"), std::string::npos) << prompt.dump();
+    EXPECT_NE(prompt["summary"].get<std::string>().find("[U+202E]"), std::string::npos) << prompt.dump();
+    decide("always", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_EQ(ran.load(), 1);
 }
 
 TEST_F(GaiacppStdio, AcceptEditsCoversEditsInTheFolderButNotHiddenOnes) {

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <gaia/agent.h>
+#include <gaia/calendar_tools.h>
 #include <gaia/document_index.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
@@ -69,7 +70,8 @@ public:
         // The front-end of the run in progress ("agent_ui", "tui", "cli"); unset = a terminal.
         // It decides how the mail tools word a missing account.
         std::function<std::string()> surface;
-        bool email = true;  // the connected mailbox's read tools
+        bool email = true;     // the connected mailbox's read tools
+        bool calendar = true;  // the calendar skill's tools, on once the skill loads
     };
 
     /// Have a host ask the user before a tool is refused a path outside the
@@ -143,7 +145,13 @@ public:
     /// command counts as a test run when it names a runner (not to install it or ask its
     /// version) or its output holds a runner's summary that the command didn't just print.
     static std::optional<std::pair<std::string, std::string>> unsupportedTestClaim(
-        const std::string& answer, const std::vector<CallSeen>& calls);
+        const std::string& answer, const std::vector<CallSeen>& calls,
+        const std::string& request = "");
+
+    /// The answer claims a shell command, script, or test ran, but no bash_execute call succeeded.
+    static std::optional<std::string> unrunCommandNote(const std::string& request,
+                                                       const std::string& answer,
+                                                       const std::vector<CallSeen>& calls);
 
     /// A file or page the turn read holds text addressed to an AI assistant, and
     /// the answer doesn't tell the user about it.
@@ -254,6 +262,7 @@ private:
     /// folder it had drifted to, "" when it was inside.
     static std::string returnShellInside(const Workspace& ws, ShellSession& session);
     bool memoryOff() const { return options_.memoryOff && options_.memoryOff->load(); }
+    bool memoryPrivate() const { return options_.memoryPrivate && options_.memoryPrivate->load(); }
 
     Options options_;
     mutable std::mutex turnListingMu_;
@@ -262,11 +271,15 @@ private:
     std::set<std::string> turnTablesPointedAt_;  // CSVs a command was sent to file_read for, once each
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
+    bool skillToolsRegistered_ = false;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
     std::unique_ptr<DocumentIndex> code_;
 
     void registerCodeTools(std::shared_ptr<const Workspace> ws);
+    /// Turns `tools` on when `skill` loads, and refuses the load on a model they are withheld from.
+    NativeSkillTools nativeSkillTools(const std::string& skill, const std::vector<std::string>& tools,
+                                      std::string markdown, std::atomic<bool>& loaded);
     std::unique_ptr<MemoryStore> memory_;
     std::unique_ptr<LemonadeClient> visionClient_;
 
@@ -275,7 +288,9 @@ private:
     std::shared_ptr<WebPageCache> webPages_ = std::make_shared<WebPageCache>();  // cleared each turn
     std::unique_ptr<EmailTools> email_;
     std::unique_ptr<SendEmailTools> sendEmail_;
-    std::set<std::string> compactWithheld_;
+    std::atomic<bool> sendEmailLoaded_{false};  // load_skill("send-email") ran in this chat
+    std::unique_ptr<CalendarTools> calendar_;
+    std::atomic<bool> calendarLoaded_{false};  // load_skill("calendar") ran in this chat
     std::function<bool(const std::string& path)> askPathAccess_;
     std::vector<std::string> openedFolders_;  // opened by the user since the start; guarded by turnListingMu_
     /// The folders the agent started with, then those the user opened since.

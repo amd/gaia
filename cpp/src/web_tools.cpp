@@ -345,17 +345,13 @@ json WebTools::doWebFetch(const json& args, const std::shared_ptr<WebPageCache>&
             const std::string blocked = privateAddressOf(hostOf(origin), resolved, checkedAddress);
             if (!resolved) {
                 return {{"status", "error"}, {"url", url},
-                        {"error", "Refused: the address of " + hostOf(origin) + " could not be looked up, so "
-                                      "web_fetch cannot tell whether it is a public site. Check the host name "
-                                      "and the network connection (set GAIA_WEB_FETCH_ALLOW_PRIVATE=1 to skip "
-                                      "this check)."}};
+                        {"error", "Could not look up " + hostOf(origin) +
+                                      ". Check the host name and network connection."}};
             }
             if (!blocked.empty()) {
                 return {{"status", "error"}, {"url", url},
                         {"error", "Refused: " + hostOf(origin) + " resolves to " + blocked +
-                                      ", a local or private address. web_fetch only reaches "
-                                      "public sites (set GAIA_WEB_FETCH_ALLOW_PRIVATE=1 to allow "
-                                      "the local network)."}};
+                                      ", a local or private address. Only public sites can be fetched."}};
             }
         }
         HttpClientConfig cfg;

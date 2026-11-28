@@ -116,6 +116,64 @@ TEST(SkillLibraryTest, LoadSkillToolReturnsInstructions) {
     EXPECT_EQ(listed["skills"].size(), 2u);
 }
 
+TEST(SkillLibraryTest, ASkillWithNativeToolsTurnsThemOnWhenItLoads) {
+    TempTree t;
+    const auto withTool = [&](const std::string& name) {
+        t.raw("user", name,
+              "---\nname: " + name + "\ndescription: A skill.\nmetadata:\n  gaia:\n    tools:\n      - name: look\n"
+              "        description: Look.\n---\n\nBody.\n");
+    };
+    withTool("calendar");
+    withTool("other");
+    SkillLibrary lib({t.root("user", "user")});
+    ToolRegistry reg;
+    lib.registerTools(reg);
+    int activated = 0;
+    std::string refusal;
+    lib.setNativeTools("calendar", {{"calendar/list_calendar_events"}, [&] { return refusal; }, [&] { ++activated; }});
+
+    refusal = "Skill 'calendar' needs a larger model.";
+    json refused = reg.executeTool("load_skill", json{{"name", "calendar"}});
+    EXPECT_EQ(refused["status"], "error");
+    EXPECT_EQ(refused["error_type"], "SkillUnavailableError");
+    EXPECT_EQ(refused["error"], refusal);
+    EXPECT_EQ(activated, 0) << "a refused skill turns nothing on";
+
+    refusal.clear();
+    json loaded = reg.executeTool("load_skill", json{{"name", "calendar"}});
+    EXPECT_EQ(loaded["status"], "success");
+    EXPECT_EQ(activated, 1);
+    EXPECT_EQ(loaded["tools_available"], json::array({"calendar/list_calendar_events"}));
+    EXPECT_FALSE(loaded.contains("note")) << "its tools run here, so no 'needs Python' note";
+
+    json other = reg.executeTool("load_skill", json{{"name", "other"}});
+    ASSERT_TRUE(other.contains("note"));
+    EXPECT_NE(other["note"].get<std::string>().find("Python GAIA runtime"), std::string::npos);
+}
+
+TEST(SkillLibraryTest, ABuiltInSkillLoadsUnlessOneOnDiskHasItsName) {
+    TempTree t;
+    const std::string builtIn = "---\nname: planner\ndescription: Built in.\n---\n\nBuilt-in body.\n";
+    {
+        SkillLibrary lib({t.root("user", "user")});
+        ToolRegistry reg;
+        lib.registerTools(reg);
+        lib.setNativeTools("planner", {{}, nullptr, [] {}, builtIn});
+        EXPECT_NE(lib.renderPrompt().find("- planner: Built in."), std::string::npos);
+        json r = reg.executeTool("load_skill", json{{"name", "planner"}});
+        EXPECT_EQ(r["instructions"], "Built-in body.") << r.dump();
+    }
+    t.skill("user", "planner", "On disk.", "Disk body.");
+    SkillLibrary lib({t.root("user", "user")});
+    ToolRegistry reg;
+    lib.registerTools(reg);
+    lib.setNativeTools("planner", {{}, nullptr, [] {}, builtIn});
+    json r = reg.executeTool("load_skill", json{{"name", "planner"}});
+    EXPECT_NE(r["instructions"].get<std::string>().find("Disk body."), std::string::npos) << r.dump();
+    ASSERT_EQ(lib.shadowed().size(), 1u);
+    EXPECT_EQ(lib.shadowed()[0], "planner (built-in) shadowed by user");
+}
+
 TEST(SkillLibraryTest, LoaderSeamPutsBodyInPrompt) {
     TempTree t;
     t.skill("user", "coding", "Write and fix code.", "Always run the tests.");
@@ -126,6 +184,26 @@ TEST(SkillLibraryTest, LoaderSeamPutsBodyInPrompt) {
     EXPECT_NE(lib.renderPrompt().find("Always run the tests."), std::string::npos);
     EXPECT_TRUE(lib.unloadSkill("coding"));
     EXPECT_EQ(lib.renderPrompt().find("Always run the tests."), std::string::npos);
+}
+
+TEST(SkillLibraryTest, RefreshDiscoversAddedSkillsAndPrunesRemovedLoadedSkills) {
+    TempTree t;
+    t.skill("user", "alpha", "Alpha skill.", "Alpha body.");
+    SkillLibrary lib({t.root("user", "user")});
+    ASSERT_TRUE(lib.loadSkill("alpha"));
+    EXPECT_TRUE(lib.isLoaded("alpha"));
+
+    // Add a new skill and remove the previously loaded skill on disk.
+    t.skill("user", "beta", "Beta skill.", "Beta body.");
+    fs::remove_all(t.path() / "user" / "alpha");
+
+    lib.refresh();
+    EXPECT_EQ(lib.skills().count("beta"), 1u);
+    EXPECT_EQ(lib.skills().count("alpha"), 0u);
+    EXPECT_FALSE(lib.isLoaded("alpha")) << "removed skill should be pruned from loaded_";
+    const std::string prompt = lib.renderPrompt();
+    EXPECT_NE(prompt.find("- beta: Beta skill."), std::string::npos);
+    EXPECT_EQ(prompt.find("Alpha body."), std::string::npos);
 }
 
 TEST(SkillLibraryTest, RealHubSkillsParse) {

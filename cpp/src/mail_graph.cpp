@@ -35,11 +35,6 @@ constexpr int kMaxTop = 999;
 // One page of a conversation. Longer threads are reported truncated, not cut.
 constexpr int kThreadTop = 100;
 
-bool isWordChar(char c, const char* extra) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-           std::string(extra).find(c) != std::string::npos;
-}
-
 // Standard base64, so `+`, `/` and `=` are legitimate, as are `-` and `_`.
 bool isGraphId(const std::string& s) {
     if (s.empty() || s.size() > 512) return false;
@@ -65,8 +60,8 @@ std::string errorCode(const HttpResponse& response) {
 std::string address(const json& entity) {
     if (!truthy(entity)) return "";
     const json& email = field(entity, "emailAddress");
-    const std::string name = pyStrip(text(field(email, "name")));
-    const std::string addr = pyStrip(text(field(email, "address")));
+    const std::string name = pyStrip(textOf(field(email, "name")));
+    const std::string addr = pyStrip(textOf(field(email, "address")));
     if (!name.empty() && !addr.empty() && lowerAscii(name) != lowerAscii(addr)) return name + " <" + addr + ">";
     return addr.empty() ? name : addr;
 }
@@ -97,7 +92,7 @@ json attachments(const json& msg) {
         }
         const json& name = field(att, "name");
         out.push_back({{"name", truthy(name) ? name : json("")},
-                       {"mime_type", lowerAscii(text(field(att, "contentType")))},
+                       {"mime_type", lowerAscii(textOf(field(att, "contentType")))},
                        {"size", size}});
     }
     return out;
@@ -135,7 +130,7 @@ json messageSummary(const json& msg, bool includeBody) {
         {"unread", msg.is_object() && msg.contains("isRead") ? !truthy(isRead) : false},
         {"flagged", flag == "flagged" || flag == "complete"},
         {"categories", categories.is_array() ? categories : json::array()},
-        {"preview", pyStrip(text(field(msg, "bodyPreview")))},
+        {"preview", pyStrip(textOf(field(msg, "bodyPreview")))},
         // Graph's hasAttachments already ignores inline images.
         {"has_attachments", !found.empty() || truthy(field(msg, "hasAttachments"))},
         {"attachments", found},
@@ -145,7 +140,7 @@ json messageSummary(const json& msg, bool includeBody) {
     if (includeBody) {
         const json& body = field(msg, "body");
         const json& content = field(body, "content");
-        const std::string kind = text(field(body, "contentType"));
+        const std::string kind = textOf(field(body, "contentType"));
         summary["body"] = truthy(content) ? content : json("");
         summary["body_content_type"] = kind.empty() ? "text" : lowerAscii(kind);
     }
@@ -203,7 +198,7 @@ std::string graphId(const std::string& value, const std::string& kind, const std
     return percentEncode(value);
 }
 
-std::vector<std::string> attachmentNames(const json& data) {
+std::vector<std::string> graphAttachmentNames(const json& data) {
     std::vector<std::string> names;
     const json& listed = field(data, "attachments");
     if (!truthy(listed) || !listed.is_array()) return names;
@@ -211,7 +206,7 @@ std::vector<std::string> attachmentNames(const json& data) {
     return names;
 }
 
-std::optional<std::string> optionalField(const json& obj, const char* key) {
+std::optional<std::string> graphOptionalField(const json& obj, const char* key) {
     const json& value = field(obj, key);
     return value.is_null() ? std::nullopt : std::optional<std::string>(pyStr(value));
 }
@@ -376,8 +371,8 @@ public:
         out.subject = orEmpty(field(data, "subject"));
         out.body = orEmpty(field(body, "content"));
         out.bodyType = bodyType(body);
-        out.threadId = optionalField(data, "conversationId");
-        out.attachments = attachmentNames(data);
+        out.threadId = graphOptionalField(data, "conversationId");
+        out.attachments = graphAttachmentNames(data);
         return out;
     }
 
@@ -398,10 +393,10 @@ public:
         out.subject = orEmpty(field(data, "subject"));
         out.body = orEmpty(field(body, "content"));
         out.bodyType = bodyType(body);
-        out.threadId = optionalField(data, "conversationId");
-        out.internetMessageId = optionalField(data, "internetMessageId");
+        out.threadId = graphOptionalField(data, "conversationId");
+        out.internetMessageId = graphOptionalField(data, "internetMessageId");
         out.received = orEmpty(field(data, "receivedDateTime"));
-        out.attachments = attachmentNames(data);
+        out.attachments = graphAttachmentNames(data);
         return out;
     }
 

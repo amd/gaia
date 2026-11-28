@@ -99,6 +99,9 @@ const std::vector<std::string>& compactWithheldTools() {
         "list_connected_mailboxes", "list_waiting_on_you",
         "send-email/list_drafts", "send-email/create_draft", "send-email/update_draft", "send-email/discard_draft",
         "send-email/send_draft", "send-email/send_now", "send-email/reply_to_message", "send-email/forward_message",
+        // Calendar: no compact eval yet, and it writes to a real calendar.
+        "calendar/list_calendar_events", "calendar/check_calendar_availability", "calendar/create_calendar_event",
+        "calendar/update_calendar_event", "calendar/cancel_calendar_event",
     };
     return kWithheld;
 }

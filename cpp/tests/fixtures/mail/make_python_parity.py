@@ -72,6 +72,7 @@ SNIPPETS = [
     "&#0; &#128512; &#xD800; &#1114112; &#11; &#x80;",
     "&lt;b&gt; &eacute;t&eacute; &hellip; &rsquo;",
     "&#; &#x; & alone &;",
+    "I &hearts; it &rarr; &check; &NotEqualTilde; &fjlig; &ampx &notin",
     " lead nbsp ",
     "no entities",
 ]
@@ -185,6 +186,8 @@ RAW_MESSAGES = {
     ),
 }
 
+UNDATED_INTERNAL_DATE = "1795842264212"
+
 GRAPH_MESSAGES = [
     {
         "id": "AAMk-1",
@@ -220,7 +223,7 @@ GRAPH_MESSAGES = [
 ]
 
 
-def main():
+def main(out_dir=None):
     cases = {
         "address_list": [[h, gmail._address_list(h)] for h in ADDRESS_HEADERS],
         "decode": [[h, gmail._decode(h)] for h in ENCODED_HEADERS],
@@ -232,6 +235,9 @@ def main():
     labels = {"Label_17": "Receipts"}
     for name, raw in RAW_MESSAGES.items():
         msg = mbox_message_to_gmail_payload(email.message_from_string(raw))
+        if "\r\nDate:" not in raw and not raw.startswith("Date:"):
+            # The fake stamps a dateless message with the current time; pin it so reruns match.
+            msg["internalDate"] = UNDATED_INTERNAL_DATE
         msg["labelIds"] = ["INBOX", "UNREAD", "STARRED", "CATEGORY_UPDATES", "Label_17", "Label_99"]
         for include_body in (False, True):
             out = gmail.message_summary(msg, label_names=labels, include_body=include_body)
@@ -240,10 +246,10 @@ def main():
         for include_body in (False, True):
             out = graph.message_summary(msg, include_body=include_body)
             cases["graph_summary"].append([msg.get("id"), msg, include_body, out])
-    target = Path(__file__).with_name("python_parity.json")
+    target = Path(out_dir or Path(__file__).parent) / "python_parity.json"
     target.write_text(json.dumps(cases, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"wrote {target}")
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1] if len(sys.argv) > 1 else None)

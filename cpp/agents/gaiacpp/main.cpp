@@ -9,6 +9,7 @@
 //   gaiacpp --stdio                          The GAIA terminal UI's agent child (JSON Lines)
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -28,7 +29,9 @@
 #include <gaia/clean_console.h>
 #include <gaia/console.h>
 #include <gaia/mcp_stdio_server.h>
+#include <gaia/person_approval.h>
 #include <gaia/repl.h>
+#include <gaia/security.h>
 #include <gaia/session.h>
 
 #include "gaia_agent.h"
@@ -164,8 +167,9 @@ void printUsage() {
         "                            window the model is loaded with)\n"
         "  --temperature T           Sampling temperature\n"
         "Run:\n"
-        "  -p, --print [PROMPT]      Headless: answer on stdout, exit 0/1\n"
-        "  --prompt-file FILE        Read the prompt from FILE\n"
+        "  -p, --print [PROMPT]      Headless: answer on stdout, exit 0/1 (pass -- before\n"
+        "                            a flag-shaped prompt)\n"
+        "  --prompt-file FILE        Read the prompt from FILE (not with an inline PROMPT)\n"
         "  --output-format FMT       text (default) or json\n"
         "  -y, --yes                 Download the model without asking when it is not\n"
         "                            on disk (otherwise asked; refused with no terminal)\n"
@@ -264,6 +268,22 @@ double toTemperature(const std::string& flag, const std::string& v) {
     return t;
 }
 
+// True when a token looks like a CLI option (`-x`, `--flag`, `--flag=value`, or `--`), so `-p`
+// leaves it to the flag parser instead of consuming it as a prompt.
+bool looksLikeOption(const std::string& s) {
+    if (s == "--") return true;
+    if (s.size() == 2 && s[0] == '-' && std::isalpha(static_cast<unsigned char>(s[1]))) return true;
+    if (s.size() >= 3 && s[0] == '-' && s[1] == '-' && std::isalpha(static_cast<unsigned char>(s[2]))) {
+        for (size_t i = 3; i < s.size(); ++i) {
+            const unsigned char c = static_cast<unsigned char>(s[i]);
+            if (c == '=') return true;
+            if (!std::isalnum(c) && c != '-' && c != '_') return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 Cli parseArgs(int argc, char** argv) {
     Cli cli;
     auto need = [&](int& i, const std::string& flag) -> std::string {
@@ -280,12 +300,22 @@ Cli parseArgs(int argc, char** argv) {
     };
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
+        if (a == "--") {
+            for (++i; i < argc; ++i) {
+                if (cli.mode == Cli::Mode::Print && !cli.prompt) {
+                    cli.prompt = argv[i];
+                } else {
+                    usageError(std::string("unknown argument '") + argv[i] + "'");
+                }
+            }
+            break;
+        }
         if (a == "-h" || a == "--help") { printUsage(); std::exit(0); }
         else if (a == "-v" || a == "--version") { std::cout << "gaiacpp " GAIACPP_VERSION "\n"; std::exit(0); }
         else if (a == "serve" && i == 1) setMode(Cli::Mode::Serve, a);
         else if (a == "-p" || a == "--print") {
             setMode(Cli::Mode::Print, a);
-            if (i + 1 < argc && argv[i + 1][0] != '-') cli.prompt = argv[++i];
+            if (!cli.prompt && i + 1 < argc && !looksLikeOption(argv[i + 1])) cli.prompt = argv[++i];
         }
         else if (a == "--mcp") setMode(Cli::Mode::Mcp, a);
         else if (a == "--stdio") setMode(Cli::Mode::Stdio, a);
@@ -335,6 +365,9 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--expose-tool-routes") cli.exposeToolRoutes = true;
         else if (a == "--debug") cli.debug = true;
         else usageError("unknown argument '" + a + "'");
+    }
+    if (cli.prompt && !cli.promptFile.empty()) {
+        usageError("pass a prompt argument or --prompt-file, not both");
     }
     if (cli.outputFormat != "text" && cli.outputFormat != "json") {
         usageError("--output-format must be text or json");
@@ -644,6 +677,11 @@ gaia::GaiaAgent::Options unattended(gaia::GaiaAgent::Options o) {
     return o;
 }
 
+// A call only a person may approve; no switch answers it.
+bool needsPerson(const gaia::json& args) {
+    return args.is_object() && args.value(gaia::approval::kNeedsPersonArg, false);
+}
+
 // The server answers and the model is on disk, before a person waits on a load.
 void checkModelOnDisk(const Cli& cli, const Settings& settings) {
     gaia::LemonadeClient client(gaia::LemonadeClientConfig{settings.cfg.baseUrl});
@@ -685,7 +723,11 @@ int runMcp(const Cli& cli) {
     cfg.silentMode = true;
     gaia::GaiaAgent agent(cfg, unattended(agentOptions(cli, settings)));
     pinConfig(agent, cfg);
-    agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
+    agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json& args) {
+        if (needsPerson(args)) {
+            std::cerr << "[gaiacpp] denied " << tool << " (only a person may approve it)\n";
+            return gaia::ToolConfirmResult::UNATTENDED;
+        }
         if (!skip) {
             std::cerr << "[gaiacpp] denied " << tool
                       << " (nobody to ask over MCP; pass --dangerously-skip-permissions to allow)\n";
@@ -693,6 +735,7 @@ int runMcp(const Cli& cli) {
         return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::UNATTENDED;
     });
     agent.setUnattendedRemedy("Run gaiacpp again with --dangerously-skip-permissions to allow it.");
+    agent.setNobodyToAsk([skip = cli.skipPermissions] { return skip; });
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
     gaia::McpStdioServer server(agent, "gaiacpp", GAIACPP_VERSION, std::cin, transport);
     server.run();
@@ -793,7 +836,11 @@ int runPrint(const Cli& cli) {
     gaia::GaiaAgent agent(cfg, unattended(agentOptions(cli, settings)));
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
-    agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
+    agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json& args) {
+        if (needsPerson(args)) {
+            std::cerr << "[gaiacpp] denied " << tool << " (only a person may approve it)\n";
+            return gaia::ToolConfirmResult::UNATTENDED;
+        }
         if (!skip) {
             std::cerr << "[gaiacpp] denied " << tool
                       << " (headless run; pass --dangerously-skip-permissions to allow)\n";
@@ -801,6 +848,7 @@ int runPrint(const Cli& cli) {
         return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::UNATTENDED;
     });
     agent.setUnattendedRemedy("Run gaiacpp again with --dangerously-skip-permissions to allow it.");
+    agent.setNobodyToAsk([skip = cli.skipPermissions] { return skip; });
     if (!settings.mcpConfig.empty()) {
         std::streambuf* saved = std::cout.rdbuf(std::cerr.rdbuf());
         try { connectMcp(agent, settings.mcpConfig); } catch (...) { std::cout.rdbuf(saved); throw; }
@@ -899,9 +947,10 @@ int runServe(const Cli& cli) {
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     // No person at the keyboard: the client that started the server owns safety.
-    agent.setToolConfirmCallback([](const std::string&, const gaia::json&) {
-        return gaia::ToolConfirmResult::ALLOW_ONCE;
+    agent.setToolConfirmCallback([](const std::string&, const gaia::json& args) {
+        return needsPerson(args) ? gaia::ToolConfirmResult::UNATTENDED : gaia::ToolConfirmResult::ALLOW_ONCE;
     });
+    agent.setNobodyToAsk([] { return true; });
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
 
     gaia::ServerOptions opts;
@@ -954,9 +1003,13 @@ int runInteractive(const Cli& cli) {
     gaia::GaiaAgent agent(settings.cfg, cli.skipPermissions ? unattended(agentOptions(cli, settings)) : agentOptions(cli, settings));
     pinConfig(agent, settings.cfg);
     if (cli.skipPermissions) {
-        agent.setToolConfirmCallback([](const std::string&, const gaia::json&) {
-            return gaia::ToolConfirmResult::ALLOW_ONCE;
+        agent.setToolConfirmCallback([&agent, ask = gaia::makeStdinConfirmCallback()](const std::string& tool,
+                                                                                        const gaia::json& args) {
+            if (!needsPerson(args)) return gaia::ToolConfirmResult::ALLOW_ONCE;
+            agent.releaseNpu();
+            return ask(tool, args);
         });
+        agent.setNobodyToAsk([] { return !gaia::stdinIsAPerson(); });
     }
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
     gaia::ReplRunner repl(agent);
@@ -967,8 +1020,39 @@ int runInteractive(const Cli& cli) {
 
 } // namespace
 
+void printSkillsUsage() {
+    std::cout <<
+        "Usage:\n"
+        "  gaiacpp skills list\n"
+        "  gaiacpp skills install <folder>|<name>[@version] [--allow-experimental]\n"
+        "  gaiacpp skills remove <name>\n\n"
+        "Manage installed SKILL.md skills (local folder or hub).\n";
+}
+
+void printModelsUsage() {
+    std::cout <<
+        "Usage:\n"
+        "  gaiacpp models list [options]\n"
+        "  gaiacpp models pull <name> [--checkpoint C --recipe R] [options]\n\n"
+        "Options:\n"
+        "  --checkpoint C      Model checkpoint when registering a user.* model\n"
+        "  --recipe R          Model recipe when registering a user.* model\n"
+        "  --base-url URL      OpenAI-compatible / Lemonade endpoint\n"
+        "  --provider NAME     lemonade (default) or fireworks\n"
+        "  --api-key-env VAR   Variable holding the endpoint key\n"
+        "  --config FILE       Settings file\n"
+        "  -h, --help          Show this help\n";
+}
+
 // gaiacpp skills list | install <folder>|<name>[@version] [--allow-experimental] | remove <name>
 int runSkills(int argc, char** argv) {
+    for (int i = 2; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "-h" || a == "--help") {
+            printSkillsUsage();
+            return 0;
+        }
+    }
     const std::string sub = argc > 2 ? argv[2] : "list";
     if (sub == "list") {
         gaia::SkillLibrary lib;
@@ -1042,6 +1126,10 @@ int runModels(int argc, char** argv) {
     std::vector<std::string> words;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
+        if (a == "-h" || a == "--help") {
+            printModelsUsage();
+            return 0;
+        }
         std::string* target = a == "--checkpoint"    ? &checkpoint
                               : a == "--recipe"      ? &recipe
                               : a == "--base-url"    ? &cli.baseUrl

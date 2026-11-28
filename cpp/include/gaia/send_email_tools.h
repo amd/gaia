@@ -21,6 +21,9 @@ namespace gaia {
 
 class GAIA_API SendEmailTools {
 public:
+    /// The skill whose load turns these tools on.
+    static constexpr const char* kSkillName = "send-email";
+
     /// `email` must outlive this object.
     explicit SendEmailTools(EmailTools& email);
 
@@ -29,6 +32,10 @@ public:
 
     /// The registered names, "send-email/list_drafts" and so on.
     static const std::vector<std::string>& toolNames();
+    /// hub/skills/send-email/SKILL.md, as built into this program.
+    static std::string skillMarkdown();
+    /// True for any of the eight.
+    static bool isSendEmailTool(const std::string& name);
 
 private:
     struct State;

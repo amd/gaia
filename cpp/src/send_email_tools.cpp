@@ -15,6 +15,7 @@
 
 #include "gaia/connect_card.h"
 #include "gaia/connectors.h"
+#include "gaia/person_approval.h"
 #include "mail_internal.h"
 #include "mail_outgoing.h"
 #include "mail_text.h"
@@ -27,10 +28,9 @@ using mail::OutgoingMessage;
 namespace outgoing = mail::outgoing;
 namespace text = mail::text;
 
-constexpr const char* kGoogle = mail::kGoogle;
 constexpr const char* kPrefix = "send-email/";
-constexpr const char* kEmailDocsUrl = "https://amd-gaia.ai/docs/guides/email";
-constexpr int kMaxLimit = 100;
+constexpr const char* kSendDocsUrl = "https://amd-gaia.ai/docs/guides/email";
+constexpr int kMaxDrafts = 100;
 
 const std::string kGmailReadonly = "https://www.googleapis.com/auth/gmail.readonly";
 const std::string kGmailCompose = "https://www.googleapis.com/auth/gmail.compose";
@@ -43,14 +43,14 @@ const std::vector<std::string>& writeScopes(const std::string& provider, Operati
     static const std::vector<std::string> google{kGmailReadonly, kGmailCompose};
     static const std::vector<std::string> outlookDraft{kMailReadWrite};
     static const std::vector<std::string> outlookSend{kMailReadWrite, kMailSend};
-    if (provider == kGoogle) return google;
+    if (provider == mail::kGoogle) return google;
     return op == Operation::Send ? outlookSend : outlookDraft;
 }
 
 const std::vector<std::string>& declaredScopes(const std::string& provider) {
     static const std::vector<std::string> google{kGmailReadonly, kGmailCompose};
     static const std::vector<std::string> outlook{kMailReadWrite, kMailSend};
-    return provider == kGoogle ? google : outlook;
+    return provider == mail::kGoogle ? google : outlook;
 }
 
 // What a Connect from a failed send asks for: sending, which needs reading too.
@@ -68,9 +68,9 @@ const char* const kMaybeSentWarning =
     "An earlier try at sending this exact email may already have gone out. Check Sent before approving it "
     "again.\n\n";
 
-std::string providerName(const std::string& provider) { return provider == kGoogle ? "Google" : "Microsoft"; }
+std::string providerLabel(const std::string& provider) { return provider == mail::kGoogle ? "Google" : "Microsoft"; }
 
-std::string joined(const std::vector<std::string>& items, const std::string& sep = " ") {
+std::string joinedWords(const std::vector<std::string>& items, const std::string& sep = " ") {
     std::string out;
     for (size_t i = 0; i < items.size(); ++i) out += (i ? sep : "") + items[i];
     return out;
@@ -92,14 +92,14 @@ mail::MailboxError setupError(const std::string& message) {
 
 // email_tools._write_scopes: the scopes this write requests, or throw naming how to get them.
 std::vector<std::string> requestScopes(const std::string& provider, Operation op, bool app) {
-    const std::string name = providerName(provider);
+    const std::string name = providerLabel(provider);
     const auto conn = connectors::getConnection(provider);
     const std::vector<std::string> connScopes = conn ? conn->scopes : std::vector<std::string>{};
     const std::vector<std::string>& needed = writeScopes(provider, op);
     const std::vector<std::string> missing = missingFrom(needed, connScopes);
     const std::string verb = op == Operation::Send ? "send" : "draft";
     if (!missing.empty() && app) {
-        mail::MailboxError e("This " + name + " connection lacks " + joined(missing) + ", which GAIA needs to " +
+        mail::MailboxError e("This " + name + " connection lacks " + joinedWords(missing) + ", which GAIA needs to " +
                              verb + " mail. Nothing was changed. Reconnecting " + name +
                              " with reading, composing and sending mail left ticked on " + name +
                              "'s consent screen fixes it.");
@@ -112,12 +112,12 @@ std::vector<std::string> requestScopes(const std::string& provider, Operation op
     if (!missing.empty()) {
         std::set<std::string> all(connScopes.begin(), connScopes.end());
         all.insert(declaredScopes(provider).begin(), declaredScopes(provider).end());
-        throw setupError("This " + name + " connection lacks " + joined(missing) + ", which GAIA needs to " + verb +
+        throw setupError("This " + name + " connection lacks " + joinedWords(missing) + ", which GAIA needs to " + verb +
                          " mail. Nothing was changed. Reconnect " + name +
                          " in Settings -> Connectors and approve reading, composing and sending mail, leaving that "
                          "option ticked on " +
                          name + "'s consent screen. In a terminal: `gaia connectors connect " + provider +
-                         " --scopes " + joined({all.begin(), all.end()}) + "`. See " + kEmailDocsUrl);
+                         " --scopes " + joinedWords({all.begin(), all.end()}) + "`. See " + kSendDocsUrl);
     }
     const std::vector<std::string> granted = connectors::agentGrants(provider, EmailTools::kAgentId);
     if (!missingFrom(needed, granted).empty()) {
@@ -128,7 +128,7 @@ std::vector<std::string> requestScopes(const std::string& provider, Operation op
         }
         throw setupError("The " + name + " connection can write mail, but this agent holds no grant to. Run `gaia "
                          "connectors grants grant " +
-                         provider + " " + EmailTools::kAgentId + " --scopes " + joined(needed) +
+                         provider + " " + EmailTools::kAgentId + " --scopes " + joinedWords(needed) +
                          "` (a ledger write, no browser needed).");
     }
     return needed;
@@ -167,7 +167,7 @@ int limitArg(const json& args) {
     if (!mail::detail::pyInt(args["limit"], value)) {
         throw std::invalid_argument("invalid literal for int() with base 10: " + mail::detail::pyRepr(args["limit"]));
     }
-    return static_cast<int>(std::max<long long>(1, std::min<long long>(value, kMaxLimit)));
+    return static_cast<int>(std::max<long long>(1, std::min<long long>(value, kMaxDrafts)));
 }
 
 // One call's identity, the same before and after argument coercion.
@@ -199,7 +199,7 @@ struct SendEmailTools::State {
         const std::vector<std::string> scopes = requestScopes(provider, op, connect::inApp(surface()));
         EmailTools* tools = email;
         mail::TokenSource token = [tools, provider, scopes] { return tools->accessToken(provider, scopes); };
-        return provider == kGoogle ? mail::makeGmailWriteBackend(token, email->transport())
+        return provider == mail::kGoogle ? mail::makeGmailWriteBackend(token, email->transport())
                                    : mail::makeOutlookWriteBackend(token, email->transport());
     }
 
@@ -305,7 +305,7 @@ struct SendEmailTools::State {
         const OutgoingMessage saved = w->getDraft(draftId);
         if (!saved.attachments.empty() && !w->editKeepsAttachments()) {
             throw std::invalid_argument("Draft " + mail::detail::pyRepr(draftId) + " has attachments (" +
-                                        joined(saved.attachments, ", ") +
+                                        joinedWords(saved.attachments, ", ") +
                                         "), which editing here would remove. Edit it in Gmail instead.");
         }
         OutgoingMessage m = saved;
@@ -429,6 +429,18 @@ const std::vector<std::string>& SendEmailTools::toolNames() {
     return names;
 }
 
+std::string SendEmailTools::skillMarkdown() {
+    static const unsigned char bytes[] = {
+#include "skill_send-email.inc"
+    };
+    return std::string(reinterpret_cast<const char*>(bytes), sizeof bytes);
+}
+
+bool SendEmailTools::isSendEmailTool(const std::string& name) {
+    const auto& names = toolNames();
+    return std::find(names.begin(), names.end(), name) != names.end();
+}
+
 void SendEmailTools::registerAll(ToolRegistry& registry) {
     std::shared_ptr<State> state = state_;
     using Build = OutgoingMessage (State::*)(const json&);
@@ -477,7 +489,12 @@ void SendEmailTools::registerAll(ToolRegistry& registry) {
                 std::string preview =
                     (intro == kPromptIntros.end() ? std::string() : intro->second) + outgoing::renderPreview(it->second);
                 if (state->uncertain.count(key)) preview = kMaybeSentWarning + preview;
-                return {{"_exact_text", preview}};
+                return {{approval::kExactTextArg, preview}};
+            };
+            // A declined card's message is dropped, so a later identical call is built afresh.
+            info.forget = [state, tool, params](const json& args) {
+                std::lock_guard<std::mutex> lock(state->mu);
+                state->prepared.erase(callKey(tool, params, args));
             };
         }
         registry.registerTool(std::move(info));

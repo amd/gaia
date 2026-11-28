@@ -267,6 +267,22 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
     return files;
 }
 
+const char* unsupportedDocumentFormat(const std::string& ext) {
+    static const std::map<std::string, const char*> kFormats = {
+        {".xlsx", "Excel"},          {".xlsm", "Excel"},
+        {".xlsb", "Excel"},          {".xls", "Excel"},
+        {".pptx", "PowerPoint"},     {".pptm", "PowerPoint"},
+        {".ppt", "PowerPoint"},      {".doc", "legacy Word"},
+        {".ods", "OpenDocument spreadsheet"},
+        {".odp", "OpenDocument presentation"},
+        {".odt", "OpenDocument text"},
+        {".epub", "EPUB"},           {".pages", "Pages"},
+        {".numbers", "Numbers"},     {".key", "Keynote"},
+    };
+    auto it = kFormats.find(ext);
+    return it == kFormats.end() ? nullptr : it->second;
+}
+
 }  // namespace
 
 std::string MissingDocumentReader::remedy(const std::string& file, const std::string& program) {
@@ -357,9 +373,28 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
         pages.emplace_back(0, docxText(path));
         return pages;
     }
-    ExtractedText e = isSupportedExtension(ext) ? extractFile(path) : extractPlainTextFile(path);
-    pages.emplace_back(0, e.text);
-    return pages;
+    // A reader the app registered for one of these formats still wins.
+    if (const char* format = isSupportedExtension(ext) ? nullptr : unsupportedDocumentFormat(ext)) {
+        const std::string name = fs::path(path).filename().u8string();
+        throw std::runtime_error(
+            "Can't index " + name + ": " + format + " (" + ext +
+            ") files aren't supported for automatic indexing. Supported formats are PDF, Word (.docx), "
+            "and plain text or code files.");
+    }
+    try {
+        ExtractedText e = isSupportedExtension(ext) ? extractFile(path) : extractPlainTextFile(path);
+        pages.emplace_back(0, e.text);
+        return pages;
+    } catch (const std::runtime_error& e) {
+        // Chunking's generic binary error names the C++ SDK hook; keep user-facing tool output plain.
+        if (std::string(e.what()).find("registerExtractor") != std::string::npos) {
+            const std::string name = fs::path(path).filename().u8string();
+            throw std::runtime_error(
+                "Can't index " + name + ": binary files aren't supported for automatic indexing. "
+                "Supported formats are PDF, Word (.docx), and plain text or code files.");
+        }
+        throw;
+    }
 }
 
 namespace {
@@ -468,7 +503,13 @@ std::vector<std::string> DocumentIndex::tokens(const std::string& text) const {
     return out;
 }
 
-void DocumentIndex::removeFile(const std::string& file) {
+void DocumentIndex::removeFile(const std::string& path) {
+    const std::string file = fs::absolute(path).lexically_normal().string();
+    std::lock_guard<std::mutex> lock(mutex_);
+    removeFileLocked(file);
+}
+
+void DocumentIndex::removeFileLocked(const std::string& file) {
     std::vector<DocumentChunk> chunks;
     std::vector<std::map<std::string, int>> tf;
     std::vector<size_t> lens;
@@ -540,7 +581,7 @@ size_t DocumentIndex::indexFile(const std::string& path) {
                 " is loaded and is the one this index was built with.");
         }
     }
-    removeFile(file);
+    removeFileLocked(file);
     for (size_t j = 0; j < fresh.size(); ++j) {
         std::map<std::string, int> tf;
         const auto toks = tokens(fresh[j].text);

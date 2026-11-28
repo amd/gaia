@@ -260,6 +260,15 @@ const audit = async (page: Page): Promise<string[]> => {
                 problems.push(`gloss is as large as its label: ${label(gloss)}`);
             }
             if (Number(style.fontWeight) > 400) problems.push(`gloss is bold: ${label(gloss)}`);
+            // An LTR English gloss clipped inside a one-line RTL composer chip loses its opening edge: "chats: on)".
+            const chipLabel = gloss.closest('.composer-chip-label');
+            if (chipLabel) {
+                const chipStyle = getComputedStyle(chipLabel);
+                if (chipStyle.overflowX === 'hidden' && chipStyle.direction === 'rtl' && chipLabel.scrollWidth > chipLabel.clientWidth + 1
+                    && gloss.getBoundingClientRect().left < chipLabel.getBoundingClientRect().left - 1) {
+                    problems.push(`English gloss clipped at its start in RTL: ${label(gloss)}`);
+                }
+            }
         }
 
         // A button cut off by the window's edge can't be read or pressed; one in
@@ -3432,7 +3441,7 @@ for (const locale of ['ar', 'en']) {
                     if (expanded) {
                         // What changes on gaiacpp is a list of its own, each line inside the card.
                         const diffs = agent.locator('.agent-choice-diffs li');
-                        await expect(diffs).toHaveCount(6);
+                        await expect(diffs).toHaveCount(5);
                         const card = (await agent.boundingBox())!;
                         for (const line of await diffs.all()) {
                             const box = (await line.boundingBox())!;

@@ -12,6 +12,7 @@
 #include <set>
 #include <stdexcept>
 
+#include "gaia/idna.h"
 #include "mail_html.h"
 #include "mail_mime.h"
 #include "mail_text.h"
@@ -72,83 +73,6 @@ void refuseControls(const std::string& value, const std::string& field) {
     }
 }
 
-// RFC 3492 punycode for one label.
-std::string punycode(const Cps& label) {
-    constexpr uint32_t base = 36, tmin = 1, tmax = 26, skew = 38, damp = 700, initialBias = 72, initialN = 128;
-    auto digit = [](uint32_t d) { return static_cast<char>(d < 26 ? 'a' + d : '0' + (d - 26)); };
-    auto adapt = [&](uint32_t delta, uint32_t points, bool first) {
-        delta = first ? delta / damp : delta / 2;
-        delta += delta / points;
-        uint32_t k = 0;
-        while (delta > ((base - tmin) * tmax) / 2) {
-            delta /= base - tmin;
-            k += base;
-        }
-        return k + (base - tmin + 1) * delta / (delta + skew);
-    };
-    std::string out;
-    for (char32_t c : label) {
-        if (c < 0x80) out += static_cast<char>(c);
-    }
-    const uint32_t basic = static_cast<uint32_t>(out.size());
-    uint32_t handled = basic;
-    if (basic) out += '-';
-    uint32_t n = initialN, delta = 0, bias = initialBias;
-    while (handled < label.size()) {
-        uint32_t m = 0x10FFFF + 1;
-        for (char32_t c : label) {
-            if (c >= n && c < m) m = c;
-        }
-        delta += (m - n) * (handled + 1);
-        n = m;
-        for (char32_t c : label) {
-            if (c < n) ++delta;
-            if (c == n) {
-                uint32_t q = delta;
-                for (uint32_t k = base;; k += base) {
-                    const uint32_t t = k <= bias ? tmin : k >= bias + tmax ? tmax : k - bias;
-                    if (q < t) break;
-                    out += digit(t + (q - t) % (base - t));
-                    q = (q - t) / (base - t);
-                }
-                out += digit(q);
-                bias = adapt(delta, handled + 1, handled == basic);
-                delta = 0;
-                ++handled;
-            }
-        }
-        ++delta;
-        ++n;
-    }
-    return out;
-}
-
-// idna.encode(domain, uts46=True), for the mapping a mail domain needs: case
-// folded, each non-ASCII label punycoded.
-std::string idnaEncode(const std::string& domain) {
-    std::vector<std::string> labels;
-    const Cps all = text::decode(text::lower(domain));
-    Cps label;
-    auto finish = [&labels](const Cps& l) {
-        if (l.empty()) throw std::invalid_argument("Empty Label");
-        bool ascii = std::all_of(l.begin(), l.end(), [](char32_t c) { return c < 0x80; });
-        const std::string encoded = ascii ? text::encode(l) : "xn--" + punycode(l);
-        if (encoded.size() > 63) throw std::invalid_argument("Label too long");
-        labels.push_back(encoded);
-    };
-    for (char32_t c : all) {
-        if (c == U'.' || c == 0x3002 || c == 0xFF0E || c == 0xFF61) {
-            finish(label);
-            label.clear();
-        } else {
-            label.push_back(c);
-        }
-    }
-    if (!label.empty()) finish(label);
-    if (labels.empty()) throw std::invalid_argument("Empty domain");
-    return join(labels, ".");
-}
-
 // _ADDRESS_RE: [^@\s<>",;]+@[^@\s<>",;]+
 bool looksLikeAddress(const std::string& address) {
     const Cps cps = text::decode(address);
@@ -206,8 +130,8 @@ std::string sendableAddress(const std::string& address, const std::string& field
     }
     std::string ascii;
     try {
-        ascii = idnaEncode(domain);
-    } catch (const std::invalid_argument& e) {
+        ascii = idna::encodeUts46(text::decode(domain));
+    } catch (const idna::IdnaError& e) {
         throw std::invalid_argument("`" + field + "` has a domain that can't be sent to: " + repr(domain) + " (" +
                                     e.what() + "). Check the spelling.");
     }

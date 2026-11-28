@@ -2516,6 +2516,121 @@ TEST(GaiaAgentTest, EveryToolIsOnTheListTheAppsWordInPlainLanguage) {
     for (const auto& name : gated) EXPECT_TRUE(tools.count(name)) << name;
 }
 
+namespace {
+// A clean install: GAIA_HOME and HOME are empty folders, so no skill is on disk.
+struct EmptyHomes {
+    Workdir dir;
+    std::string savedHome;
+    EmptyHomes() {
+        const char* home = std::getenv("HOME");
+        savedHome = home ? home : "";
+        set("GAIA_HOME", (dir.path / "gaia").u8string());
+        set("HOME", dir.path.u8string());
+    }
+    ~EmptyHomes() {
+        set("GAIA_HOME", "");
+        set("HOME", savedHome);
+    }
+    static void set(const char* name, const std::string& v) {
+#ifdef _WIN32
+        _putenv_s(name, v.c_str());
+#else
+        if (!v.empty()) setenv(name, v.c_str(), 1); else unsetenv(name);
+#endif
+    }
+};
+}  // namespace
+
+TEST(GaiaAgentTest, TheCalendarToolsTurnOnWhenTheSkillLoads) {
+    Workdir w;
+    EmptyHomes home;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";
+    GaiaAgent agent(cfg, o);
+    ASSERT_FALSE(cfg.compactFeatures());
+    for (const auto& name : CalendarTools::toolNames()) EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+    json listed = agent.toolRegistry().executeTool("list_skills", json::object());
+    ASSERT_EQ(listed["status"], "success") << listed.dump();
+    bool calendarListed = false;
+    for (const auto& skill : listed["skills"]) calendarListed |= skill.value("name", "") == "calendar";
+    EXPECT_TRUE(calendarListed) << "built in, so a clean install lists it: " << listed.dump();
+
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "calendar"}});
+    ASSERT_EQ(loaded["status"], "success") << loaded.dump();
+    EXPECT_NE(loaded["instructions"].get<std::string>().find("calendar"), std::string::npos);
+    EXPECT_EQ(loaded["tools_available"], json(CalendarTools::toolNames()));
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : CalendarTools::toolNames()) {
+        EXPECT_TRUE(agent.toolRegistry().isEnabled(name)) << name << " stays on for the chat";
+    }
+
+    cfg.modelId = "Gemma-4-E4B-it-GGUF";
+    agent.setConfig(cfg);
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : CalendarTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " is withheld from a compact model";
+    }
+    json refused = agent.toolRegistry().executeTool("load_skill", json{{"name", "calendar"}});
+    EXPECT_EQ(refused["status"], "error");
+    EXPECT_EQ(refused["error_type"], "SkillUnavailableError");
+    EXPECT_NE(refused["error"].get<std::string>().find("needs a larger model"), std::string::npos) << refused.dump();
+    for (const auto& name : CalendarTools::toolNames()) EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+}
+
+TEST(GaiaAgentTest, TheSendEmailToolsTurnOnWhenTheSkillLoads) {
+    Workdir w;
+    EmptyHomes home;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";
+    GaiaAgent agent(cfg, o);
+    for (const auto& name : SendEmailTools::toolNames()) {
+        ASSERT_TRUE(agent.toolRegistry().hasTool(name)) << name;
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+    }
+    json listed = agent.toolRegistry().executeTool("list_skills", json::object());
+    bool sendListed = false;
+    for (const auto& skill : listed["skills"]) sendListed |= skill.value("name", "") == "send-email";
+    EXPECT_TRUE(sendListed) << "built in, so a clean install lists it: " << listed.dump();
+
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "send-email"}});
+    ASSERT_EQ(loaded["status"], "success") << loaded.dump();
+    EXPECT_EQ(loaded["tools_available"], json(SendEmailTools::toolNames()));
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : SendEmailTools::toolNames()) {
+        EXPECT_TRUE(agent.toolRegistry().isEnabled(name)) << name << " stays on for the chat";
+    }
+    for (const auto& name : CalendarTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " waits for its own skill";
+    }
+
+    cfg.modelId = "Gemma-4-E4B-it-GGUF";
+    agent.setConfig(cfg);
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : SendEmailTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " is withheld from a compact model";
+    }
+    json refused = agent.toolRegistry().executeTool("load_skill", json{{"name", "send-email"}});
+    EXPECT_EQ(refused["error_type"], "SkillUnavailableError") << refused.dump();
+
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";
+    agent.setConfig(cfg);
+    mock.pushResponse(answer("hi"));
+    agent.processQuery("hello");
+    for (const auto& name : SendEmailTools::toolNames()) {
+        EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name << " needs the skill loaded again";
+    }
+}
+
 TEST(GaiaAgentTest, TheMailToolsDoNotRunWhileTheInternetIsOff) {
     Workdir w;
     bench::MockLlmServer mock;
@@ -2568,4 +2683,342 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
         EXPECT_NE(r.value("error", "").find("internet is off"), std::string::npos) << c << ": " << r.dump();
     }
     EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
+}
+
+TEST(GaiaAgentTest, OrdinaryProseGreenIsNotATestClaim) {
+    struct Case {
+        const char* request;
+        const char* reply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"Write one short sentence: 'Spring has arrived in the park and everything is green.'",
+              "Spring has arrived in the park and everything is green."},
+             {"Describe Ireland in April.", "The hills are all green in April."},
+             {"Describe the traffic on your commute.", "Lucky morning - the traffic lights were all green."},
+             {"Fix the grammar in 'spring came and everything is green'.",
+              "Spring came, and everything is green."},
+             {"Describe the birds outside.", "3 passed by the window."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer(tc.reply));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << tc.request << " -> " << tc.reply;
+        EXPECT_EQ(r["status"], "success") << tc.request;
+        EXPECT_EQ(r["result"], tc.reply) << tc.request;
+    }
+
+    // Shorthand test claims in coding/test requests are still caught even with no tool calls.
+    for (const auto& tc : std::vector<Case>{
+             {"Run the tests", "All green."},
+             {"Fix the bug in stats.py", "Everything is green."},
+             {"How did the tests go?", "All tests pass."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("I did not run the tests."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        ASSERT_EQ(mock.receivedBodies().size(), 2u) << tc.request << " -> " << tc.reply;
+        EXPECT_NE(mock.receivedBodies()[1].find("no tests were run this turn"), std::string::npos) << tc.request;
+        EXPECT_EQ(r["status"], "success") << tc.request;
+    }
+}
+
+TEST(GaiaAgentTest, OrdinaryProseIRanIsNotACommandClaim) {
+    struct Case {
+        const char* request;
+        const char* reply;
+    };
+    for (const auto& tc : std::vector<Case>{
+             {"Write a 2-sentence first-person story about a morning jog. Start with 'I ran'.",
+              "I ran before the sun had cleared the rooftops. My breath fogged in the cold air."},
+             {"What happened while reading the notes?", "I ran into an interesting contradiction in the text."},
+             {"Why did you stop?", "I've run out of examples to share."},
+             {"Describe the ballet performance.", "The dancer executed the turn cleanly."},
+             {"Write a story about a 5K race.", "I ran it in twenty minutes."},
+             {"How did you check the proposal?", "I ran it by the team."},
+             {"What if you ran the script?", "If I ran the script, it would overwrite the output."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("unexpected retry"));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << tc.request << " -> " << tc.reply;
+        EXPECT_EQ(r["result"], tc.reply) << tc.request;
+    }
+
+    // Genuine unrun command claims are still sent back when no bash_execute succeeded.
+    for (const auto& tc : std::vector<Case>{
+             {"Check stats.py", "I ran `python stats.py` and got 42."},
+             {"Check the script", "I ran the script and it worked."},
+             {"Check the tests", "I've run pytest and checked the log."},
+             {"Run the build", "I have run the build."},
+             {"Run stats.py", "I ran it and got 42."},
+             {"Run the migration", "Executed the migration script."},
+             {"Check whether main.c compiles", "I ran it and it compiled cleanly."},
+             {"Does main.go work?", "I ran it and it printed 42."},
+         }) {
+        Workdir w;
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(tc.reply));
+        mock.pushResponse(answer("I did not run it yet."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        const json r = agent.processQuery(tc.request);
+        ASSERT_EQ(mock.receivedBodies().size(), 2u) << tc.request << " -> " << tc.reply;
+        EXPECT_NE(mock.receivedBodies()[1].find("no command ran successfully"), std::string::npos) << tc.request;
+        EXPECT_EQ(r["result"], "I did not run it yet.") << tc.request;
+    }
+}
+
+namespace {
+std::set<std::string> advertisedToolNames(const std::string& requestBody) {
+    std::set<std::string> names;
+    const json body = json::parse(requestBody);
+    if (!body.contains("tools") || !body["tools"].is_array()) return names;
+    for (const auto& t : body["tools"]) {
+        if (t.contains("function") && t["function"].contains("name")) {
+            names.insert(t["function"]["name"].get<std::string>());
+        }
+    }
+    return names;
+}
+
+std::string systemMessageText(const std::string& requestBody) {
+    const json body = json::parse(requestBody);
+    if (!body.contains("messages") || !body["messages"].is_array()) return "";
+    for (const auto& m : body["messages"]) {
+        if (m.value("role", "") == "system" && m.contains("content") && m["content"].is_string()) {
+            return m["content"].get<std::string>();
+        }
+    }
+    return "";
+}
+}  // namespace
+
+TEST(GaiaAgentTest, MemoryOffDisablesMemoryToolsAndNotesItInPrompt) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Memory is off for this chat."));
+    mock.pushResponse(answer("Memory is back on."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryOff = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Qwen3-30B-A3B-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("Remember that I live in Oslo, and tell me my favorite color.");
+    o.memoryOff->store(false);
+    agent.processQuery("Hello again.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+
+    const auto offTools = advertisedToolNames(bodies[0]);
+    for (const char* name : {"remember", "recall", "update_memory", "forget"}) {
+        EXPECT_EQ(offTools.count(name), 0u) << name << " should be disabled while memory is off";
+    }
+    EXPECT_NE(systemMessageText(bodies[0]).find("Memory is off for this chat"), std::string::npos);
+
+    const auto onTools = advertisedToolNames(bodies[1]);
+    for (const char* name : {"remember", "recall", "update_memory", "forget"}) {
+        EXPECT_EQ(onTools.count(name), 1u) << name << " should re-enable once memory turns back on";
+    }
+    EXPECT_EQ(systemMessageText(bodies[1]).find("Memory is off for this chat"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, PrivateChatDisablesMemoryWriteToolsWhileKeepingRecall) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("This chat is private."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryPrivate = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("Remember that I live in Oslo.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 1u);
+
+    const auto tools = advertisedToolNames(bodies[0]);
+    EXPECT_EQ(tools.count("recall"), 1u) << "private chat still allows recall";
+    for (const char* name : {"remember", "update_memory", "forget"}) {
+        EXPECT_EQ(tools.count(name), 0u) << name << " should be disabled in a private chat";
+    }
+    EXPECT_NE(systemMessageText(bodies[0]).find("This chat is private"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, ReenablingMemoryOnCompactModelKeepsCompactWithheldMemoryToolsOff) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Off."));
+    mock.pushResponse(answer("On."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryOff = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Gemma-4-E2B-it-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("First turn.");
+    o.memoryOff->store(false);
+    agent.processQuery("Second turn.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const auto onTools = advertisedToolNames(bodies[1]);
+    EXPECT_EQ(onTools.count("remember"), 1u);
+    EXPECT_EQ(onTools.count("recall"), 1u);
+    EXPECT_EQ(onTools.count("update_memory"), 0u);
+    EXPECT_EQ(onTools.count("forget"), 0u);
+}
+
+TEST(GaiaAgentTest, MemorySwitchesDoNotUndoTheCompactTierOrOtherTools) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Private."));
+    mock.pushResponse(answer("Normal."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryPrivate = std::make_shared<std::atomic<bool>>(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.modelId = "Gemma-4-E2B-it-GGUF";
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(cfg, o);
+
+    agent.processQuery("First turn.");
+    o.memoryPrivate->store(false);
+    agent.processQuery("Second turn.");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const auto privateTools = advertisedToolNames(bodies[0]);
+    EXPECT_EQ(privateTools.count("recall"), 1u);
+    EXPECT_EQ(privateTools.count("remember"), 0u);
+    const auto normalTools = advertisedToolNames(bodies[1]);
+    EXPECT_EQ(normalTools.count("remember"), 1u);
+    for (const auto& tools : {privateTools, normalTools}) {
+        for (const char* name : {"update_memory", "forget", "git_status", "env_inspect"}) {
+            EXPECT_EQ(tools.count(name), 0u) << name << " stays withheld from a compact model";
+        }
+    }
+}
+
+TEST(GaiaAgentTest, NodesOwnTestRunnerBacksATestsPassClaim) {
+    const std::string spec = "\xE2\x9C\x94 spaces become dashes (0.4ms)\n\xE2\x84\xB9 tests 2\n\xE2\x84\xB9 pass 2\n\xE2\x84\xB9 fail 0\n";
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("Both tests pass.", {edit("slug.js"), shellRun("node --test", 0, spec)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("Both tests pass.",
+                                                 {edit("slug.js"), shellRun("node --test 2>&1 | tail -12", 0, spec)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "Both tests pass.", {shellRun("node --test test/", 0, "# tests 2\n# pass 2\n# fail 0\n")}));
+    const std::string failing = "\xE2\x84\xB9 tests 2\n\xE2\x84\xB9 pass 1\n\xE2\x84\xB9 fail 1\n";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("Both tests pass.", {shellRun("node --test", 1, failing)})),
+              "the tests run this turn didn't pass");
+    // A run that found no tests backs nothing.
+    EXPECT_TRUE(GaiaAgent::unsupportedTestClaim(
+        "Both tests pass.", {shellRun("node --test", 0, "\xE2\x84\xB9 tests 0\n\xE2\x84\xB9 pass 0\n\xE2\x84\xB9 fail 0\n")}));
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("Both tests pass.", {shellRun("node slug.js", 0, "")})),
+              "no tests were run this turn");
+}
+
+TEST(GaiaAgentTest, SourceFilesAnAnswerSaysItWroteAreClaimedFilesToo) {
+    using Files = std::vector<std::string>;
+    EXPECT_EQ(GaiaAgent::claimedFiles("Done. I created `primes.c`, compiled it with gcc and ran it."), Files{"primes.c"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I wrote src/app/main.tsx and created `server.go`."),
+              (Files{"src/app/main.tsx", "server.go"}));
+    EXPECT_EQ(GaiaAgent::claimedFiles("`slug.test.js` has been created."), Files{"slug.test.js"});
+    // A library with a file's ending is not a file.
+    EXPECT_TRUE(GaiaAgent::claimedFiles("I created the server with Node.js and Express.js.").empty());
+    EXPECT_TRUE(GaiaAgent::claimedFiles("I built the frontend with Svelte.js, not Angular.js or jQuery.js.").empty());
+    // A component file with a capital letter is still a file.
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created `App.js`. I wrote `Button.jsx`."), (Files{"App.js", "Button.jsx"}));
+    EXPECT_TRUE(GaiaAgent::claimedFiles("The bug is in utils.js, on line 4.").empty());
+}
+
+TEST(GaiaAgentTest, AnAnswerThatSaysItWroteASourceFileNothingWroteIsNotASuccess) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    const std::string invented = "Done. I created `primes.c`, compiled it with gcc and ran it. It prints 2 3 5 7.";
+    for (int i = 0; i < 4; ++i) mock.pushResponse(answer(invented));
+    AgentConfig c = cfgFor(mock);
+    c.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(c, optionsFor(w));
+    json r = agent.processQuery("write primes.c, compile it and run it");
+    EXPECT_GE(mock.receivedBodies().size(), 2u) << "sent back before it is believed";
+    EXPECT_NE(r.value("result", "").find("primes.c was saved, but no such file exists"), std::string::npos) << r.dump();
+}
+
+TEST(GaiaAgentTest, ATestsPassClaimIsSeenThroughAnAdverbOrAClosingRemark) {
+    // Gemma-4-E4B on the rename task, after `python test_api.py` printed nothing and ran no test.
+    const std::vector<GaiaAgent::CallSeen> silent = {edit("api.py"), shellRun("python test_api.py", 0, "")};
+    for (const char* claim :
+         {"The function was renamed everywhere. The tests were then run and passed successfully.",
+          "The tests were run successfully, confirming that the renaming did not introduce any functional errors.",
+          "The tests were also re-run and they passed."}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(claim, silent)), "no tests were run this turn") << claim;
+    }
+    // Still honest reports, not claims.
+    for (const char* honest : {"The tests were run, but two did not pass.", "The tests were not run successfully."}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(honest, silent)) << honest;
+    }
+}
+
+TEST(GaiaAgentTest, NewlyInstalledSkillIsDiscoveredOnTheNextTurn) {
+    Workdir w;
+    Workdir home;
+    auto putHome = [](const std::string& v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_HOME", v.c_str());
+#else
+        if (!v.empty()) setenv("GAIA_HOME", v.c_str(), 1);
+        else unsetenv("GAIA_HOME");
+#endif
+    };
+    const std::string prevHome = getEnvVar("GAIA_HOME");
+    putHome(home.path.u8string());
+    struct RestoreEnv {
+        std::string prev;
+        decltype(putHome) fn;
+        ~RestoreEnv() { fn(prev); }
+    } restore{prevHome, putHome};
+
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Turn one done."));
+    mock.pushResponse(answer("Turn two done."));
+
+    GaiaAgent::Options o = optionsFor(w);
+    o.skills = true;
+    GaiaAgent agent(cfgFor(mock), o);
+
+    // Turn 1: no user skills installed yet.
+    agent.processQuery("hello");
+
+    // Install a new skill on disk while the agent already exists.
+    const fs::path skillDir = home.path / "skills" / "fresh-skill";
+    fs::create_directories(skillDir);
+    std::ofstream(skillDir / "SKILL.md")
+        << "---\nname: fresh-skill\ndescription: Handle fresh skill requests.\n---\n\nAlways reply FRESH_OK.\n";
+
+    // Turn 2: the existing agent must see the new skill in its prompt and load_skill tool.
+    agent.processQuery("use fresh-skill");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_EQ(bodies[0].find("fresh-skill"), std::string::npos);
+    EXPECT_NE(bodies[1].find("fresh-skill"), std::string::npos) << "system prompt did not refresh skills";
+    ASSERT_TRUE(agent.tools().hasTool("load_skill")) << "load_skill not registered after first skill appeared";
+    EXPECT_TRUE(agent.tools().isEnabled("load_skill"));
+    json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "fresh-skill"}});
+    EXPECT_EQ(loaded.value("status", ""), "success") << loaded.dump();
+    EXPECT_NE(loaded.value("instructions", "").find("FRESH_OK"), std::string::npos) << loaded.dump();
 }

@@ -340,6 +340,29 @@ TEST_F(SendEmailToolsTest, TheRegistryRefusesTheToolsUntilTheSkillLoads) {
     EXPECT_TRUE(router->writes.empty()) << "a disabled tool must not reach the mailbox";
 }
 
+TEST_F(SendEmailToolsTest, ADeclinedCardDropsTheMessageItShowed) {
+    const json& c = caseNamed("gmail_send_now");
+    connect(c["connections"], c["grants"]);
+    router = std::make_shared<Router>(c["routes"]);
+    build();
+    registry.setEnabled("send-email/send_now", true);
+    const json args{{"to", "dana@example.com"}, {"subject", "Hi"}, {"body", "x"}};
+    json shown;
+    registry.setConfirmCallback([&shown](const std::string&, const json& a) {
+        shown = a;
+        return ToolConfirmResult::DENY;
+    });
+    const json declined = registry.executeTool("send-email/send_now", args);
+    EXPECT_NE(declined.value("status", ""), "success") << declined.dump(1);
+    ASSERT_TRUE(shown.is_object()) << "the card was never raised: " << declined.dump(1);
+    EXPECT_NE(shown.value("_exact_text", "").find("dana@example.com"), std::string::npos) << shown.dump(1);
+    EXPECT_EQ(shown.value("_needs_person", false), true) << shown.dump(1);
+    const json direct = tool("send_now").callback(args);
+    EXPECT_EQ(direct.value("sent", true), false) << "a declined message must not be sendable: " << direct.dump(1);
+    EXPECT_NE(direct.value("error", "").find("without going through its confirmation"), std::string::npos);
+    EXPECT_TRUE(router->writes.empty()) << "nothing reaches the mailbox after a decline";
+}
+
 TEST_F(SendEmailToolsTest, ACardForACallThatWasNeverPreparedIsAnError) {
     build();
     EXPECT_THROW(tool("send_now").promptArgs({{"to", "dana@example.com"}}), std::logic_error);

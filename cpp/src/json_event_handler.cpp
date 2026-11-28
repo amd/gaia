@@ -98,7 +98,7 @@ void JsonEventOutputHandler::prettyPrintJson(const json& data,
         json event = {
             {"type", "tool_result"},
             {"title", currentTool_},
-            {"success", status != "error"}
+            {"success", status != "error" && status != "denied"}
         };
 
         // Include command_output if the tool result has stdout/stderr.
@@ -199,6 +199,14 @@ void JsonEventOutputHandler::printStreamToken(const std::string& token) {
 
 void JsonEventOutputHandler::printStreamEnd() {
     // No event — stream end is signaled by the answer event.
+}
+
+void JsonEventOutputHandler::printAnswerRetracted(const std::string&) {
+    emit({{"type", "status"},
+          {"status", "working"},
+          {"phase", "answer_check"},
+          {"message", "Checking the answer"},
+          {"retracts_answer", true}});
 }
 
 } // namespace gaia

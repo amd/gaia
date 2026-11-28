@@ -1070,6 +1070,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         stopState,
                         historyNotice,
                         libraryNotices: event.library_notices,
+                        failed: event.failed ? true : undefined,
                         failure: event.failed ? event.failure : undefined,
                         agentProgram: event.failed ? event.agent_program : undefined,
                     };
@@ -1113,6 +1114,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     ...m,
                                     cards: prev?.cards ?? m.cards,
                                     stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
+                                    failed: m.failed ?? prevMsgs.find((p) => p.id === m.id)?.failed,
                                     failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
                                     agentProgram: m.agentProgram ?? prevMsgs.find((p) => p.id === m.id)?.agentProgram,
                                 };

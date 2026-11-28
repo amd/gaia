@@ -102,13 +102,13 @@ struct Router {
     json routes;
     std::vector<int> used;
     std::vector<Request> seen;
-    std::mutex mu;  // Gmail fetches message details on several threads at once
+    std::mutex mutex;  // the tools fan calls out across threads
 
     explicit Router(json r) : routes(std::move(r)), used(routes.size(), 0) {}
 
     HttpResponse operator()(const mail::HttpCall& call) {
-        std::lock_guard<std::mutex> lock(mu);
         const Request req = parse(call);
+        std::lock_guard<std::mutex> lock(mutex);
         seen.push_back(req);
         for (size_t i = 0; i < routes.size(); ++i) {
             const json& route = routes[i];

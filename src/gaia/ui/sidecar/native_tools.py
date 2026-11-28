@@ -10,7 +10,10 @@ translation only: the sidecar's own ``confirm_id`` and ``always_scope`` are
 never touched, so approvals and grants still reach the tool that asked.
 """
 
+import re
 from typing import Any, Dict, Optional, Tuple
+
+_DENIED_BY_USER_RE = re.compile(r"^Tool '[^']+' execution denied by user$")
 
 #: gaiacpp tool -> (flagship tool, {gaiacpp argument: flagship argument}).
 _TWINS: Dict[str, Tuple[str, Dict[str, str]]] = {
@@ -43,6 +46,26 @@ NATIVE_TOOL_LABELS: Dict[str, str] = {
     "get_mcp_prompt": "Reading a connector's prompt",
     "list_mcp_resources": "Listing a connector's resources",
     "read_mcp_resource": "Reading a connector's resource",
+    # The calendar skill's tools, which the Python agent loads with the skill.
+    "calendar/list_calendar_events": "Reading your calendar",
+    "calendar/check_calendar_availability": "Checking when you're free",
+    "calendar/create_calendar_event": "Adding a calendar event",
+    "calendar/update_calendar_event": "Changing a calendar event",
+    "calendar/cancel_calendar_event": "Cancelling a calendar event",
+}
+
+#: Tools above that change something the user keeps.
+NATIVE_CHANGE_TOOLS = frozenset(
+    {
+        "calendar/create_calendar_event",
+        "calendar/update_calendar_event",
+        "calendar/cancel_calendar_event",
+    }
+)
+
+#: Tools both agents name the same way, whose gaiacpp argument names differ.
+_SAME_NAME_ARG_RENAMES: Dict[str, Dict[str, str]] = {
+    "index_document": {"path": "file_path"},
 }
 
 #: Every gaiacpp-only tool name this module words, for the drift test.
@@ -55,7 +78,13 @@ def as_flagship_call(tool: str, args: Any) -> Tuple[str, Any]:
         return _file_search(args)
     twin = _TWINS.get(tool)
     if twin is None:
-        return tool, args
+        renames = _SAME_NAME_ARG_RENAMES.get(tool)
+        if not renames or not isinstance(args, dict):
+            return tool, args
+        return tool, {
+            renames[key] if key in renames and renames[key] not in args else key: value
+            for key, value in args.items()
+        }
     # The Python agent's own search_code is a pattern search, not the code index.
     if tool == "search_code" and isinstance(args, dict) and "pattern" in args:
         return tool, args
@@ -87,13 +116,50 @@ def _count(n: int, one: str, many: str) -> str:
     return f"{n:,} {one if n == 1 else many}"
 
 
+def is_native_denied(tool: str, data: Any) -> bool:
+    """Whether *data* is a user-declined result from a gaiacpp tool."""
+    if not isinstance(data, dict):
+        return False
+    err = data.get("error")
+    if isinstance(err, str) and _DENIED_BY_USER_RE.match(err.strip()):
+        return True
+    if tool not in NATIVE_TOOL_NAMES:
+        return False
+    return data.get("status") == "denied" or data.get("already_declined") is True
+
+
+def normalize_native_result(tool: str, data: Any) -> Any:
+    """Ensure a gaiacpp user-declined tool result carries ``status: "denied"``."""
+    if not is_native_denied(tool, data) or data.get("status") == "denied":
+        return data
+    return {**data, "status": "denied"}
+
+
 def native_result_summary(tool: str, data: Any) -> Optional[str]:
     """A gaiacpp tool's result in plain words, or None to summarize it generically.
 
-    *tool* is gaiacpp's own name. Failures return None: their ``error`` text is
-    already a sentence and the generic path shows it.
+    *tool* is gaiacpp's own name. Failures generally return None so the generic
+    path shows them, except declined gaiacpp calls (whose raw error exposes the
+    C++ tool name) and ``web_fetch`` (which returns its plain error text
+    directly so the UI does not prepend ``error: `` or clip it mid-word).
     """
-    if not isinstance(data, dict) or data.get("error"):
+    if not isinstance(data, dict):
+        return None
+    if is_native_denied(tool, data):
+        if data.get("already_declined") is True:
+            return "Not run (declined earlier)"
+        return "Declined by user"
+    if tool == "web_fetch" and data.get("error"):
+        err = str(data["error"]).strip()
+        http_status = data.get("http_status")
+        if (
+            isinstance(http_status, int)
+            and http_status > 0
+            and str(http_status) not in err
+        ):
+            return f"HTTP {http_status}: {err}"
+        return err
+    if data.get("error"):
         return None
     path = data.get("path")
     name = str(path).replace("\\", "/").rsplit("/", 1)[-1] if path else "the file"
@@ -125,6 +191,8 @@ def _shell_summary(data: Dict[str, Any]) -> str:
         return "Command timed out"
     code = data.get("exit_code")
     stdout = str(data.get("stdout") or "").strip()
+    if code not in (0, None) and isinstance(data.get("expected_exit"), str):
+        return f"{data['expected_exit']} (exit {code})"
     if code not in (0, None):
         detail = (str(data.get("stderr") or "").strip() or stdout)[:150]
         return f"Command failed (exit {code})" + (f": {detail}" if detail else "")

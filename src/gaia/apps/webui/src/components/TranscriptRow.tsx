@@ -61,8 +61,8 @@ export const TranscriptRow = memo(function TranscriptRow({
     const canChange = !busy && !unsent && msg.role === 'user' && !readOnly;
     const model = msg.stats?.model ?? answeredBy;
     const recovers = msg.failed === true && msg.failure !== 'model_server_down' && canTryAgain;
-    // Only when gaiacpp started: a gaiacpp that can't start gets the recovery's two fixes instead.
-    const ranOnNative = msg.agentProgram === 'gaiacpp' && isLast && !busy;
+    // Only when gaiacpp started and failed: a gaiacpp that can't start gets the recovery's two fixes instead.
+    const ranOnNative = msg.failed === true && msg.failure !== 'model_server_down' && msg.agentProgram === 'gaiacpp' && isLast && !busy;
     // The recovery card names the real cause and its fixes; the generic failure above it would contradict them.
     const [agentProblem, setAgentProblem] = useState(false);
     const replaced = recovers && agentProblem;

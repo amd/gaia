@@ -247,6 +247,8 @@ struct ToolParameter {
     /// The JSON schema sent for this parameter in place of the bare type, for an array or
     /// object whose shape the model must be told. Null = type and description only.
     json schema = nullptr;
+    /// The tool refuses a value of the wrong type itself, in its own words.
+    bool toolChecksType = false;
 };
 
 // Callback type for tool functions.
@@ -268,6 +270,13 @@ constexpr ToolPolicy stricterPolicy(ToolPolicy a, ToolPolicy b) {
                   "ToolPolicy must stay ordered by severity");
     return a < b ? b : a;
 }
+
+/// An exception that names its Python class, for messages that quote type(exc).__name__.
+class GAIA_API PythonNamedError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+    virtual const char* pythonName() const = 0;
+};
 
 // DENY is a person's no. UNATTENDED means nobody could be asked or nobody
 // answered: the call is not run, and it is not remembered as declined.
@@ -320,6 +329,9 @@ struct ToolInfo {
 
     /// Every call needs a person: no "always allow", and full access still asks.
     bool personMustApprove = false;
+
+    /// Called when a call that passed its preflight is not run (declined or unanswered).
+    std::function<void(const json& args)> forget;
 };
 
 // ---- LLM Usage Statistics ----

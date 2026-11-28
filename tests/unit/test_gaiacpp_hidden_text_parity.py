@@ -3,7 +3,7 @@
 
 """gaiacpp's approval cards hide no character the Python agent's cards show as a code.
 
-gaiacpp's ``visible()`` in ``cpp/agents/gaiacpp/stdio_server.cpp`` carries its
+gaiacpp's ``visible()`` in ``cpp/src/person_approval.cpp`` carries its
 own copy of the sets ``person_approval.visible`` uses; these tests keep the two equal.
 """
 
@@ -15,13 +15,7 @@ import pytest
 
 from gaia.agents.base import person_approval
 
-_SOURCE = (
-    Path(__file__).resolve().parents[2]
-    / "cpp"
-    / "agents"
-    / "gaiacpp"
-    / "stdio_server.cpp"
-)
+_SOURCE = Path(__file__).resolve().parents[2] / "cpp" / "src" / "person_approval.cpp"
 _SURROGATES = range(0xD800, 0xE000)
 
 

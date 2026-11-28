@@ -381,7 +381,9 @@ def test_choosing_the_agent_already_in_use_restarts_nothing(
 def test_gaiacpp_cannot_be_chosen_where_it_is_not_installed(client, no_gaiacpp, stops):
     r = client.put("/api/settings", json={"flagship_agent": "gaiacpp"})
     assert r.status_code == 422
-    assert "not installed" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["status"] == "gaiacpp_not_installed"
+    assert "not installed" in detail["message"]
     assert fetch.chosen_flagship() == "gaiapy"
     assert stops == []
 
@@ -413,7 +415,13 @@ def test_an_agent_that_will_not_stop_is_reported_with_what_was_saved(
     r = client.put("/api/settings", json={"flagship_agent": "gaiacpp"})
     assert r.status_code == 500
     detail = r.json()["detail"]
-    assert "saved as gaiacpp" in detail and "the daemon did not answer" in detail
+    assert detail["status"] == "agent_stop_failed"
+    assert detail["agent"] == "gaiacpp"
+    assert detail["error"] == "the daemon did not answer"
+    assert (
+        "saved as gaiacpp" in detail["message"]
+        and "the daemon did not answer" in detail["message"]
+    )
 
 
 # ---------------------------------------------------------------- review follow-ups
@@ -435,7 +443,9 @@ def test_a_switch_is_refused_while_a_chat_is_answering(
     monkeypatch.setattr(run_manager, "active_sessions", lambda: ["chat-1"])
     r = client.put("/api/settings", json={"flagship_agent": "gaiacpp"})
     assert r.status_code == 409
-    assert "answering" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["status"] == "agent_switch_chat_busy"
+    assert "answering" in detail["message"]
     assert fetch.chosen_flagship() == "gaiapy"
     assert stops == []
 
@@ -527,7 +537,9 @@ def test_a_switch_is_refused_while_setup_is_running_its_tests(
     monkeypatch.setattr(runner, "status", lambda: {"state": "verifying"})
     r = client.put("/api/settings", json={"flagship_agent": "gaiacpp"})
     assert r.status_code == 409
-    assert "setting up" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["status"] == "agent_switch_setup_busy"
+    assert "setting up" in detail["message"]
     assert fetch.chosen_flagship() == "gaiapy"
     assert stops == []
 

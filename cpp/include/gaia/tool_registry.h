@@ -149,12 +149,18 @@ public:
     /// Added to the refusal of a call nobody could approve, e.g. the flag that allows it.
     void setUnattendedRemedy(std::string remedy) { unattendedRemedy_ = std::move(remedy); }
 
+    /// Set where this run approves tools on its own and no person can be asked
+    /// (person_approval.preapproved and not a_person_can_answer).
+    void setNobodyToAsk(std::function<bool()> check) { nobodyToAsk_ = std::move(check); }
+    bool nobodyToAsk() const { return nobodyToAsk_ && nobodyToAsk_(); }
+
 private:
     /// The refusal for a call that repeats or reroutes a declined one, else nullopt.
     std::optional<json> declinedRefusal(const std::string& tool, const json& args) const;
     void noteDeclined(const std::string& tool, const json& args);
     void noteApproved(const std::string& tool, const json& args);
 
+    std::function<bool()> nobodyToAsk_;
     std::map<std::string, std::string> declinedCalls_;  // call key -> as shown; kept for the chat
     std::vector<std::string> declinedTargets_;          // files this turn's declined calls named
     std::vector<std::string> declinedCommands_;         // program + arguments this turn's declined commands ran

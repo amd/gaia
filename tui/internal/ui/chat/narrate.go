@@ -154,6 +154,13 @@ var toolPhrases = map[string]toolPhrase{
 	"send-email/reply_to_message": {Without: "Sending a reply"},
 	"send-email/forward_message":  {Without: "Forwarding an email"},
 
+	// Calendar skill
+	"calendar/list_calendar_events":        {Without: "Reading your calendar"},
+	"calendar/check_calendar_availability": {Without: "Checking when you're free"},
+	"calendar/create_calendar_event":       {With: "Adding %s to your calendar", Without: "Adding an event to your calendar", Arg: "title"},
+	"calendar/update_calendar_event":       {With: "Changing %s on your calendar", Without: "Changing a calendar event", Arg: "expected_title"},
+	"calendar/cancel_calendar_event":       {With: "Cancelling %s on your calendar", Without: "Cancelling a calendar event", Arg: "expected_title"},
+
 	// Not tools: the agent checking in on a long turn, and asking to reach a
 	// path outside the session.
 	"continue_long_turn": {Without: "Asking whether to keep going"},

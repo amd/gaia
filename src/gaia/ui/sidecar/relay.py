@@ -63,10 +63,12 @@ from gaia.ui.event_narration import (
     sanitize_memory_result,
 )
 from gaia.ui.sidecar.native_tools import (
+    NATIVE_CHANGE_TOOLS,
     NATIVE_TOOL_LABELS,
     as_flagship_call,
     native_prompt_summary,
     native_result_summary,
+    normalize_native_result,
 )
 from gaia.ui.sidecar.profiles import GAIA_PROFILE, RelayProfile
 from gaia.ui.sse_handler import (
@@ -205,6 +207,13 @@ def _derive_summary(tool: str, data: Any, profile: RelayProfile = GAIA_PROFILE) 
     """Short, human summary for a ``tool_result`` — never a bare "Done"."""
     if _is_summary_view(data) and data["summary"]:
         # The sidecar already summarized it; re-summarizing names its keys.
+        return data["summary"]
+    if (
+        tool == "index_documents"
+        and isinstance(data, dict)
+        and isinstance(data.get("summary"), str)
+        and data["summary"].strip()
+    ):
         return data["summary"]
     if isinstance(data, dict) and data:
         return _summarize_tool_result(data)
@@ -476,7 +485,7 @@ def _dispatch_one(
                 "narration": narration,
             }
         )
-        if tool in profile.mutating_tools:
+        if tool in profile.mutating_tools or tool in NATIVE_CHANGE_TOOLS:
             handler._emit(
                 {
                     "type": "status",
@@ -491,7 +500,7 @@ def _dispatch_one(
             tool = called[1]
         else:
             tool, _ = as_flagship_call(sent_tool, None)
-        data = event.get("data")
+        data = normalize_native_result(sent_tool, event.get("data"))
         was_sensitive = getattr(handler, "relay_sensitive_memory", False)
         handler.relay_sensitive_memory = False
         if was_sensitive:

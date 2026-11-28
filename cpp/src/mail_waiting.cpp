@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "gaia/mail.h"
+#include "mail_internal.h"
 #include "mail_screens_detail.h"
 #include "mail_text.h"
 
@@ -27,6 +28,7 @@ namespace gaia::mail {
 
 namespace {
 
+using detail::field;
 using text::Cps;
 
 constexpr int kDefaultMaxSentLookback = 50;
@@ -129,13 +131,6 @@ constexpr const char* kQuoteMarkerLine = "\n-----Original Message-----\n";
 bool anyIn(const std::string& text, const std::vector<const char*>& phrases) {
     return std::any_of(phrases.begin(), phrases.end(),
                        [&](const char* p) { return text.find(p) != std::string::npos; });
-}
-
-const json& field(const json& obj, const char* key) {
-    static const json kNull;
-    if (!obj.is_object()) return kNull;
-    const auto it = obj.find(key);
-    return it == obj.end() ? kNull : *it;
 }
 
 // ---- _VERB_TIME_RE / _TIME_RE ----

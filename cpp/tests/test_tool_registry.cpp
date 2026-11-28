@@ -266,7 +266,7 @@ TEST_F(ToolRegistryTest, ExecuteToolConfirmPolicy_Denied) {
     registry.registerTool(std::move(info));
 
     json result = registry.executeTool("guarded", json::object());
-    EXPECT_EQ(result["status"], "error");
+    EXPECT_EQ(result["status"], "denied");
     EXPECT_TRUE(result["error"].get<std::string>().find("denied") != std::string::npos);
 }
 
@@ -511,4 +511,78 @@ TEST_F(ToolRegistryTest, ExecuteToolValidateAndConfirm) {
 
     registry.executeTool("guarded", json::object());
     EXPECT_TRUE(argsSeenByConfirm.value("sanitized", false));
+}
+
+TEST_F(ToolRegistryTest, ACallOnlyAPersonMayApproveIsRefusedWhenItsCardIsNotAnObject) {
+    bool ran = false;
+    bool asked = false;
+    ToolInfo info;
+    info.name = "notify";
+    info.description = "Tells people";
+    info.policy = ToolPolicy::CONFIRM;
+    info.personMustApprove = true;
+    info.promptArgs = [](const json&) { return json::array({"not", "a", "card"}); };
+    info.callback = [&](const json&) -> json {
+        ran = true;
+        return json{{"ok", true}};
+    };
+    registry.registerTool(std::move(info));
+    registry.setConfirmCallback([&](const std::string&, const json&) {
+        asked = true;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+
+    json result = registry.executeTool("notify", json::object());
+    EXPECT_EQ(result["status"], "error");
+    EXPECT_EQ(result["executed"], false);
+    EXPECT_FALSE(asked) << "a card without the person mark must not reach a prompt";
+    EXPECT_FALSE(ran);
+}
+
+TEST_F(ToolRegistryTest, ACardThatFailsToBuildNamesTheErrorAsPythonDoes) {
+    struct TwinError : PythonNamedError {
+        using PythonNamedError::PythonNamedError;
+        const char* pythonName() const override { return "CalendarError"; }
+    };
+    ToolInfo info;
+    info.name = "notify";
+    info.description = "Tells people";
+    info.policy = ToolPolicy::CONFIRM;
+    info.personMustApprove = true;
+    info.promptArgs = [](const json&) -> json { throw TwinError("the event couldn't be re-read"); };
+    info.callback = [](const json&) -> json { return json{{"ok", true}}; };
+    registry.registerTool(std::move(info));
+    registry.setConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+
+    json result = registry.executeTool("notify", json::object());
+    EXPECT_EQ(result["error"],
+              "notify was not run: its permission check failed (CalendarError: the event couldn't be re-read). "
+              "Tell the user it did not run.");
+}
+
+TEST_F(ToolRegistryTest, ACheckedCallThatDoesNotRunIsForgotten) {
+    int forgotten = 0;
+    ToolConfirmResult answer = ToolConfirmResult::DENY;
+    ToolInfo info;
+    info.name = "send";
+    info.description = "Sends a prepared message";
+    info.policy = ToolPolicy::CONFIRM;
+    info.personMustApprove = true;
+    info.preflight = [](const json&) -> std::optional<json> { return std::nullopt; };
+    info.forget = [&](const json&) { ++forgotten; };
+    info.callback = [](const json&) -> json { return json{{"ok", true}}; };
+    registry.registerTool(std::move(info));
+    registry.setConfirmCallback([&](const std::string&, const json&) {
+        if (answer == ToolConfirmResult::ALLOW_ONCE) throw std::runtime_error("prompt broke");
+        return answer;
+    });
+
+    registry.executeTool("send", json{{"n", 1}});
+    EXPECT_EQ(forgotten, 1) << "declined";
+    answer = ToolConfirmResult::UNATTENDED;
+    registry.executeTool("send", json{{"n", 2}});
+    EXPECT_EQ(forgotten, 2) << "unanswered";
+    answer = ToolConfirmResult::ALLOW_ONCE;
+    EXPECT_THROW(registry.executeTool("send", json{{"n", 3}}), std::runtime_error);
+    EXPECT_EQ(forgotten, 3) << "the prompt threw";
 }

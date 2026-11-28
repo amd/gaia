@@ -195,6 +195,10 @@ var actionTitles = map[string]string{
 	"send-email/forward_message":  "Forward this email?",
 	"send-email/discard_draft":    "Delete this draft?",
 	"send-email/update_draft":     "Change this draft?",
+
+	"calendar/create_calendar_event": "Add this event to your calendar?",
+	"calendar/update_calendar_event": "Change this calendar event?",
+	"calendar/cancel_calendar_event": "Cancel this calendar event?",
 }
 
 // approveLabels names what y grants for a prompt whose yes outlasts the call.
