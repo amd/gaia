@@ -61,7 +61,6 @@ def make_flagship(monkeypatch, tmp_path):
     this agent and should not need its optional runtime dependencies merely to
     collect.
     """
-    import contextlib
     import hashlib
     import importlib
     import json
@@ -69,6 +68,7 @@ def make_flagship(monkeypatch, tmp_path):
     import numpy as np
     from gaiapy.agent import GaiaAgent
     from gaiapy.chat_agent import ChatAgent
+    from registry_isolation import isolated_registry
 
     from gaia.agents.base.history import SessionHistory
     from gaia.agents.base.memory import MemoryMixin
@@ -76,7 +76,6 @@ def make_flagship(monkeypatch, tmp_path):
         DistilledProcedure,
         load_synthesis_config,
     )
-    from gaia.agents.base.tools import _TOOL_REGISTRY
 
     def fake_embedding(text: str) -> np.ndarray:
         vec = np.zeros(768, dtype=np.float32)
@@ -84,16 +83,6 @@ def make_flagship(monkeypatch, tmp_path):
             vec[int(hashlib.md5(word.encode()).hexdigest(), 16) % 768] += 1.0
         norm = np.linalg.norm(vec)
         return vec / norm if norm else vec
-
-    @contextlib.contextmanager
-    def isolated_registry():
-        saved = dict(_TOOL_REGISTRY)
-        _TOOL_REGISTRY.clear()
-        try:
-            yield
-        finally:
-            _TOOL_REGISTRY.clear()
-            _TOOL_REGISTRY.update(saved)
 
     class ScriptedModel:
         def __init__(self):
