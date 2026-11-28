@@ -247,7 +247,10 @@ size_t MemoryStore::count() {
 
 std::string MemoryStore::promptBlock(int limit) {
     const auto prefs = recall("", "preference", limit, false);
-    if (prefs.empty()) return "";
+    if (prefs.empty()) {
+        return count() > 0 ? "You remember facts from earlier chats: use recall to look one up when it could matter.\n"
+                           : "";
+    }
     std::string out = "==== WHAT YOU KNOW ABOUT THE USER ====\n";
     for (const auto& p : prefs) out += "- " + p.content + "\n";
     return out + "Use recall to look up other remembered facts when they could matter.\n";
@@ -288,13 +291,16 @@ void MemoryStore::registerTools(ToolRegistry& registry) {
         {"query", ToolParamType::STRING, false, "Words to search for."},
         {"category", ToolParamType::STRING, false, "Only this category."},
         {"limit", ToolParamType::INTEGER, false, "Most entries to return (default 10)."},
-        {"include_sensitive", ToolParamType::BOOLEAN, false, "Include entries marked sensitive."},
+        {"include_sensitive", ToolParamType::BOOLEAN, false,
+         "Include entries marked sensitive in a listing; a search always includes them."},
     };
     recall.policy = ToolPolicy::ALLOW;
     recall.callback = [this](const json& a) -> json {
         json items = json::array();
-        for (const auto& e : this->recall(a.value("query", ""), a.value("category", ""),
-                                          a.value("limit", 10), a.value("include_sensitive", false))) {
+        const std::string query = a.value("query", "");
+        // Sensitive only keeps a fact out of listings; asked for by name, it is the user's own.
+        const bool sensitive = !query.empty() || a.value("include_sensitive", false);
+        for (const auto& e : this->recall(query, a.value("category", ""), a.value("limit", 10), sensitive)) {
             items.push_back(entryJson(e));
         }
         return {{"status", "success"}, {"memories", items}, {"count", items.size()}};
