@@ -78,14 +78,15 @@ describe('MemorySettings', () => {
         expect(mockedApi.updateMemorySettings).toHaveBeenCalledExactlyOnceWith({ memory_enabled: false });
     });
 
-    it('explains Fast and light separate memory, omits the embedder card, and links to Agent & model', async () => {
+    it('explains Fast and light separate memory, keeps the embedder card, and links to Agent & model', async () => {
         useActiveAgentStore.setState({ current: 'gaiacpp' });
         render(<MemorySettings />);
         const notice = screen.getByRole('status');
         expect(notice.textContent).toMatch(/Fast and light/i);
         expect(notice.textContent).toMatch(/Full-featured/i);
-        expect(mockedApi.getEmbedder).not.toHaveBeenCalled();
-        expect(screen.queryByRole('region', { name: 'Embedding model' })).toBeNull();
+        expect(notice.textContent).not.toMatch(/words rather than vectors/i);
+        expect(mockedApi.getEmbedder).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole('region', { name: 'Embedding model' })).toBeInTheDocument();
         expect(await screen.findByRole('checkbox', { name: REMEMBER })).toBeEnabled();
         fireEvent.click(screen.getByRole('button', { name: /Agent & model/i }));
         expect(useChatStore.getState().settingsSection).toBe('model');

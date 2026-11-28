@@ -2762,4 +2762,112 @@ TEST_F(GaiacppSidecar, AnswerCheckRetractsStreamedDraftWithoutLeakingReviewPromp
     EXPECT_EQ(events.back()["answer"], "I could not save report.md; here is the summary inline.");
 }
 
+TEST_F(GaiacppSidecar, SidecarUsesLemonadeEmbeddingsForDocumentsAndMemory) {
+    auto topicVec = [](const std::string& raw) -> std::vector<float> {
+        std::string s = raw;
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (s.find("car") != std::string::npos || s.find("automobile") != std::string::npos) {
+            return {1.0f, 0.0f};
+        }
+        return {0.0f, 1.0f};
+    };
+    std::mutex mu;
+    std::vector<std::string> modelsSeen;
+    mock().setModelsList(R"({"data":[
+        {"id":"mock-model","downloaded":true},
+        {"id":"user.embeddinggemma-300m-GGUF","downloaded":true},
+        {"id":"embed-gemma-300m-FLM","downloaded":true}
+    ]})");
+    mock().setEmbeddingsHandler([&](const httplib::Request& req, httplib::Response& res) {
+        const json body = json::parse(req.body);
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            modelsSeen.push_back(body.value("model", ""));
+        }
+        json data = json::array();
+        for (size_t i = 0; i < body.at("input").size(); ++i) {
+            data.push_back({{"index", i}, {"embedding", topicVec(body.at("input")[i].get<std::string>())}});
+        }
+        res.set_content(json{{"data", data}}.dump(), "application/json");
+    });
+
+    const fs::path doc = work_ / "garage.txt";
+    std::ofstream(doc) << "The red car is parked in bay four.";
+    mock().pushResponse(toolReply("query_documents", {{"query", "automobile"}}));
+    mock().pushResponse(answerReply("Bay four."));
+    mock().pushResponse(toolReply("query_documents", {{"query", "automobile"}}));
+    mock().pushResponse(answerReply("Still bay four."));
+
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    // 1. Memory route semantic search ("automobile" finds "car").
+    auto add = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"My car is blue.","category":"fact"})");
+    ASSERT_TRUE(add);
+    ASSERT_EQ(add->status, 200) << add->body;
+    auto add2 = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"I like sourdough bread.","category":"fact"})");
+    ASSERT_TRUE(add2);
+    ASSERT_EQ(add2->status, 200) << add2->body;
+    auto sem = send("GET", "/v1/gaia/memory?q=automobile", bearer());
+    ASSERT_TRUE(sem);
+    ASSERT_EQ(sem->status, 200) << sem->body;
+    const json sj = json::parse(sem->body);
+    ASSERT_EQ(sj["items"].size(), 1u) << sem->body;
+    EXPECT_NE(sj["items"][0]["content"].get<std::string>().find("car is blue"), std::string::npos);
+
+    // 2. Attached document semantic search ("automobile" finds "car" via hybrid RRF).
+    {
+        Turn t(port_, queryBody("run-sem-doc", "where is my automobile?",
+                                {{"session_id", "chat-sem"}, {"documents", json::array({doc.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        const auto events = t.events();
+        const int idx = indexOf(events, "tool_result", 0,
+                                [](const json& e) { return e.value("tool", "") == "query_documents"; });
+        ASSERT_GE(idx, 0) << t.describe();
+        const json& data = events[static_cast<size_t>(idx)]["data"];
+        EXPECT_EQ(data["status"], "success") << data.dump();
+        EXPECT_NE(data.value("retrieval", "").find("user.embeddinggemma-300m-GGUF"), std::string::npos) << data.dump();
+        ASSERT_FALSE(data["results"].empty()) << data.dump();
+        EXPECT_NE(data["results"][0]["text"].get<std::string>().find("bay four"), std::string::npos);
+    }
+
+    // 3. Switching embedding_device in config.json rebuilds the session with the new embedder on next turn.
+    std::ofstream(root_ / "home" / "config.json") << json{{"embedding_device", "npu"}}.dump();
+    {
+        Turn t(port_, queryBody("run-sem-npu", "check automobile again",
+                                {{"session_id", "chat-sem"}, {"documents", json::array({doc.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        const auto events = t.events();
+        const int idx = indexOf(events, "tool_result", 0,
+                                [](const json& e) { return e.value("tool", "") == "query_documents"; });
+        ASSERT_GE(idx, 0) << t.describe();
+        const json& data = events[static_cast<size_t>(idx)]["data"];
+        EXPECT_NE(data.value("retrieval", "").find("embed-gemma-300m-FLM"), std::string::npos) << data.dump();
+    }
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        EXPECT_NE(std::find(modelsSeen.begin(), modelsSeen.end(), "user.embeddinggemma-300m-GGUF"), modelsSeen.end());
+        EXPECT_NE(std::find(modelsSeen.begin(), modelsSeen.end(), "embed-gemma-300m-FLM"), modelsSeen.end());
+    }
+}
+
+TEST_F(GaiacppSidecar, SidecarEmbeddingHttp500FailsLoudly) {
+    mock().setModelsList(R"({"data":[
+        {"id":"mock-model","downloaded":true},
+        {"id":"user.embeddinggemma-300m-GGUF","downloaded":true}
+    ]})");
+    mock().setEmbeddingsHandler([](const httplib::Request&, httplib::Response& res) {
+        res.status = 500;
+        res.set_content(R"({"error":"embedding backend unavailable"})", "application/json");
+    });
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    auto add = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"My car is blue.","category":"fact"})");
+    ASSERT_TRUE(add);
+    EXPECT_EQ(add->status, 500) << add->body;
+    EXPECT_NE(add->body.find("500"), std::string::npos) << add->body;
+}
+
 }  // namespace

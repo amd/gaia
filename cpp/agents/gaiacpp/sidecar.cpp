@@ -231,6 +231,7 @@ struct Session {
     std::set<std::string> folderRoots;  // allowed folders (grow-only per chat)
     std::set<std::string> docRoots;     // currently attached files (synced each turn)
     std::set<std::string> builtWith;    // combined roots the agent was built with
+    std::string builtEmbeddingModel;    // embedder the agent was built with (rebuild when Settings changes it)
     std::set<std::string> approved;     // outside paths the user let in at a card, or full access opened
     std::set<std::string> declined;     // paths the user said no to in declinedRun
     std::string declinedRun;
@@ -529,11 +530,41 @@ private:
 
     std::string defaultModel() const { return opts_.defaultModel.empty() ? resolveGaiaModel() : opts_.defaultModel; }
 
-    // Build (or rebuild, when the chat's folders or attached documents changed) the session's agent.
+    std::string resolveEmbeddingModel(const ModelServer& server, std::string* reasonOut = nullptr) const {
+        if (!opts_.embeddingModel.empty()) {
+            if (reasonOut) reasonOut->clear();
+            return opts_.embeddingModel;
+        }
+        const std::string wanted = resolveGaiaEmbeddingModel();
+        LemonadeClient client(server.baseUrl);
+        client.setApiKey(server.apiKey);
+        return resolveServerEmbeddingModel(client, wanted, reasonOut);
+    }
+
+    static EmbedFunction makeEmbedFunction(const ModelServer& server, const std::string& model) {
+        auto client = std::make_shared<LemonadeClient>(server.baseUrl);
+        client->setApiKey(server.apiKey);
+        return [client, model](const std::vector<std::string>& texts) {
+            return client->embeddings(model, texts);
+        };
+    }
+
+    std::unique_ptr<MemoryStore> openMemoryStore(const std::string& path, bool needEmbeddings) const {
+        if (!needEmbeddings) return std::make_unique<MemoryStore>(path);
+        const ModelServer server = modelServer();
+        std::string reason;
+        const std::string embModel = resolveEmbeddingModel(server, &reason);
+        if (embModel.empty()) return std::make_unique<MemoryStore>(path, EmbedFunction{}, "", reason);
+        return std::make_unique<MemoryStore>(path, makeEmbedFunction(server, embModel), embModel);
+    }
+
+    // Build (or rebuild, when the chat's folders, attached documents, or embedder changed) the session's agent.
     // Only called while the session holds its busy flag.
     void ensureAgent(Session& s, const ModelServer& server) {
         const std::set<std::string> roots = s.effectiveRoots();
-        if (s.agent && s.builtWith == roots) {
+        std::string embReason;
+        const std::string embModel = resolveEmbeddingModel(server, &embReason);
+        if (s.agent && s.builtWith == roots && s.builtEmbeddingModel == embModel) {
             AgentConfig cfg = s.agent->config();
             cfg.baseUrl = server.baseUrl;
             cfg.apiKey = server.apiKey;
@@ -554,6 +585,8 @@ private:
         cfg.responseMode = ResponseMode::Conversational;
         cfg.apiKey = server.apiKey;
         GaiaAgent::Options o;
+        o.embeddingModel = embModel;
+        o.embeddingNote = embReason;
         o.maxHelpers = opts_.maxHelpers;
         if (roots.empty() && s.scoped) {
             // Detaching a chat's last file must not widen it to home: a folder GAIA owns grants nothing else.
@@ -600,6 +633,7 @@ private:
         s.agent = std::move(agent);
         s.console = consolePtr;
         s.builtWith = roots;
+        s.builtEmbeddingModel = embModel;
         s.indexed.clear();  // a new agent has a new document index
     }
 
@@ -824,10 +858,13 @@ private:
         server_.Delete(R"(/v1/gaia/memory/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
             const std::string id = req.matches[1];
-            memoryWrite(res, [&](MemoryStore& store) -> json {
-                if (!store.forget(id)) throw BadRequest(404, "No memory with id " + id);
-                return {{"status", "deleted"}, {"id", id}};
-            });
+            memoryWrite(
+                res,
+                [&](MemoryStore& store) -> json {
+                    if (!store.forget(id)) throw BadRequest(404, "No memory with id " + id);
+                    return {{"status", "deleted"}, {"id", id}};
+                },
+                false);
         });
         server_.Get("/v1/gaia/skills", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -1075,10 +1112,11 @@ private:
     }
 
     // One change to the store: the store's own refusal (empty or credential-shaped text, unknown category) is a 422.
-    void memoryWrite(httplib::Response& res, const std::function<json(MemoryStore&)>& change) {
+    void memoryWrite(httplib::Response& res, const std::function<json(MemoryStore&)>& change,
+                     bool needEmbeddings = true) {
         try {
-            MemoryStore store(MemoryStore::defaultPath());
-            sendJson(res, 200, change(store));
+            auto store = openMemoryStore(MemoryStore::defaultPath(), needEmbeddings);
+            sendJson(res, 200, change(*store));
         } catch (const BadRequest& e) {
             sendDetail(res, e.status, e.what());
         } catch (const std::invalid_argument& e) {
@@ -1096,7 +1134,9 @@ private:
                 return sendJson(res, 200, {{"available", false}, {"reason", "Nothing has been remembered yet."},
                                            {"store", memoryStoreInfo()}});
             }
-            MemoryStore store(path);
+            const std::string q = req.get_param_value("q");
+            const bool searching = q.find_first_not_of(" \t\r\n") != std::string::npos;
+            auto store = openMemoryStore(path, searching);
             int limit = 300;
             if (req.has_param("limit")) {
                 try {
@@ -1106,9 +1146,9 @@ private:
                 }
                 if (limit < 1 || limit > 1000) return sendDetail(res, 422, "limit must be a whole number from 1 to 1000");
             }
-            // `q` is a keyword search; without it the newest entries come first.
+            // `q` runs hybrid (vector + keyword) search when an embedder is available; without it newest come first.
             const auto entries =
-                store.recall(req.get_param_value("q"), req.get_param_value("category"), limit, true);
+                store->recall(q, req.get_param_value("category"), limit, true);
             json items = json::array(), byCategory = json::object(), byContext = json::object();
             int sensitive = 0;
             for (const auto& e : entries) {
@@ -1124,7 +1164,7 @@ private:
             }
             json contexts = json::array();
             for (auto& [ctx, n] : byContext.items()) contexts.push_back({{"context", ctx}, {"count", n}});
-            const size_t total = store.count();
+            const size_t total = store->count();
             sendJson(res, 200, {{"available", true},
                                 {"stats", {{"total_knowledge", total}, {"by_category", byCategory},
                                            {"by_context", byContext}, {"sensitive_count", sensitive},

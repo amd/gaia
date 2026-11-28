@@ -181,8 +181,9 @@ void printUsage() {
         "  --vision-model ID         Model analyze_image uses (default: the main model)\n"
         "  --transcribe-model ID     Whisper model for transcribe_audio (e.g. Whisper-Base on Lemonade)\n"
         "  --image-model ID          Image model for generate_image (e.g. SDXL-Turbo on Lemonade)\n"
-        "  --embedding-model ID      Embedding model for document search (default with\n"
-        "                            --provider fireworks; otherwise keyword search)\n"
+        "  --embedding-model ID      Embedding model for document and memory search\n"
+        "                            (env GAIA_EMBEDDING_MODEL; default with --provider\n"
+        "                            fireworks; otherwise keyword search)\n"
         "  --config FILE             Settings file (default $GAIACPP_CONFIG, else\n"
         "                            $XDG_CONFIG_HOME/gaiacpp/config.json or\n"
         "                            ~/.config/gaiacpp/config.json when present;\n"
@@ -495,6 +496,8 @@ Settings buildSettings(const Cli& cli) {
 
     const std::string envModel = gaia::getEnvVar("GAIA_MODEL_ID");
     if (!envModel.empty()) merged["modelId"] = envModel;
+    const std::string envEmbed = gaia::getEnvVar("GAIA_EMBEDDING_MODEL");
+    if (!envEmbed.empty()) merged["embeddingModel"] = envEmbed;
     const std::string envTier = gaia::getEnvVar("GAIA_FEATURE_TIER");
     if (!envTier.empty()) merged["featureTier"] = envTier;
     const std::string envUrl = gaia::getEnvVar("GAIA_BASE_URL");
@@ -1162,6 +1165,7 @@ int main(int argc, char** argv) {
             so.host = cli.host;
             so.port = cli.port;
             so.defaultModel = cli.model.empty() ? gaia::getEnvVar("GAIA_MODEL_ID") : cli.model;
+            so.embeddingModel = cli.embeddingModel.empty() ? gaia::getEnvVar("GAIA_EMBEDDING_MODEL") : cli.embeddingModel;
             so.maxHelpers = cli.maxHelpers >= 0 ? cli.maxHelpers : maxHelpersFromEnv();
             return gaia::runSidecar(so);
         }

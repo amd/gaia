@@ -44,6 +44,7 @@ public:
         bool unattended = false;
         bool documents = true;       // index_document / query_documents
         std::string embeddingModel;  // empty = keyword-only retrieval
+        std::string embeddingNote;   // why embeddings are inactive when embeddingModel is empty
         bool memory = true;          // remember / recall across sessions
         std::string memoryPath;      // empty = MemoryStore::defaultPath()
         bool vision = true;          // analyze_image
@@ -270,6 +271,7 @@ private:
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
     bool skillToolsRegistered_ = false;
+    mutable std::mutex embedMu_;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
     std::unique_ptr<DocumentIndex> code_;

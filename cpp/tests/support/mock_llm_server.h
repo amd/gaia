@@ -142,6 +142,12 @@ public:
     /// Status every later POST /api/v1/load answers with (200 by default).
     void setLoadStatus(int status) { loadStatus_ = status; }
 
+    /// Optional handler for POST /api/v1/embeddings (404 when unset).
+    void setEmbeddingsHandler(std::function<void(const httplib::Request&, httplib::Response&)> handler) {
+        std::lock_guard<std::mutex> lk(mu_);
+        embeddingsHandler_ = std::move(handler);
+    }
+
     /// All captured request bodies posted to /api/v1/chat/completions, in order.
     std::vector<std::string> receivedBodies() const {
         std::lock_guard<std::mutex> lk(mu_);
@@ -177,6 +183,20 @@ private:
         server_->Get("/api/v1/models", [this](const httplib::Request&, httplib::Response& res) {
             std::lock_guard<std::mutex> lk(mu_);
             res.set_content(modelsList_, "application/json");
+        });
+
+        server_->Post("/api/v1/embeddings", [this](const httplib::Request& req, httplib::Response& res) {
+            std::function<void(const httplib::Request&, httplib::Response&)> handler;
+            {
+                std::lock_guard<std::mutex> lk(mu_);
+                handler = embeddingsHandler_;
+            }
+            if (!handler) {
+                res.status = 404;
+                res.set_content(R"({"error":"embeddings not configured"})", "application/json");
+                return;
+            }
+            handler(req, res);
         });
 
         server_->Post("/api/v1/chat/completions",
@@ -352,6 +372,7 @@ private:
     std::atomic<int> loadStatus_{200};
     std::string modelsList_ = kModelsList;
     std::string health_;
+    std::function<void(const httplib::Request&, httplib::Response&)> embeddingsHandler_;
     mutable std::mutex mu_;
     std::deque<QueuedResponse> responseQueue_;
     std::deque<std::string> sseQueue_;

@@ -19,6 +19,10 @@ namespace gaia {
 /// The model every GAIA agent falls back to when nothing chose one.
 inline constexpr const char* kGaiaFallbackModel = "Gemma-4-E4B-it-GGUF";
 
+/// Embedding models matching Python's DEFAULT_DEVICE_CONFIGS (src/gaia/agents/registry.py).
+inline constexpr const char* kGaiaGpuEmbeddingModel = "user.embeddinggemma-300m-GGUF";
+inline constexpr const char* kGaiaNpuEmbeddingModel = "embed-gemma-300m-FLM";
+
 /// What chose the model server, for an error that says where to fix it.
 enum class ServerSource {
     Flag,           // --base-url
@@ -79,6 +83,19 @@ GaiaServer resolveGaiaServer();
 /// default_model, then last_model, then kGaiaFallbackModel. "hybrid" runs on
 /// hybrid_cheap_model; a Claude id is skipped, as gaiacpp has no Claude provider.
 std::string resolveGaiaModel();
+
+/// The embedding model GAIA's config chooses (`embedding_device` in config.json:
+/// "npu" -> kGaiaNpuEmbeddingModel, "gpu"/"auto"/absent -> kGaiaGpuEmbeddingModel).
+/// Throws when config.json can't be read or has an unsupported embedding_device.
+std::string resolveGaiaEmbeddingModel();
+
+/// Match `wanted` against `client`'s downloaded models (case-insensitive, with or
+/// without a leading "user." prefix). Returns the server's exact model id when
+/// present and downloaded, or "" when absent, not downloaded, non-Lemonade, or
+/// unreachable / missing `/models` (writing an actionable explanation to `reasonOut`
+/// when provided). Throws on HTTP 5xx/auth errors or malformed JSON.
+std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::string& wanted,
+                                        std::string* reasonOut = nullptr);
 
 /// GAIA's running server's key when `url` is that server (http, loopback, its
 /// port), else "". The key never goes anywhere else.

@@ -539,6 +539,10 @@ struct AgentConfig {
     GAIA_API json toJson() const;
 };
 
+/// Turns text into vectors; throws on failure. Typically wraps
+/// LemonadeClient::embeddings for the configured embedding model.
+using EmbedFunction = std::function<std::vector<std::vector<float>>(const std::vector<std::string>&)>;
+
 /// The key an agent sends: apiKey, else the variable apiKeyEnv names (unset or
 /// empty throws), else GAIA_API_KEY, else LEMONADE_API_KEY when baseUrl is a
 /// loopback address, else "".

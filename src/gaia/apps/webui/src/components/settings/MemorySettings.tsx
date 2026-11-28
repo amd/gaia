@@ -76,11 +76,9 @@ export function MemorySettings() {
                     </button>
                 </div>
             </section>
-            {!isFastAgent && (
-                <section className="settings-card" aria-label={t('settings.memory.embedder.label')}>
-                    <EmbedderSetting />
-                </section>
-            )}
+            <section className="settings-card" aria-label={t('settings.memory.embedder.label')}>
+                <EmbedderSetting />
+            </section>
         </div>
     );
 }

@@ -376,6 +376,82 @@ std::string resolveGaiaModel() {
     return kGaiaFallbackModel;
 }
 
+std::string resolveGaiaEmbeddingModel() {
+    const fs::path path = gaiaConfigFile();
+    const json cfg = readJsonObject(path);
+    const std::string dev = lower(stringSetting(cfg, "embedding_device", path));
+    if (dev.empty() || dev == "auto" || dev == "gpu") return kGaiaGpuEmbeddingModel;
+    if (dev == "npu") return kGaiaNpuEmbeddingModel;
+    throw std::runtime_error("GAIA's settings at " + path.u8string() +
+                             ": \"embedding_device\" must be auto, gpu or npu, got '" + dev +
+                             "'. Fix it with `gaia config set embedding_device auto`.");
+}
+
+std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::string& wanted,
+                                        std::string* reasonOut) {
+    auto setReason = [reasonOut](std::string msg) {
+        if (reasonOut) *reasonOut = std::move(msg);
+    };
+    if (wanted.empty()) {
+        setReason("no embedding model configured");
+        return "";
+    }
+    if (!isLemonadeUrl(client.baseUrl())) {
+        setReason("embedding model " + wanted + " is only probed on Lemonade endpoints");
+        return "";
+    }
+    auto stripUser = [](std::string id) {
+        id = lower(std::move(id));
+        if (id.rfind("user.", 0) == 0) id.erase(0, 5);
+        return id;
+    };
+    const std::string target = stripUser(wanted);
+    json catalog;
+    try {
+        catalog = client.listModels(true);
+    } catch (const HttpError& e) {
+        // An unreachable server or a server without /models yields to keyword-only memory edits and
+        // the turn's own server-down check; auth errors and 5xx always fail loudly.
+        if (e.status() == 0 || e.status() == 404) {
+            std::cerr << "gaiacpp: skipped embedding model probe at " << client.baseUrl() << ": " << e.what()
+                      << std::endl;
+            setReason(wanted + " could not be checked (" + client.baseUrl() + " unreachable)");
+            return "";
+        }
+        throw;
+    }
+    if (!catalog.is_object() || !catalog.contains("data") || !catalog["data"].is_array()) {
+        throw std::runtime_error("Model catalog at " + client.baseUrl() +
+                                 "/models did not return a JSON object with a \"data\" array.");
+    }
+    bool foundNotDownloaded = false;
+    for (const auto& m : catalog["data"]) {
+        if (!m.is_object()) continue;
+        const std::string id = m.value("id", "");
+        if (id.empty() || stripUser(id) != target) continue;
+        const bool downloaded = !m.contains("downloaded") || m.value("downloaded", false) == true;
+        if (downloaded) {
+            setReason("");
+            return id;
+        }
+        foundNotDownloaded = true;
+    }
+    const bool isGpuEmbedder = target == stripUser(kGaiaGpuEmbeddingModel);
+    const bool isNpuEmbedder = target == stripUser(kGaiaNpuEmbeddingModel);
+    const std::string installHint =
+        isGpuEmbedder
+            ? "install it via Settings > Memory or `gaia download --agent rag`"
+            : isNpuEmbedder
+                  ? "install it via Settings > Memory or run `gaia config set embedding_device auto`"
+                  : "install it via Settings > Memory";
+    if (foundNotDownloaded) {
+        setReason(wanted + " is not downloaded; " + installHint);
+    } else {
+        setReason(wanted + " is not available on " + client.baseUrl() + "; " + installHint);
+    }
+    return "";
+}
+
 std::string embeddedKeyFor(const GaiaServer& server, const std::string& url) {
     if (!server.runningPort || server.runningKey.empty()) return "";
     const std::string prefix = "http://";

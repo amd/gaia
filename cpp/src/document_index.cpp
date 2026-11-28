@@ -609,8 +609,19 @@ size_t DocumentIndex::indexDirectory(const std::string& root, std::vector<std::s
 
 std::vector<DocumentHit> DocumentIndex::query(const std::string& q, size_t k,
                                               const std::string& fileFilter) const {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (chunks_.empty()) return {};
+    }
     std::vector<float> qvec;
-    if (embed_) qvec = embed_({q}).at(0);  // outside the lock: a network call
+    if (embed_) {
+        const auto vecs = embed_({q});  // outside the lock: a network call
+        if (vecs.size() != 1) {
+            throw std::runtime_error("Embedder returned " + std::to_string(vecs.size()) +
+                                     " vectors for query (expected 1)");
+        }
+        qvec = vecs[0];
+    }
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (chunks_.empty()) return {};

@@ -2301,7 +2301,6 @@ export const enMessages = {
     'setup.agent.gaiacppMore': 'Fast and light ({name}) starts in a fraction of a second and uses a few megabytes of memory. It is in beta and less tested, and switching to it changes these things:',
     'setup.agent.diff.memory': "Memory is separate: what GAIA remembered with Full-featured isn't seen by Fast and light, and the other way round.",
     'setup.agent.diff.undo': "File changes it makes can't be undone from the chat.",
-    'setup.agent.diff.search': 'Document search matches words, not meaning.',
     'setup.agent.diff.media': "It can't create images, transcribe audio or turn a document into speech.",
     'setup.agent.diff.context': "The context meter doesn't show how full the conversation is.",
     'setup.agent.notInstalledMore': "It isn't installed on this PC, so it can't be picked.",
@@ -2640,7 +2639,7 @@ export const enMessages = {
 
     // Settings: the other panes
     'settings.memory.lede': 'GAIA remembers facts, preferences and past conversations across chats, on this PC only. Private chats (the eye icon in a chat) are never remembered.',
-    'settings.memory.fastAgentNotice': 'Fast and light keeps a separate memory from Full-featured and searches by words rather than vectors, so embedding model settings only apply to Full-featured.',
+    'settings.memory.fastAgentNotice': 'Fast and light keeps a separate memory from Full-featured, so memories saved in one are not seen by the other.',
     'settings.memory.remember': 'Remember across chats',
     'settings.memory.dashboard': 'Open the memory dashboard',
     'settings.memory.dashboardHint': 'Search, edit and forget what GAIA remembers.',

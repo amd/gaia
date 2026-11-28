@@ -3,18 +3,22 @@
 
 #include <gtest/gtest.h>
 
+#include <httplib.h>
 #include <gaia/chunking.h>
 #include <gaia/document_index.h>
+#include <gaia/lemonade_client.h>
 #include <gaia/process.h>
 #include <gaia/tool_registry.h>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <random>
+#include <thread>
 
 using namespace gaia;
 namespace fs = std::filesystem;
@@ -471,4 +475,85 @@ TEST(DocumentIndexTest, AReaderTheAppRegisteredForAnUnsupportedFormatStillRuns) 
     const auto pages = DocumentIndex::extractPages(book);
     ASSERT_EQ(pages.size(), 1u);
     EXPECT_EQ(pages[0].second, "Chapter one text 6621");
+}
+
+TEST(DocumentIndexTest, SemanticDocumentSearchOverLemonadeEmbeddingsAndLoudFailure) {
+    httplib::Server srv;
+    std::atomic<int> mode{0};  // 0 = ok, 1 = HTTP 500, 2 = bad JSON
+    std::string seenAuth;
+    std::string seenModel;
+    auto embedVec = [](const std::string& raw) -> std::vector<float> {
+        std::string s = raw;
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (s.find("car") != std::string::npos || s.find("automobile") != std::string::npos) {
+            return {1.0f, 0.0f, 0.0f};
+        }
+        if (s.find("bread") != std::string::npos || s.find("flour") != std::string::npos) {
+            return {0.0f, 1.0f, 0.0f};
+        }
+        return {0.0f, 0.0f, 1.0f};
+    };
+    srv.Post("/api/v1/embeddings", [&](const httplib::Request& req, httplib::Response& res) {
+        seenAuth = req.get_header_value("Authorization");
+        const int m = mode.load();
+        if (m == 1) {
+            res.status = 500;
+            res.set_content(R"({"error":"backend failure"})", "application/json");
+            return;
+        }
+        if (m == 2) {
+            res.status = 200;
+            res.set_content("{broken", "application/json");
+            return;
+        }
+        const json body = json::parse(req.body);
+        seenModel = body.value("model", "");
+        json data = json::array();
+        const auto& inputs = body.at("input");
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            data.push_back({{"index", i}, {"embedding", embedVec(inputs[i].get<std::string>())}});
+        }
+        res.set_content(json{{"data", data}}.dump(), "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread serverThread([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    LemonadeClient client("http://127.0.0.1:" + std::to_string(port) + "/api/v1");
+    client.setApiKey("doc-embed-key");
+    EmbedFunction embed = [&client](const std::vector<std::string>& texts) {
+        return client.embeddings("user.embeddinggemma-300m-GGUF", texts);
+    };
+
+    TempDir d;
+    d.write("garage.txt", "The red car needs an oil change next Tuesday.");
+    d.write("kitchen.txt", "Mix flour and yeast to bake sourdough bread.");
+
+    DocumentIndex idx(embed, "user.embeddinggemma-300m-GGUF");
+    EXPECT_TRUE(idx.usesEmbeddings());
+    idx.indexFile((d.path / "garage.txt").string());
+    idx.indexFile((d.path / "kitchen.txt").string());
+
+    // Zero lexical overlap between "automobile" and "car": vector cosine similarity retrieves garage.txt.
+    const auto hits = idx.query("automobile", 1);
+    ASSERT_EQ(hits.size(), 1u);
+    EXPECT_NE(hits[0].chunk.file.find("garage.txt"), std::string::npos);
+    EXPECT_EQ(seenAuth, "Bearer doc-embed-key");
+    EXPECT_EQ(seenModel, "user.embeddinggemma-300m-GGUF");
+
+    // HTTP 500 and malformed JSON fail loudly during query and indexing.
+    ToolRegistry reg;
+    idx.registerTools(reg, nullptr);
+    mode = 1;
+    EXPECT_THROW(idx.query("automobile", 1), HttpError);
+    const json toolErr = reg.executeTool("query_documents", json{{"query", "automobile"}});
+    EXPECT_EQ(toolErr["status"], "error");
+    EXPECT_NE(toolErr.value("error", "").find("500"), std::string::npos) << toolErr.dump();
+
+    mode = 2;
+    EXPECT_THROW(idx.indexFile(d.write("extra.txt", "Another note.")), std::exception);
+
+    srv.stop();
+    serverThread.join();
 }

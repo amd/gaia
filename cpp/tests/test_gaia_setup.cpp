@@ -229,6 +229,81 @@ TEST_F(GaiaSetup, BrokenConfigFailsLoudly) {
     EXPECT_THROW(resolveGaiaModel(), std::runtime_error);
 }
 
+TEST_F(GaiaSetup, EmbeddingModelFollowsConfigDeviceAndRejectsInvalidValues) {
+    EXPECT_EQ(resolveGaiaEmbeddingModel(), kGaiaGpuEmbeddingModel) << "no config.json defaults to GPU embedder";
+    writeConfig({{"embedding_device", "auto"}});
+    EXPECT_EQ(resolveGaiaEmbeddingModel(), kGaiaGpuEmbeddingModel);
+    writeConfig({{"embedding_device", "gpu"}});
+    EXPECT_EQ(resolveGaiaEmbeddingModel(), kGaiaGpuEmbeddingModel);
+    writeConfig({{"embedding_device", "npu"}});
+    EXPECT_EQ(resolveGaiaEmbeddingModel(), kGaiaNpuEmbeddingModel);
+    writeConfig({{"embedding_device", "tpu"}});
+    EXPECT_THROW(resolveGaiaEmbeddingModel(), std::runtime_error);
+    writeConfig({{"embedding_device", 42}});
+    EXPECT_THROW(resolveGaiaEmbeddingModel(), std::runtime_error);
+}
+
+TEST_F(GaiaSetup, ServerEmbeddingModelMatchesWithOrWithoutUserPrefix) {
+    bench::MockLlmServer mock;
+    mock.setModelsList(R"({"data":[
+        {"id":"mock-model","downloaded":true},
+        {"id":"embeddinggemma-300m-GGUF","downloaded":true},
+        {"id":"embed-gemma-300m-FLM","downloaded":false}
+    ]})");
+    LemonadeClient client(mock.baseUrl());
+    std::string reason;
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF", &reason),
+              "embeddinggemma-300m-GGUF");
+    EXPECT_TRUE(reason.empty());
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "embed-gemma-300m-FLM", &reason), "")
+        << "not-downloaded model must not be reported ready";
+    EXPECT_NE(reason.find("gaia config set embedding_device auto"), std::string::npos) << reason;
+    EXPECT_EQ(reason.find("gaia download --agent rag"), std::string::npos) << reason;
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "missing-embedder", &reason), "");
+    EXPECT_NE(reason.find("Settings > Memory"), std::string::npos) << reason;
+    EXPECT_EQ(reason.find("gaia download"), std::string::npos) << reason;
+
+    // Default GPU embedder not yet downloaded points at Settings > Memory or `gaia download --agent rag`.
+    mock.setModelsList(R"({"data":[{"id":"embeddinggemma-300m-GGUF","downloaded":false}]})");
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF", &reason), "");
+    EXPECT_NE(reason.find("gaia download --agent rag"), std::string::npos) << reason;
+}
+
+TEST_F(GaiaSetup, ServerEmbeddingModelFailsLoudlyOnHttp500AndMalformedJson) {
+    httplib::Server srv;
+    std::atomic<int> mode{0};  // 0 = 500, 1 = bad JSON, 2 = non-catalog JSON, 3 = 404
+    srv.Get("/api/v1/models", [&](const httplib::Request&, httplib::Response& res) {
+        const int m = mode.load();
+        if (m == 0) {
+            res.status = 500;
+            res.set_content(R"({"error":"catalog crashed"})", "application/json");
+        } else if (m == 1) {
+            res.set_content("{bad json", "application/json");
+        } else if (m == 2) {
+            res.set_content(R"({"unexpected":true})", "application/json");
+        } else {
+            res.status = 404;
+            res.set_content(R"({"error":"not found"})", "application/json");
+        }
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    LemonadeClient client("http://127.0.0.1:" + std::to_string(port) + "/api/v1");
+    mode = 0;
+    EXPECT_THROW(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF"), HttpError);
+    mode = 1;
+    EXPECT_THROW(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF"), std::exception);
+    mode = 2;
+    EXPECT_THROW(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF"), std::runtime_error);
+    mode = 3;
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF"), "");
+
+    srv.stop();
+    t.join();
+}
+
 // ---- the download check, against a mock Lemonade --------------------------
 
 const char* kCatalog = R"({"data":[
