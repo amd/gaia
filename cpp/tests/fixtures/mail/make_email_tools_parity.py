@@ -711,7 +711,8 @@ def main(out_dir=None):
     target = Path(out_dir or Path(__file__).parent) / "email_tools_parity.json"
     target.write_text(
         json.dumps({"schemas": schemas(), "cases": cases}, indent=1, ensure_ascii=False)
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     print(f"wrote {len(cases)} cases to {target}")
 

@@ -66,8 +66,9 @@ def test_the_committed_mail_fixtures_match_a_fresh_run(script, outputs, tmp_path
     )
     assert run.returncode == 0, run.stderr
     for committed in outputs:
-        fresh = (tmp_path / committed.name).read_bytes()
-        assert fresh == committed.read_bytes(), (
+        # A Windows checkout may turn the committed file's newlines into CRLF.
+        fresh = (tmp_path / committed.name).read_bytes().replace(b"\r\n", b"\n")
+        assert fresh == committed.read_bytes().replace(b"\r\n", b"\n"), (
             f"{committed.relative_to(_ROOT)} is stale: the Python it mirrors changed. "
             f"Run `python {script}` from the repo root and commit the result, then make "
             "the C++ mail code pass against it."

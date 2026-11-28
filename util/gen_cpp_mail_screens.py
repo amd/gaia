@@ -691,7 +691,7 @@ def generate_parity() -> Dict[str, Any]:
     corpus = _corpus()
     return {
         "generated_by": "util/gen_cpp_mail_screens.py",
-        "python": sys.version.split()[0],
+        "python": PYTHON,
         "now_ms": NOW_MS,
         "suspicious_guidance": phishing.SUSPICIOUS_GUIDANCE,
         "wrap": wrap_cases(rng),
