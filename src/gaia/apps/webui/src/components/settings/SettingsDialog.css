@@ -1337,15 +1337,6 @@
     color: var(--text-secondary);
 }
 
-.skill-link-desc {
-    display: block;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: clip;
-    animation: fade-cut-inline both;
-    animation-timeline: scroll(self inline);
-}
-
 .skill-link-tag {
     margin-left: 6px;
     padding: 0 6px;
