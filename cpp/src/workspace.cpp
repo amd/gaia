@@ -162,6 +162,16 @@ bool isLink(const fs::file_status& st) {
 }
 }  // namespace
 
+// The folder of the virtual environment whose python `path` is (<venv>/bin/python* beside
+// <venv>/pyvenv.cfg), or "" when it is not one.
+std::string venvRootOf(const std::string& path) {
+    const fs::path program = fs::u8path(path);
+    std::error_code ec;
+    if (program.filename().u8string().rfind("python", 0) != 0 || program.parent_path().filename() != "bin") return "";
+    if (!fs::is_regular_file(program.parent_path().parent_path() / "pyvenv.cfg", ec)) return "";
+    return program.parent_path().parent_path().u8string();
+}
+
 std::string resolveWriteTarget(const std::string& path) {
     if (path.empty()) return "";
     std::error_code ec;
@@ -446,6 +456,9 @@ Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posi
 #endif
         const std::string expanded = expandHome(fromShellPath(token));
         if (contains(expanded)) continue;
+        // A virtual environment's python inside an allowed environment runs like a program on PATH.
+        const std::string venv = venvRootOf(expanded);
+        if (!venv.empty() && contains(venv)) continue;
         const std::string abs = normalized(fs::u8path(expanded));
         // Unquoted after a file command, /* or /h*/me is expanded by the shell into real folders.
         const bool unquoted = tokenAt == 0 || std::isspace(static_cast<unsigned char>(command[tokenAt - 1]));
@@ -467,6 +480,9 @@ Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posi
             const size_t slash = expanded.find_last_of("/\\", wild);
             place = slash == std::string::npos ? "" : expanded.substr(0, slash + 1);
             if (!place.empty() && fs::u8path(place).relative_path().empty()) place.clear();
+        } else if (!venv.empty()) {
+            // A virtual environment's python is asked about as its environment, not the interpreter it links to.
+            place = venv;
         }
         return Outside{refusal(token), place.empty() ? "" : resolveWriteTarget(place)};
     }

@@ -265,6 +265,16 @@ TEST(AgentTest, SetTemperatureUpdatesConfig) {
     EXPECT_DOUBLE_EQ(agent.config().temperature, 0.1);
 }
 
+TEST(AgentTest, SetTemperatureTurnsOffCardSampling) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    cfg.cardSampling = true;
+    MockAgent agent(cfg);
+
+    agent.setTemperature(0.7);
+    EXPECT_FALSE(agent.config().cardSampling);
+}
+
 TEST(AgentTest, SetDebugUpdatesConfig) {
     AgentConfig cfg;
     cfg.silentMode = true;

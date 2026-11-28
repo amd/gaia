@@ -1133,6 +1133,25 @@ private:
         return false;
     }
 
+    // The folder of the virtual environment `program` runs from: <venv>/bin/python* beside
+    // <venv>/pyvenv.cfg. "" when it is not one.
+    std::string venvRoot(const std::string& program, const State& st) const {
+        if (!ws_ || st.folderUnknown) return "";
+        const fs::path name = fs::u8path(program).filename();
+        if (name.u8string().rfind("python", 0) != 0) return "";
+        const bool absolute = isAbsolute(program);
+        const std::vector<std::string> bases = absolute ? std::vector<std::string>{""} : st.folders;
+        std::error_code ec;
+        for (const auto& base : bases) {
+            const fs::path link = absolute ? fs::u8path(program) : fs::u8path(base) / fs::u8path(program);
+            const fs::path bin = link.parent_path();
+            if (bin.filename() != "bin" || !fs::is_regular_file(bin.parent_path() / "pyvenv.cfg", ec)) continue;
+            const fs::path root = fs::weakly_canonical(bin.parent_path(), ec);
+            if (!ec) return root.u8string();
+        }
+        return "";
+    }
+
     // A project venv's python: a link in <venv>/bin beside pyvenv.cfg, inside the folders,
     // to an interpreter outside them. It is run like a program on PATH, never opened.
     bool venvPython(const std::string& program, const State& st) const {
@@ -1448,7 +1467,13 @@ private:
                                             [&](const std::string& d) { return name.rfind(d, 0) == 0; }) &&
                                 name.find("..") == std::string::npos;
             if (!system) {
-                if (!venvPython(name, st)) pathIfLikely(name, st);
+                if (!venvPython(name, st)) {
+                    // A virtual environment outside the folders is asked about as itself, not
+                    // as the interpreter its python links to somewhere else.
+                    const std::string root = venvRoot(name, st);
+                    if (!root.empty()) place(root, "", name, true, false);
+                    else pathIfLikely(name, st);
+                }
                 opaque("it runs the program file " + named(name) + ", which GAIA can't inspect");
                 noteScript("file", first, st);
                 looseOperands(fields, from + 1, st);

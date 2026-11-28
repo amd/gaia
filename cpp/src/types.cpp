@@ -360,6 +360,7 @@ AgentConfig AgentConfig::fromJson(const json& j) {
     c.silentMode            = j.value("silentMode",            c.silentMode);
     c.structuredEvents      = j.value("structuredEvents",      c.structuredEvents);
     c.temperature           = j.value("temperature",           c.temperature);
+    c.cardSampling          = j.value("cardSampling",          c.cardSampling);
     c.toolChoice            = j.value("toolChoice",            c.toolChoice);
     c.skillSet              = j.value("skillSet",              c.skillSet);
     c.skillManifest         = j.value("skillManifest",         c.skillManifest);
@@ -415,6 +416,7 @@ json AgentConfig::toJson() const {
         {"silentMode",            silentMode},
         {"structuredEvents",      structuredEvents},
         {"temperature",           temperature},
+        {"cardSampling",          cardSampling},
         {"responseMode",          responseModeToString(responseMode)},
         {"nativeToolCalls",       nativeToolCallsToString(nativeToolCalls)},
         {"toolChoice",            toolChoice},
