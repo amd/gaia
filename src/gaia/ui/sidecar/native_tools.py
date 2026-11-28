@@ -149,6 +149,8 @@ def _shell_summary(data: Dict[str, Any]) -> str:
         return "Command timed out"
     code = data.get("exit_code")
     stdout = str(data.get("stdout") or "").strip()
+    if code not in (0, None) and isinstance(data.get("expected_exit"), str):
+        return f"{data['expected_exit']} (exit {code})"
     if code not in (0, None):
         detail = (str(data.get("stderr") or "").strip() or stdout)[:150]
         return f"Command failed (exit {code})" + (f": {detail}" if detail else "")
