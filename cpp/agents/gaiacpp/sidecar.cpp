@@ -228,6 +228,7 @@ struct Session {
     std::set<std::string> declined;     // paths the user said no to in declinedRun
     std::string declinedRun;
     std::set<std::string> indexed;      // attached documents already indexed
+    bool scoped = false;                // ever given a folder or file: never falls back to home
 
     std::set<std::string> effectiveRoots() const {
         std::set<std::string> out = folderRoots;
@@ -547,7 +548,11 @@ private:
         cfg.apiKey = server.apiKey;
         GaiaAgent::Options o;
         o.maxHelpers = opts_.maxHelpers;
-        if (roots.empty()) {
+        if (roots.empty() && s.scoped) {
+            // Detaching a chat's last file must not widen it to home: a folder GAIA owns grants nothing else.
+            const std::string own = gaiaHome();
+            o.workspaceRoots = {((own.empty() ? fs::temp_directory_path() : fs::u8path(own)) / "gaiacpp-no-folders").u8string()};
+        } else if (roots.empty()) {
             // Roots are UTF-8; the environment's narrow strings are the code page on Windows.
 #ifdef _WIN32
             const wchar_t* profile = _wgetenv(L"USERPROFILE");
@@ -1293,6 +1298,7 @@ private:
         for (const auto& p : allowed) {
             if (!currentDocs.count(p)) s->folderRoots.insert(p);
         }
+        if (!s->folderRoots.empty() || !s->docRoots.empty()) s->scoped = true;
         if (!workdir.empty()) s->workingDirectory = workdir;
         if (!memory.empty()) {
             s->memoryOff->store(memory == "off");

@@ -2393,4 +2393,36 @@ TEST_F(GaiacppSidecar, DetachingADocumentRemovesItFromTheIndexAndWorkspace) {
     }
 }
 
+TEST_F(GaiacppSidecar, DetachingTheOnlyAttachedFileDoesNotOpenHome) {
+    const fs::path doc = root_ / "outside" / "only.txt";
+    std::ofstream(doc) << "Attached only 5512";
+    const fs::path homeFile = root_ / "home" / "private.txt";
+    std::ofstream(homeFile) << "home private 8830";
+
+    mock().pushResponse(answerReply("Attached."));
+    mock().pushResponse(toolReply("file_read", {{"path", homeFile.string()}}));
+    mock().pushResponse(answerReply("Checked home after detach."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    {
+        Turn t(port_, queryBody("run-only-1", "attach it",
+                                {{"session_id", "chat-only-doc"}, {"documents", json::array({doc.string()})}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+    }
+
+    {
+        Turn t(port_, queryBody("run-only-2", "read my home file",
+                                {{"session_id", "chat-only-doc"}, {"documents", json::array()}}));
+        auto card = t.waitEvent(isFolderCard);
+        ASSERT_TRUE(card) << "a chat that lost its only file must not fall back to home: " << t.describe();
+        auto deny = decide("run-only-2", "deny", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(deny);
+        ASSERT_EQ(deny->status, 200) << deny->body;
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_EQ(t.raw().find("8830"), std::string::npos) << "home file must not leak: " << t.describe();
+    }
+}
+
 }  // namespace
