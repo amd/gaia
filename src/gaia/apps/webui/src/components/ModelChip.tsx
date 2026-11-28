@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
 import './setup/setup.css';
@@ -430,11 +430,11 @@ export function ModelChip() {
         : queueError
         ? queueError
         : queued
-            ? `${displayModelName(queued)} is used from your next message.`
+            ? t('modelChip.queuedTitle', { model: displayModelName(queued) })
             : active?.config_error
                 ? active.config_error
                 : notDownloaded
-                    ? `${name} isn't downloaded yet. Open the list to download it.`
+                    ? t('modelChip.notDownloadedTitle', { name })
                     : !place
                         ? UNKNOWN_PLACE_TITLE
                         // The server writes the model name as Markdown code; a tooltip shows backticks literally.
@@ -454,7 +454,13 @@ export function ModelChip() {
             >
                 <Icon size={13} aria-hidden="true" />
                 <span className="composer-chip-label" dir="auto">{label}</span>
-                {queued && <span className="composer-chip-next">→ {displayModelName(queued)} next</span>}
+                {queued && (
+                    <span className="composer-chip-next">
+                        <ArrowRight size={11} className="composer-chip-next-arrow" aria-hidden="true" />
+                        <bdi dir="ltr" className="composer-chip-next-model">{displayModelName(queued)}</bdi>
+                        <span className="composer-chip-next-tag">{t.bare('modelChip.next')}</span>
+                    </span>
+                )}
                 {notDownloaded && <Download size={12} aria-label={t('modelChip.notDownloaded')} />}
                 {autoSwitchError && <AlertCircle size={12} aria-label={t('modelChip.switchFailed')} />}
                 <ChevronDown size={12} aria-hidden="true" />

@@ -336,6 +336,28 @@ def test_a_failed_step_keeps_the_tools_own_sentence():
     assert native_result_summary("file_edit", data) is None
 
 
+def test_a_failed_web_fetch_uses_plain_error_without_status_prefix():
+    data = {
+        "status": "error",
+        "url": "https://nonexistent.invalid/demo",
+        "error": "Could not look up nonexistent.invalid. Check the host name and network connection.",
+    }
+    assert (
+        native_result_summary("web_fetch", data)
+        == "Could not look up nonexistent.invalid. Check the host name and network connection."
+    )
+
+
+def test_a_failed_web_fetch_preserves_http_status_when_missing_from_text():
+    data = {
+        "status": "error",
+        "url": "https://example.com/private",
+        "http_status": 403,
+        "error": "Forbidden",
+    }
+    assert native_result_summary("web_fetch", data) == "HTTP 403: Forbidden"
+
+
 @pytest.fixture(scope="module")
 def listed():
     return json.loads(_FIXTURE.read_text(encoding="utf-8"))
@@ -377,3 +399,15 @@ def test_only_gaiacpps_search_code_is_read_as_the_code_index():
     )
     python_call = {"pattern": "TODO", "directory": "."}
     assert as_flagship_call("search_code", python_call) == ("search_code", python_call)
+
+
+def test_index_document_path_arg_is_mapped_to_file_path():
+    assert as_flagship_call("index_document", {"path": "/docs/report.pdf"}) == (
+        "index_document",
+        {"file_path": "/docs/report.pdf"},
+    )
+    python_call = {"file_path": "/docs/report.pdf"}
+    assert as_flagship_call("index_document", python_call) == (
+        "index_document",
+        python_call,
+    )
