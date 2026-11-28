@@ -75,6 +75,8 @@ export interface SetupTest {
     agent?: 'gaiacpp' | null;
     /** What that agent said went wrong. */
     agent_error?: string | null;
+    /** Set with `agent` when the chosen gaiacpp is missing or damaged: the new-chat screen's fixes apply. */
+    agent_problem?: AgentProblem | null;
     seconds: number | null;
 }
 

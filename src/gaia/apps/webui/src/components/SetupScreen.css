@@ -349,6 +349,15 @@ button.setup-rail-step:hover {
     font-size: 14px;
 }
 
+/* The new-chat screen's gaiacpp fixes, inside setup's own failure box: no second box. */
+.setup-failure .new-chat-setup-failed {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: 14px;
+}
+
 .setup-contents {
     display: flex;
     flex-direction: column;
