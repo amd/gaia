@@ -189,6 +189,34 @@ def add_indexed_documents(
     return result
 
 
+def mark_unreadable(
+    db: ChatDatabase, session_id: str, failed: Iterable[Tuple[str, str]]
+) -> List[Dict[str, Any]]:
+    """Mark the chat's listed documents the agent couldn't index as failed.
+
+    Only a document the library never indexed itself (no passages) is marked:
+    a composer upload is listed before the agent reads it, so its row says
+    nothing about whether it could be read. Returns the rows marked.
+    """
+    attached = {
+        os.path.realpath(doc["filepath"]): doc
+        for doc in db.get_session_documents(session_id)
+        if doc.get("filepath")
+    }
+    marked: List[Dict[str, Any]] = []
+    for raw_path, reason in failed:
+        doc = attached.get(os.path.realpath(raw_path))
+        if (
+            not doc
+            or doc.get("chunk_count")
+            or doc.get("indexing_status") != "complete"
+        ):
+            continue
+        db.update_document_status(doc["id"], "failed", last_error=reason or None)
+        marked.append(db.get_document(doc["id"]))
+    return marked
+
+
 def _listed_as_document(path: Path) -> bool:
     """Whether a composer attachment goes into the library.
 

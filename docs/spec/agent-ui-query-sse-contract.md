@@ -90,6 +90,7 @@ net-new agent instrumentation.
 | `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
 | `working_directory` | string (absolute path) | no | **Flagship (`gaia`) only, contract ≥ 2.24** — chat workspace for resolving relative file paths. It is separate from `allowed_paths`, which controls access. Relative paths are rejected with 422. |
 | `turns` | array of arrays of objects | no | **Flagship (`gaia`) only, contract ≥ 2.25**: earlier turns as the model saw them, including tool calls and results. Send `turns` instead of `context`; `context` must then be `[]`. `turns: []` clears retained history and enables `final.model_messages` and the pre-answer `context_usage` event (contract ≥ 2.28). |
+| `time_limit`, `disallowed_tools`, `no_web`, `no_skills`, `skip_permissions`, `full_access` | integer ≥ 1, array of strings, booleans | no | **Flagship (`gaia`) only, contract ≥ 2.32** — the `gaia -p` flags, for a one-shot run: beside a `session_id` they are a 422, so no session inherits them. `skip_permissions` / `full_access` need an authenticated caller (403 otherwise). A `disallowed_tools` glob matching no tool is a 400. `final` reports `time_limit_reached` and `withheld_tools`. `gaiacpp` reports 2.27 but applies them, listing them on `/version` as `capabilities.one_shot_fields`: detect them by that or by 2.32. On `gaiacpp` an unmatched glob is an in-stream `error` of `status` 400. |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -137,7 +138,13 @@ net-new agent instrumentation.
         }
       }
     },
-    "reasoning": { "type": "boolean", "default": false }
+    "reasoning": { "type": "boolean", "default": false },
+    "time_limit": { "type": "integer", "minimum": 1 },
+    "disallowed_tools": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "no_web": { "type": "boolean", "default": false },
+    "no_skills": { "type": "boolean", "default": false },
+    "skip_permissions": { "type": "boolean", "default": false },
+    "full_access": { "type": "boolean", "default": false }
   },
   "dependentRequired": {
     "changes_turn_id": ["session_id"]
@@ -228,7 +235,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `context_usage` | `{window, used, turns_in_view, turns_hidden, ...}` | update the composer's context meter; **not terminal**. The sidecar streams it before the answer for a caller that sent `turns` (contract ≥ 2.28), in the same shape an in-process turn streams at turn start, so the meter fills during a long turn instead of waiting for `final` |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) `risk_note` (why the agent's checks don't cover the call), `file_path` (where a relative write lands) and `script` (for `execute_python_file`, the file's content as read when the prompt was built, capped at 400 lines with the rest counted in `hidden_lines`, or `unreadable` saying why there is none) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?, session_created?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29), and `session_created: true` (contract >= 2.31) means the sidecar built a fresh agent for this turn — eviction, a restart, or first use — so a client tracking state that assumed the old agent instance survived (a path approved at a prompt) must drop only what it held *before this turn started*, not what this same turn's own prompt just approved |
+| `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?, session_created?, time_limit_reached?, withheld_tools?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29), and `session_created: true` (contract >= 2.31) means the sidecar built a fresh agent for this turn — eviction, a restart, or first use — so a client tracking state that assumed the old agent instance survived (a path approved at a prompt) must drop only what it held *before this turn started*, not what this same turn's own prompt just approved. A one-shot run's `time_limit_reached: true` says its `time_limit` stopped the turn (treat it as incomplete), and `withheld_tools` lists the tools its restrictions withheld (contract >= 2.32) |
 | `error` | `{detail, status, session_created?}` | surface the actionable error verbatim; terminal. `session_created` (contract >= 2.31): same meaning as on `final` — the agent was rebuilt this turn whether or not it produced an answer |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
@@ -639,6 +646,39 @@ A host calls it when the user deletes the conversation; otherwise the session
 and its servers live until it idles out. An unknown session is a `404`; one
 running a turn is a `409` (cancel the run, then delete again). **Call it only on
 a peer at contract ≥ 2.30**; an older one has no such route.
+
+### 5.6 The agent's own memory store (`gaiacpp` only, found by capability)
+
+`gaiacpp` keeps its memory in its own file (`memory-cpp.db`), apart from the
+Python flagship's store, and serves it so a host's Memory page can show the
+memory of the agent the PC is set to use.
+
+- **`GET /v1/gaia/memory[?q=<keywords>&category=<one>&limit=<1..1000>]`** →
+  `{available: true, stats, contexts, shown, total, items, store}`. `limit`
+  defaults to 300; without `q` the newest come first; sensitive entries are
+  included. `total` counts the whole store, `shown` the rows returned. Each
+  item is `{id, category, content, entity, context, confidence: null,
+  sensitive, created_at, updated_at, last_used: null}`. Before anything was
+  remembered: `{available: false, reason, store}`.
+- **`POST /v1/gaia/memory`** `{content, category?, sensitive?, entity?,
+  context?}` → `{status: "created", id}`. `category` is one of `fact`,
+  `preference`, `error`, `skill`, `note`, `reminder` (default `fact`).
+- **`PUT /v1/gaia/memory/{id}`** `{content}` → `{status: "updated", id}`. Only
+  the text can change.
+- **`DELETE /v1/gaia/memory/{id}`** → `{status: "deleted", id}`.
+
+Empty or credential-shaped text, or an unknown category, is a `422`; an unknown
+id is a `404`; both carry the reason in `detail`.
+
+`store` is `{agent: "gaiacpp", path, capabilities: ["search", "create", "edit",
+"delete"]}`. **Detect these routes by `store.capabilities`, never by contract
+version.** The flagship contract is already at 2.31 and `gaiacpp` reports 2.27,
+so no version number could mark the routes that `gaiacpp` could honestly claim.
+A `GET /memory` reply with no `store.capabilities` comes from a peer that can
+only list (an older `gaiacpp`, or the Python flagship's plain memory list): it
+ignores `q`, `category` and `limit`, and a host must not send it a write. The
+Agent UI backend then filters the list itself and answers every edit with a
+`409` that says to update `gaiacpp`.
 
 ---
 

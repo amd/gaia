@@ -342,6 +342,36 @@ def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     assert "always_scope" not in prompt
 
 
+def test_gaiacpp_folder_card_reaches_the_ui_and_its_path_is_kept():
+    """gaiacpp's card has no label or risk; the path is what the panel lists."""
+    handler = SSEOutputHandler()
+    kept = []
+    handler.set_relay_confirmation = lambda cid, scope=None, path=None: kept.append(
+        (cid, scope, path)
+    )
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "needs_confirmation",
+            "run_id": "r1",
+            "action": "allow_path_access",
+            "summary": "Allow GAIA to use the folder /Users/me/Music and everything in it for this session?",
+            "confirm_id": "c-cpp",
+            "args": {"path": "/Users/me/Music", "kind": "folder"},
+        },
+        GAIA_PROFILE,
+        answers_confirmations=True,
+        offers_always=True,
+    )
+    (prompt,) = _drain(handler)
+    assert prompt["type"] == "permission_request"
+    assert prompt["tool"] == "allow_path_access"
+    assert prompt["confirm_id"] == "c-cpp"
+    assert prompt["args"] == {"path": "/Users/me/Music", "kind": "folder"}
+    assert "always_scope" not in prompt
+    assert kept[-1] == ("c-cpp", None, "/Users/me/Music")
+
+
 def test_prompt_only_keys_never_reach_the_wire_args():
     event = _permission(
         "run_shell_command",

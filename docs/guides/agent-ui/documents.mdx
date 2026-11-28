@@ -252,6 +252,12 @@ since, GAIA names it and changes nothing; you can then undo anyway and lose
 that later change. Undo the later turn first to keep it. To undo every turn at once, use
 **Undo all** in the session panel's Changes section.
 
+Undo needs Full-featured. Fast and light (`gaiacpp`, beta) doesn't record file
+changes yet, so under an answer whose turn wrote a file or ran a command it
+shows one line, "Undo isn't available on Fast and light", in place of the two
+buttons. For the same kind of reason, **Context & performance** says that Fast
+and light doesn't report what fills its context.
+
 On macOS, undoing a change in Documents, Desktop or Downloads can need its own
 permission, separate from the one the agent got for making the change. If macOS
 is asking, Undo says so: answer the dialog, then undo again. If access was

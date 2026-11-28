@@ -208,6 +208,17 @@ const RUN_AGENT_FAILED = {
         test('agent', 'failed', { subject: NPU.id, kind: 'agent', error: NPU_CHAT_FAILED, seconds: 31 }),
     ],
 };
+// The model passed; the real chat ran on the chosen gaiacpp, which could not reach the model server.
+const NATIVE_SAID = 'the model server at http://127.0.0.1:13305/api/v1 did not answer (connection refused).';
+const NATIVE_CHAT_FAILED = `The test chat runs on gaiacpp, the beta agent, and it didn't answer: ${NATIVE_SAID.slice(0, -1)}. Qwen3.6 35B A3B passed its own test, so the model isn't the problem. Finish setup on the Python agent, or test again. The setup report has the details.`;
+const RUN_NATIVE_AGENT_FAILED = {
+    ...RUN, state: 'failed', error: NATIVE_CHAT_FAILED, models: DONE_ROWS,
+    tests: [
+        test('server', 'passed', { seconds: 1 }),
+        test('chat', 'passed', { subject: QWEN_ID, seconds: 21 }),
+        test('agent', 'failed', { subject: QWEN_ID, kind: 'agent', agent: 'gaiacpp', agent_error: NATIVE_SAID, error: NATIVE_CHAT_FAILED, seconds: 4 }),
+    ],
+};
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
 
 // Setup is ready; speech-to-text, added on the Download step, is downloading on its own.
@@ -645,6 +656,19 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        // An older installer's gaiacpp under a newer app: flagged on Customize, with Update, and still pickable.
+        name: 'models-agent-outdated',
+        answers: { agent: { gaiacpp: 'outdated' } },
+        reach: async (page) => {
+            await toModels(page);
+            const agent = page.locator('.agent-choice');
+            await expect(agent.locator('.agent-choice-why')).toBeVisible();
+            await expect(agent.locator('.agent-choice-download')).toBeVisible();
+            await expect(agent.locator('[role="radio"]').nth(1)).not.toHaveAttribute('aria-disabled', 'true');
+            await agent.scrollIntoViewIfNeeded();
+        },
+    },
+    {
         name: 'models-npu',
         reach: async (page) => {
             await toModels(page);
@@ -864,6 +888,12 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.setup-result.is-failed .setup-result-model')).toBeVisible(),
     },
     {
+        // The chat failed on gaiacpp, not on the model: the way on is the Python agent.
+        name: 'test-failed-agent-gaiacpp',
+        answers: { status: RUN_NATIVE_AGENT_FAILED },
+        reach: (page) => expect(page.locator('.setup-result-error-said')).toBeVisible(),
+    },
+    {
         name: 'test-long',
         answers: { status: RUN_TEST_LONG, plan: PLAN_LONG },
         reach: (page) => expect(page.locator('.setup-result-error')).toBeVisible(),
@@ -888,7 +918,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'models-agent-outdated', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-failed-agent-gaiacpp', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

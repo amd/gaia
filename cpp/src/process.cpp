@@ -1421,6 +1421,11 @@ std::string ShellSession::cwd() const {
     return impl_->cwd;
 }
 
+std::string ShellSession::startCwd() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->startCwd;
+}
+
 bool ShellSession::setCwd(const std::string& dir) {
     std::error_code ec;
     sfs::path resolved = sfs::weakly_canonical(sfs::u8path(dir), ec);

@@ -12,6 +12,7 @@
 #include <random>
 #include <regex>
 #include <set>
+#include <sstream>
 
 #include "gaia/ignore.h"
 #include "gaia/process.h"
@@ -74,6 +75,20 @@ private:
     std::string path_;
     fs::path copy_;
 };
+
+#ifdef __APPLE__
+constexpr const char* kPdfKitScript = R"JS(ObjC.import('PDFKit');
+function run(argv) {
+  var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  if (doc.isNil()) throw new Error('not a readable PDF');
+  if (doc.isLocked) throw new Error('the PDF is password-protected');
+  var out = $.NSFileHandle.fileHandleWithStandardOutput;
+  for (var i = 0; i < doc.pageCount; i++) {
+    var s = doc.pageAtIndex(i).string;
+    out.writeData($((s.isNil() ? '' : s.js) + '\f').dataUsingEncoding($.NSUTF8StringEncoding));
+  }
+})JS";
+#endif
 
 std::string decodeXmlEntities(std::string s) {
     const std::pair<const char*, const char*> ents[] = {
@@ -254,6 +269,19 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
 
 }  // namespace
 
+std::string MissingDocumentReader::remedy(const std::string& file, const std::string& program) {
+    return "Can't read PDF " + file + ": this agent reads PDFs with " + program +
+           ", which is not installed on this PC. Install poppler (it provides " + program +
+           "; on Debian or Ubuntu: sudo apt install poppler-utils) and attach the file again, or switch to "
+           "Full-featured (gaiapy), which reads PDFs itself (Settings > Agent & model in the GAIA app, "
+           "--agent-program gaiapy in the terminal).";
+}
+
+MissingDocumentReader::MissingDocumentReader(const std::string& path, std::string program_)
+    : std::runtime_error(remedy(path, program_) +
+                         " Tell the user exactly this; other ways of reading the PDF will not work here."),
+      program(std::move(program_)) {}
+
 DocumentIndex::DocumentIndex(EmbedFunction embed, std::string embeddingModel,
                              ChunkingConfig chunking)
     : embed_(std::move(embed)), embeddingModel_(std::move(embeddingModel)), chunking_(chunking) {
@@ -276,29 +304,36 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
 #ifdef _WIN32
         // By full path: cmd.exe would run a pdftotext.bat in the working folder first.
         const std::string pdftotext = findProgramOnPath("pdftotext");
-        if (pdftotext.empty()) {
-            throw std::runtime_error("Can't read PDF " + path + ": pdftotext is not installed (install poppler)");
-        }
+        if (pdftotext.empty()) throw MissingDocumentReader(path, "pdftotext");
         // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
         const std::string extract = "\"\"" + pdftotext + "\" -layout " + detail::shellQuote(safe.str()) + " -\"";
 #else
         const std::string extract = "pdftotext -layout " + detail::shellQuote(safe.str()) + " -";
 #endif
         ProcessResult r = ProcessRunner::run(extract, 120000, "", {}, kMaxExtractBytes);
+        const bool noPdftotext = r.exitCode == 127;
+#ifdef __APPLE__
+        // No poppler on a stock Mac: the system's own PDF reader, one form feed after each page.
+        if (noPdftotext) {
+            r = ProcessRunner::run("/usr/bin/osascript -l JavaScript -e " + detail::shellQuote(kPdfKitScript) + " " +
+                                       detail::shellQuote(path),
+                                   120000, "", {}, kMaxExtractBytes);
+        }
+#else
+        if (noPdftotext) throw MissingDocumentReader(path, "pdftotext");
+#endif
         if (r.stdout_output.size() >= kMaxExtractBytes) {
             throw std::runtime_error("PDF " + path + " has more than " +
                                      std::to_string(kMaxExtractBytes >> 20) +
                                      " MB of text; split it before indexing.");
         }
         if (r.exitCode != 0) {
-            throw std::runtime_error(
-                "Can't read PDF " + path + ": pdftotext " +
-                (r.exitCode == 127 ? std::string("is not installed (install poppler-utils)")
-                                   : "failed: " + r.stderr_output.substr(0, 300)));
+            throw std::runtime_error("Can't read PDF " + path + ": " + (noPdftotext ? "macOS" : "pdftotext") +
+                                     " failed: " + r.stderr_output.substr(0, 300));
         }
         size_t start = 0;
         int page = 1;
-        const std::string& t = r.stdout_output;
+        const std::string t = tidyPdfText(r.stdout_output);
         while (start <= t.size()) {
             size_t ff = t.find('\f', start);
             const std::string body = t.substr(start, ff == std::string::npos ? std::string::npos : ff - start);
@@ -323,13 +358,104 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
     return pages;
 }
 
+namespace {
+
+// Dashes, curly quotes, no-break spaces and the like split words, as their
+// ASCII look-alikes do: "Moody’s" and "B–42" must match a typed "Moody's", "B-42".
+bool unicodePunctuation(const std::string& s, size_t i) {
+    const auto b = [&](size_t k) { return i + k < s.size() ? static_cast<unsigned char>(s[i + k]) : 0u; };
+    const unsigned c0 = b(0);
+    if (c0 == 0xC2) return b(1) >= 0xA0 && b(1) <= 0xBF;               // U+00A0-00BF
+    if (c0 == 0xE2) return b(1) == 0x80 || b(1) == 0x81 ||              // U+2000-207F
+                           (b(1) == 0x88 && b(2) == 0x92);              // U+2212 minus
+    if (c0 == 0xE3) return b(1) == 0x80;                                // U+3000-303F
+    if (c0 == 0xEF) return b(1) == 0xBF && b(2) == 0xBD;                // U+FFFD
+    return false;
+}
+
+bool numericWord(const std::string& w) {
+    bool digit = false;
+    for (unsigned char c : w) {
+        if (std::isdigit(c)) {
+            digit = true;
+        } else if (!std::strchr(".,-%()$", c) && c < 0x80) {
+            return false;
+        }
+    }
+    return digit;
+}
+
+std::vector<std::string> wordsIn(const std::string& line) {
+    std::vector<std::string> words;
+    std::istringstream in(line);
+    for (std::string w; in >> w;) words.push_back(w);
+    return words;
+}
+
+constexpr size_t kMaxTableHeading = 800;
+
+// A table's title and column names: the lines above its first row of numbers,
+// on a page that is mostly numbers. Empty for prose.
+std::string tableHeading(const std::string& page) {
+    size_t words = 0, numbers = 0;
+    for (const auto& w : wordsIn(page)) {
+        ++words;
+        if (numericWord(w)) ++numbers;
+    }
+    if (words == 0 || numbers * 2 < words) return "";
+    std::istringstream in(page);
+    std::string heading;
+    for (std::string line; std::getline(in, line);) {
+        const auto lineWords = wordsIn(line);
+        size_t n = 0;
+        for (const auto& w : lineWords) n += numericWord(w) ? 1 : 0;
+        if (lineWords.size() >= 3 && n * 5 >= lineWords.size() * 3) break;
+        for (const auto& w : lineWords) heading += (heading.empty() ? "" : " ") + w;
+        if (heading.size() > kMaxTableHeading) return "";
+    }
+    return heading;
+}
+
+}  // namespace
+
+std::string DocumentIndex::tidyPdfText(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    bool junk = false;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        const bool replacement = text.compare(i, 3, "\xEF\xBF\xBD") == 0;
+        const bool control = c < 0x20 && c != '\n' && c != '\t' && c != '\f' && c != '\r';
+        if (replacement || control) {
+            if (replacement) i += 2;
+            if (!junk && !out.empty() && out.back() != ' ' && out.back() != '\n') out.push_back(' ');
+            junk = true;
+            continue;
+        }
+        if (junk && c == ' ' && !out.empty() && out.back() == ' ') continue;
+        junk = false;
+        out.push_back(static_cast<char>(c));
+    }
+    return out;
+}
+
 std::vector<std::string> DocumentIndex::tokens(const std::string& text) const {
     std::vector<std::string> out;
     std::string cur;
-    for (unsigned char c : text) {
-        if (std::isalnum(c) || c >= 0x80) {
-            cur.push_back(static_cast<char>(std::tolower(c)));
-        } else if (!cur.empty()) {
+    for (size_t i = 0; i < text.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        const size_t len = c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+        if (std::isalnum(c) || (c >= 0x80 && !unicodePunctuation(text, i))) {
+            if (c < 0x80) {
+                cur.push_back(static_cast<char>(std::tolower(c)));
+            } else {
+                cur.append(text, i, len);
+                i += len - 1;
+            }
+            continue;
+        }
+        if (c >= 0x80) i += len - 1;
+        if (!cur.empty()) {
             out.push_back(std::move(cur));
             cur.clear();
         }
@@ -372,7 +498,13 @@ size_t DocumentIndex::indexFile(const std::string& path) {
     const std::string file = fs::absolute(path).lexically_normal().string();
     std::vector<DocumentChunk> fresh;
     for (const auto& [page, text] : extractPages(file)) {
-        for (auto& c : splitTextIntoChunks(text, chunking_)) fresh.push_back({file, page, std::move(c)});
+        auto pieces = splitTextIntoChunks(text, chunking_);
+        // A row cut off from its column names can't be found by them.
+        const std::string heading = pieces.size() > 1 ? tableHeading(text) : "";
+        for (size_t j = 0; j < pieces.size(); ++j) {
+            std::string c = j == 0 || heading.empty() ? std::move(pieces[j]) : heading + "\n" + pieces[j];
+            fresh.push_back({file, page, std::move(c)});
+        }
     }
     std::vector<std::vector<float>> vecs;
     if (embed_ && !fresh.empty()) {
@@ -532,6 +664,8 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
                 const size_t n = indexFile(t);
                 total += n;
                 done.push_back({{"file", t}, {"chunks", n}});
+            } catch (const MissingDocumentReader& e) {
+                failed.push_back({{"file", t}, {"error", e.what()}, {"missing_program", e.program}});
             } catch (const std::exception& e) {
                 failed.push_back({{"file", t}, {"error", e.what()}});
             }
@@ -544,8 +678,11 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
             out["skipped"] = skipped.toJson();
         }
         if (done.empty()) {
-            std::string error = targets.empty() ? "No supported files were indexed at " + path
-                                                : "Nothing could be indexed (see failed)";
+            // One file: its own reason, which says what the user can do.
+            std::string error = targets.empty()      ? "No supported files were indexed at " + path
+                                : failed.size() == 1 ? failed[0].value("error", "")
+                                                     : "Nothing could be indexed (see failed)";
+            while (!error.empty() && error.back() == '.') error.pop_back();
             if (skipped.total() != 0) {
                 error += ": " + std::to_string(skipped.total()) + " skipped - " + skipped.summary() +
                          ". To index one of them, call index_document with that file's own path";

@@ -54,6 +54,11 @@ ALLOWED = {
     # Never shown in the app: CLI-only callers, log lines, argv, the eval.
     ("llm/lemonade_client.py", "gaia init --force-models"): "CLI download progress",
     ("llm/lemonade_manager.py", "  gaia init"): "printed to the CLI's stderr",
+    # gaiacpp's own /init wording; the app swaps in AGENT_UI_SERVER_RESTART_HINT.
+    (
+        "llm/surface_hints.py",
+        "run `gaia daemon start`",
+    ): "swapped before the app shows it",
     ("llm/gateway.py", "gaia gateway auth --no-remember"): "`gaia gateway auth`",
     ("llm/gateway.py", "Pass one to `gaia gateway auth`"): "`gaia gateway auth`",
     ("llm/gateway.py", "Pick another with `gaia gateway models`"): "CLI callers only",
@@ -302,3 +307,11 @@ def test_the_vision_download_hint_names_the_agent_ui_path():
     worded = surface_wording(surface_hints.VISION_DOWNLOAD_HINT, "agent_ui")
     assert worded == surface_hints.AGENT_UI_VISION_DOWNLOAD_STEP
     assert "TUI" not in worded and not COMMAND.search(worded)
+
+
+def test_the_app_swaps_gaiacpp_server_start_sentence():
+    shown = surface_wording(
+        f"It failed. {surface_hints.NATIVE_SERVER_START_HINT}", "agent_ui"
+    )
+    assert surface_hints.AGENT_UI_SERVER_RESTART_HINT in shown
+    assert not COMMAND.search(shown)

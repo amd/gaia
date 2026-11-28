@@ -1070,6 +1070,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         historyNotice,
                         libraryNotices: event.library_notices,
                         failure: event.failed ? event.failure : undefined,
+                        agentProgram: event.failed ? event.agent_program : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     settledIdsRef.current.add(assistantMsg.id);
@@ -1112,6 +1113,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     cards: prev?.cards ?? m.cards,
                                     stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
                                     failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
+                                    agentProgram: m.agentProgram ?? prevMsgs.find((p) => p.id === m.id)?.agentProgram,
                                 };
                             });
                             carryMessageKeys(prevMsgs, msgs, messageKeysRef.current);

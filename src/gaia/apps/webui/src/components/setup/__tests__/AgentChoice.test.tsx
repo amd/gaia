@@ -4,6 +4,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
+import { stripIsolates } from '../../../i18n/registry';
 import { useChatStore } from '../../../stores/chatStore';
 import { AGENT_PROGRAMS, SETTINGS, withoutGaiacpp } from '../../../test/setupApiMocks';
 import type { AgentDownload } from '../../../types';
@@ -53,6 +54,21 @@ describe('AgentChoice', () => {
         expect(screen.getByText(/Full-featured \(gaiapy\) has every tool and feature, and is the most tested/)).toBeVisible();
         expect(screen.getByText(/Fast and light \(gaiacpp\) starts in a fraction of a second/)).toBeVisible();
         expect(screen.getByText('You can switch later in Settings › Agent & model.')).toBeVisible();
+    });
+
+    it('lists what changes on gaiacpp, not just "fewer features"', async () => {
+        render(<AgentChoice />);
+        await radio(/gaiacpp/);
+        fireEvent.click(screen.getByRole('button', { name: 'Compare the two' }));
+        const differences = within(screen.getByRole('list')).getAllByRole('listitem').map((li) => stripIsolates(li.textContent ?? ''));
+        expect(differences).toEqual([
+            "Memory is separate: what GAIA remembered with Full-featured isn't seen by Fast and light, and the other way round.",
+            "File changes it makes can't be undone from the chat.",
+            'Document search matches words, not meaning.',
+            "It can't create images, transcribe audio or turn a document into speech.",
+            "The context meter doesn't show how full the conversation is.",
+        ]);
+        expect(screen.queryByText(/fewer tools and features/)).not.toBeInTheDocument();
     });
 
     it('selects nothing for a saved agent this version cannot run, and lets the user pick one', async () => {
@@ -319,5 +335,75 @@ describe('AgentChoice in setup: a pick is held for Continue', () => {
         fireEvent.click(screen.getByRole('radio', { name: /gaiapy/ }));
         expect(onPending).toHaveBeenLastCalledWith(null);
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+    });
+});
+
+describe('AgentChoice: a gaiacpp from another GAIA release', () => {
+    const OUTDATED = {
+        ...AGENT_PROGRAMS,
+        programs: [
+            AGENT_PROGRAMS.programs[0],
+            { ...AGENT_PROGRAMS.programs[1], can_download: true, update_available: true, version: '0.27.0-rc.8', release_version: '0.27.0-rc.10' },
+        ],
+    };
+    const update = () => screen.findByRole('button', { name: 'Update gaiacpp' });
+
+    beforeEach(() => {
+        mockedApi.getAgentPrograms.mockResolvedValue(OUTDATED);
+    });
+
+    it.each([[true], [false]])('says it is out of date, with both versions, in view (in Settings: %s)', async (inSettings) => {
+        render(<AgentChoice inSettings={inSettings} />);
+        const cpp = await radio(/gaiacpp/);
+        // Update and the sentence under the row say it; the radio is described by that sentence.
+        expect(cpp).not.toHaveTextContent('Out of date');
+        expect(cpp).toHaveAccessibleDescription(/from another GAIA release/);
+        const note = "This PC's gaiacpp is version 0.27.0-rc.8, from another GAIA release; this GAIA's is 0.27.0-rc.10. Update downloads this release's copy.";
+        expect(stripIsolates(screen.getByText(/from another GAIA release/).textContent ?? '')).toBe(note);
+        expect(screen.getByText(/from another GAIA release/)).toBeVisible();
+        expect(await update()).toBeVisible();
+    });
+
+    it('still lets the user pick it: an older copy is not blocked', async () => {
+        render(<AgentChoice inSettings />);
+        const cpp = await radio(/gaiacpp/);
+        expect(cpp).not.toHaveAttribute('aria-disabled');
+        fireEvent.click(cpp);
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' }));
+        expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+    });
+
+    it("Update downloads this release's copy and does not switch agents", async () => {
+        mockedApi.startAgentDownload.mockResolvedValue(job({ bytes_done: 2_720_000 }));
+        mockedApi.getAgentDownload.mockResolvedValue(job({ state: 'done', bytes_done: 6_800_000 }));
+        render(<AgentChoice inSettings />);
+        fireEvent.click(await update());
+        expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(1);
+        await screen.findByRole('progressbar', { name: /gaiacpp/ });
+
+        mockedApi.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
+        await waitFor(() => expect(screen.queryByText(/from another GAIA release/)).toBeNull(), { timeout: 3000 });
+        expect(screen.queryByRole('button', { name: 'Update gaiacpp' })).toBeNull();
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        expect(screen.getByRole('radio', { name: /gaiapy/ })).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('says so without versions when the copy could not say its own', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({
+            ...OUTDATED, programs: [OUTDATED.programs[0], { ...OUTDATED.programs[1], version: null }],
+        });
+        render(<AgentChoice inSettings />);
+        await radio(/gaiacpp/);
+        expect(screen.getByText(/from another GAIA release/)).toHaveTextContent("gaiacpp is from another GAIA release. Update downloads this release's copy.");
+    });
+
+    it('shows nothing for a copy that matches, or one this release cannot replace', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({
+            ...OUTDATED, programs: [OUTDATED.programs[0], { ...OUTDATED.programs[1], can_download: false, update_available: false }],
+        });
+        render(<AgentChoice inSettings />);
+        const cpp = await radio(/gaiacpp/);
+        expect(cpp).not.toHaveTextContent('Out of date');
+        expect(screen.queryByRole('button', { name: 'Update gaiacpp' })).toBeNull();
     });
 });

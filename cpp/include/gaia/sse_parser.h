@@ -40,6 +40,10 @@ public:
     /// Construct with a per-token callback.
     explicit SseParser(TokenCallback cb);
 
+    /// Called with each piece of the model's reasoning (``delta.reasoning_content``), which
+    /// is never part of the answer.
+    void setReasoningCallback(TokenCallback cb) { reasoning_ = std::move(cb); }
+
     /// Feed raw HTTP response bytes into the parser.
     ///
     /// May invoke the token callback zero or more times per call. Buffers
@@ -102,6 +106,7 @@ private:
 
     TokenCallback callback_;
     std::string   buffer_;     // Accumulates partial lines across feed() calls
+    TokenCallback reasoning_;
     bool          done_      = false;
     bool          hasTokens_ = false;
     json          errorEvent_;
