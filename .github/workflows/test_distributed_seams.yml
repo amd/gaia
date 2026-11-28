@@ -49,6 +49,9 @@ on:
       - 'src/gaia/ui/routers/chat.py'
       - 'src/gaia/ui/routers/system.py'
       - 'src/gaia/ui/routers/agent_programs.py'
+      - 'src/gaia/ui/local_models.py'
+      - 'src/gaia/version.py'
+      - 'docs/cpp/gaia-agent.mdx'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review, labeled]
@@ -83,6 +86,9 @@ on:
       - 'src/gaia/ui/routers/chat.py'
       - 'src/gaia/ui/routers/system.py'
       - 'src/gaia/ui/routers/agent_programs.py'
+      - 'src/gaia/ui/local_models.py'
+      - 'src/gaia/version.py'
+      - 'docs/cpp/gaia-agent.mdx'
   merge_group:
   workflow_dispatch:
 
