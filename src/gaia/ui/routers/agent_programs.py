@@ -281,18 +281,24 @@ def _refuse_while_agent_is_busy() -> None:
     if (setup_runner.status() or {}).get("state") in ("running", "verifying"):
         raise HTTPException(
             status_code=409,
-            detail=(
-                "GAIA is still setting up and testing the agent. Update gaiacpp "
-                "once setup has finished."
-            ),
+            detail={
+                "status": "gaiacpp_update_setup_busy",
+                "message": (
+                    "GAIA is still setting up and testing the agent. Update gaiacpp "
+                    "once setup has finished."
+                ),
+            },
         )
     if run_manager.active_sessions():
         raise HTTPException(
             status_code=409,
-            detail=(
-                "GAIA is answering in a chat, and updating gaiacpp now would cut "
-                "that answer off. Let it finish or stop it, then update."
-            ),
+            detail={
+                "status": "gaiacpp_update_chat_busy",
+                "message": (
+                    "GAIA is answering in a chat, and updating gaiacpp now would cut "
+                    "that answer off. Let it finish or stop it, then update."
+                ),
+            },
         )
 
 
@@ -304,7 +310,11 @@ def _start_download() -> Dict[str, Any]:
         and not _fails_check()
     ):
         raise HTTPException(
-            status_code=409, detail="gaiacpp is already installed on this PC."
+            status_code=409,
+            detail={
+                "status": "gaiacpp_already_installed",
+                "message": "gaiacpp is already installed on this PC.",
+            },
         )
     if installed is not None and fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
         _refuse_while_agent_is_busy()
