@@ -30,9 +30,21 @@ from __future__ import annotations
 
 import math
 import os
+import posixpath
 import re
+import shlex
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from gaia.agents.base.checks import check_kind
 from gaia.agents.base.claims import (
@@ -202,6 +214,370 @@ def _tested(record: Dict[str, Any]) -> bool:
         return False
     label = record.get("check_label")
     return not label or (record.get("check_kind") or check_kind(label)) == "test"
+
+
+_INTERPRETERS = frozenset(
+    "python py pypy node nodejs deno bun ts-node tsx ruby perl php lua bash sh "
+    "zsh dash pwsh powershell rscript julia java".split()
+)
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
+#: Flags that only check syntax: the program never runs.
+_SYNTAX_ONLY = {
+    **{name: {"-c", "--check"} for name in ("node", "nodejs")},
+    **{name: {"-n"} for name in _SHELLS},
+    "php": {"-l", "--syntax-check"},
+    "ruby": {"-c"},
+    "perl": {"-c"},
+}
+#: Flags whose value is inline code rather than a file.
+_INLINE_CODE = {
+    "default": {"-c", "-e", "-E", "-p", "--eval", "--print", "-command"},
+    "php": {"-r"},
+}
+#: Interpreter flags that take the next word as their value.
+_FLAG_VALUES = {
+    **{name: {"-W", "-X"} for name in ("python", "py", "pypy")},
+    **{
+        name: {"-r", "--require", "--import", "--loader"}
+        for name in ("node", "nodejs", "tsx", "ts-node")
+    },
+    **{name: {"-o", "-O"} for name in _SHELLS},
+    "php": {"-c", "-d"},
+    "ruby": {"-I", "-r"},
+    "java": {"-cp", "-classpath", "--class-path"},
+}
+#: Wrapper flags that take the next word as their value.
+_WRAPPER_FLAG_VALUES = frozenset(
+    "-s -k -n -u -g -p -C --signal --kill-after --with --python --project "
+    "--directory --env-file --extra --package".split()
+)
+#: Wrappers that run the rest of the command: ``timeout 10 python f.py``.
+_WRAPPERS = frozenset(
+    "sudo time env nohup exec command nice ionice stdbuf timeout npx bunx".split()
+)
+#: Tools whose ``run`` subcommand wraps another command: ``uv run python f.py``.
+_RUN_WRAPPERS = frozenset({"uv", "poetry", "pipenv", "pdm", "hatch"})
+#: Tools whose ``run`` builds and runs the sources of a directory.
+_BUILD_AND_RUN = {"go": (".go",), "cargo": (".rs",), "dotnet": (".cs", ".fs")}
+_COMPILERS = frozenset(
+    "gcc g++ cc c++ clang clang++ tcc rustc javac nvcc gfortran".split()
+)
+_SOURCE_EXTS = (
+    ".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".rs", ".java", ".cu", ".f",
+    ".f90", ".s",
+)  # fmt: skip
+_SEPARATORS = frozenset({"&&", "||", ";", ";;", "|", "|&", "&", "(", ")"})
+#: Separators after which the call's exit status is not this command's.
+_MASKING = frozenset({"||", ";", ";;", "&", "|", "|&"})
+#: Output that shows a program crashed or reported an error.
+_RUN_ERROR = re.compile(
+    r"Traceback \(most recent call last\)|\b[A-Z]\w*(?:Error|Exception)\b:?"
+    r"|(?im:^\s*(?:fatal\s+)?error\b)|\bError:|Segmentation fault|core dumped"
+    r"|\bpanic:|\bAborted\b|exit(?:ed)? (?:with )?(?:code|status) -?[1-9]"
+    r"|returned non-zero|command not found|No such file or directory"
+    r"|is not recognized as an internal or external command"
+    r"|\b(?:Killed|Terminated|Hangup|Bus error|Illegal instruction)\b"
+    r"|Floating point exception|(?:killed|terminated) by signal|Out of memory"
+)
+_ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
+_ABSOLUTE = re.compile(r"^(?:/|~|[a-z]:/)")
+
+
+def _command_words(command: str) -> List[str]:
+    # Windows separators become ``/``; an escaped quote stays a shell escape.
+    text = re.sub(r"\\(?![\\'\"])", "/", command).replace("\n", " ; ")
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except ValueError:
+        return re.findall(r"&&|\|\||[;|&()<>]+|[^\s;|&()<>]+", text)
+
+
+#: How much a command's own outcome shows: its exit status is the call's,
+#: it is hidden but its output is not, or both are hidden.
+_SHOWN, _MASKED, _BLIND = 0, 1, 2
+_NULL_SINKS = frozenset({"/dev/null", "nul", "nul:", "$null"})
+
+
+def _segments(words: Sequence[str]) -> Iterable[Tuple[List[str], int]]:
+    """Each simple command, and how much of its outcome the call shows.
+
+    ``f || true``, ``f; echo``, ``f &`` and ``f | head`` all report another
+    command's status, so the call's success says nothing about ``f``; if ``f``
+    also sends output to ``/dev/null``, what the call printed isn't f's either.
+    """
+    segment: List[str] = []
+    discards = False
+    pending: Optional[Tuple[List[str], str, bool]] = None
+    in_target = False
+
+    def level(separator: str, discarded: bool, last: bool) -> int:
+        # ``f;`` with nothing after keeps f's status; ``f &`` never does.
+        if separator not in _MASKING or (last and separator not in ("&", "|", "|&")):
+            return _SHOWN
+        return _BLIND if discarded else _MASKED
+
+    for word in words:
+        if in_target:
+            in_target = False
+            discards = discards or word.lower() in _NULL_SINKS
+        elif word in _SEPARATORS:
+            if segment:
+                if pending:
+                    yield pending[0], level(pending[1], pending[2], False)
+                pending = (segment, word, discards)
+            segment, discards = [], False
+        elif word and set(word) <= set("<>&|"):
+            # A redirect: drop its fd (``2>``) and its target.
+            if segment and segment[-1].isdigit():
+                segment.pop()
+            in_target = True
+        else:
+            segment.append(word)
+    if pending:
+        yield pending[0], level(pending[1], pending[2], not segment)
+    if segment:
+        yield segment, _SHOWN
+
+
+def _program_name(word: str) -> str:
+    name = word.rsplit("/", 1)[-1].lower()
+    name = name[:-4] if name.endswith(".exe") else name
+    return re.sub(r"[\d.]+$", "", name) or name
+
+
+#: A directory the record can't place (``cd -``): nothing resolves into it.
+_UNKNOWN_DIR = "?"
+
+
+def _resolve(path: str, cwd: Optional[str]) -> str:
+    """*path* made absolute, or left relative to the session's workspace.
+
+    File tools and the shell share that workspace as their relative base, so
+    a relative path names the same file on both sides, and never an absolute
+    one: the workspace itself isn't in the record.
+    """
+    if path.startswith("~"):
+        path = os.path.expanduser(path)
+    path = path.replace("\\", "/").lower()
+    if cwd and not _ABSOLUTE.match(path):
+        path = posixpath.join(cwd, path)
+    return posixpath.normpath(path)
+
+
+def _under(path: str, directory: str) -> bool:
+    if directory == ".":
+        return not _ABSOLUTE.match(path) and not path.startswith("../")
+    return path.startswith(directory.rstrip("/") + "/")
+
+
+def _skip_flags(words: List[str]) -> List[str]:
+    while words and (words[0].startswith("-") or _ASSIGNMENT.match(words[0])):
+        words = words[2:] if words[0] in _WRAPPER_FLAG_VALUES else words[1:]
+    return words
+
+
+def _interpreted(name: str, args: List[str]) -> Tuple[str, List[str]]:
+    """``("files", paths)`` the interpreter runs, ``("shell", [code])`` for
+    ``sh -c``, or ``("none", [])`` for inline code and syntax checks."""
+    inline = _INLINE_CODE.get(name, _INLINE_CODE["default"])
+    while args:
+        word, args = args[0], args[1:]
+        if word in _SYNTAX_ONLY.get(name, ()):
+            return "none", []
+        if name in _SHELLS and word == "-c":
+            return ("shell", args[:1]) if args else ("none", [])
+        if name in ("pwsh", "powershell") and word.lower() in ("-c", "-command"):
+            return ("shell", [" ".join(args)]) if args else ("none", [])
+        if word in inline:
+            return "none", []
+        if word == "-m" and name in ("python", "py", "pypy"):
+            if not args or args[0] in ("py_compile", "compileall"):
+                return "none", []
+            module = args[0].replace(".", "/")
+            return "files", [module + ".py", module + "/__main__.py"]
+        if not word.startswith("-"):
+            if name == "java" and not word.endswith(".java"):
+                return "files", [word.replace(".", "/") + ".class"]
+            return "files", [word]
+        if word in _FLAG_VALUES.get(name, ()) and args:
+            args = args[1:]
+    return "none", []
+
+
+def _run_events(
+    command: str, cwd: Optional[str], masked: int = _SHOWN, subshell: bool = False
+) -> Iterable[Tuple[Any, ...]]:
+    """What a shell command runs or builds, segment by segment, after ``cd``.
+
+    Yields ``("run", path, masked)``, ``("run_dir", directory, extensions,
+    masked)``, ``("build", sources, output, masked)`` and, outside a subshell,
+    ``("cd", directory)``. *masked* means the call's exit status isn't the
+    command's own.
+    """
+    for words, lost in _segments(_command_words(command)):
+        lost = max(lost, masked)
+        while words and _ASSIGNMENT.match(words[0]):
+            words = words[1:]
+        name = _program_name(words[0]) if words else ""
+        if name in ("cd", "pushd", "chdir"):
+            target = words[1] if len(words) > 1 else "~"
+            cwd = _UNKNOWN_DIR if target == "-" else _resolve(target, cwd)
+            if not subshell:
+                yield ("cd", cwd)
+            continue
+        if name == "cmd" and len(words) > 2 and words[1].lower() in ("/c", "/k"):
+            yield from _run_events(" ".join(words[2:]), cwd, lost, True)
+            continue
+        while words and (
+            name in _WRAPPERS or (name in _RUN_WRAPPERS and words[1:2] == ["run"])
+        ):
+            lost = max(lost, _MASKED if name == "nohup" else _SHOWN)
+            words = _skip_flags(words[2:] if name in _RUN_WRAPPERS else words[1:])
+            if name == "timeout" and words:
+                words = words[1:]  # the duration
+            name = _program_name(words[0]) if words else ""
+        if not words:
+            continue
+        args = words[1:]
+        if name in _BUILD_AND_RUN:
+            if args[:1] == ["run"]:
+                exts = _BUILD_AND_RUN[name]
+                operands = [a for a in args[1:] if not a.startswith("-")]
+                files = [a for a in operands if a.endswith(exts)]
+                for path in files:
+                    yield ("run", _resolve(path, cwd), lost)
+                if not files:
+                    target = operands[0] if operands and name == "go" else "."
+                    yield ("run_dir", _resolve(target, cwd), exts, lost)
+            continue
+        if name in _COMPILERS:
+            if "-c" in args or "-fsyntax-only" in args or "-S" in args:
+                continue
+            sources = [
+                _resolve(a, cwd)
+                for a in args
+                if not a.startswith("-") and a.lower().endswith(_SOURCE_EXTS)
+            ]
+            output = None
+            for i, arg in enumerate(args):
+                if arg == "-o" and i + 1 < len(args):
+                    output = args[i + 1]
+                elif arg.startswith("-o") and len(arg) > 2:
+                    output = arg[2:]
+            if name == "javac":
+                outputs = [s.rsplit(".", 1)[0] + ".class" for s in sources]
+            elif output is None and name == "rustc" and sources:
+                outputs = [sources[0].rsplit(".", 1)[0]]
+            else:
+                outputs = [_resolve(output or "a.out", cwd)]
+            for out in outputs if sources else []:
+                yield ("build", sources, out, lost)
+                yield ("build", sources, out + ".exe", lost)
+            continue
+        if name in ("deno", "bun") and args[:1] == ["run"]:
+            args = args[1:]
+        if name in _INTERPRETERS:
+            kind, values = _interpreted(name, args)
+            if kind == "shell":
+                yield from _run_events(values[0], cwd, lost, True)
+            for path in values if kind == "files" else []:
+                yield ("run", _resolve(path, cwd), lost)
+            continue
+        yield ("run", _resolve(words[0], cwd), lost)
+
+
+#: Result fields that describe the call, each followed by its value.
+_RESULT_META = frozenset(
+    "status return_code returncode exit_code duration_seconds cwd command "
+    "truncated timed_out shell pid".split()
+)
+#: Result fields that hold what the program printed.
+_RESULT_STREAMS = frozenset({"stdout", "stderr", "output", "steps"})
+
+
+def _program_output(observed: str) -> str:
+    """What the program printed, from a flattened tool result."""
+    lines = observed.split("\n")
+    kept: List[str] = []
+    skip = False
+    for line in lines:
+        key = line.strip().lower()
+        if skip:
+            skip = False
+        elif key in _RESULT_META:
+            skip = True
+        elif key not in _RESULT_STREAMS:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _ran_what_it_wrote(records: Sequence[Dict[str, Any]]) -> bool:
+    """A file this turn wrote was then run, after its last write, and the run
+    did not fail.
+
+    Where there is no test suite, running the program is the test. A binary
+    counts only when built from a written source after that source's last write.
+    Output that shows an error never counts; a run whose exit status the shell
+    hid (``|| true``, ``; echo``, ``&``, a pipe) counts only on clean output.
+    """
+    written: List[str] = []
+    built: Dict[str, Set[str]] = {}
+    ran: Set[str] = set()
+    session_cwd: Optional[str] = None
+
+    def credit(path: str) -> None:
+        ran.update(w for w in written if w == path)
+        ran.update(built.get(path, ()))
+
+    for record in records:
+        args = record.get("args")
+        args = args if isinstance(args, dict) else {}
+        if record.get("mutated"):
+            for key, value in args.items():
+                if not (isinstance(value, str) and value and key.endswith("path")):
+                    continue
+                path = _resolve(value, None)
+                if path not in written:
+                    written.append(path)
+                ran.discard(path)
+                built = {
+                    out: sources
+                    for out, sources in built.items()
+                    if path not in sources
+                }
+            continue
+        if not _executed(record) or record.get("failed"):
+            continue
+        output = _program_output(record.get("observed") or "")
+        errored = bool(_RUN_ERROR.search(output))
+        shown = bool(output.strip())
+        command = args.get("command")
+        if not isinstance(command, str):
+            for key, value in args.items() if not errored else ():
+                if isinstance(value, str) and value and key.endswith("path"):
+                    credit(_resolve(value, None))
+            continue
+        cwd = args.get("working_directory") or args.get("cwd")
+        cwd = _resolve(cwd, None) if isinstance(cwd, str) and cwd else session_cwd
+        for event in _run_events(command, cwd):
+            if event[0] == "cd":
+                # The shell session keeps the directory a command moved to.
+                session_cwd = event[1]
+            elif errored or event[-1] == _BLIND or (event[-1] and not shown):
+                continue
+            elif event[0] == "run":
+                credit(event[1])
+            elif event[0] == "run_dir":
+                ran.update(
+                    w for w in written if w.endswith(event[2]) and _under(w, event[1])
+                )
+            else:
+                fresh = {w for w in written if w in event[1]}
+                if fresh:
+                    built[event[2]] = fresh
+    return bool(ran)
 
 
 def _touched_docs(record: Dict[str, Any]) -> bool:
@@ -929,6 +1305,8 @@ def action_findings(
     for kind, phrase in action_claims(answer):
         backed, why = _ACTION_EVIDENCE[kind]
         if any(backed(r) for r in records):
+            continue
+        if kind == "tested" and _ran_what_it_wrote(records):
             continue
         findings.append(
             Finding(

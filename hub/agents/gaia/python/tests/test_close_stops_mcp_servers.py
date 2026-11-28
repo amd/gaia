@@ -108,3 +108,19 @@ def test_a_failed_disconnect_does_not_stop_the_rest_of_close():
     agent._fs_index = MagicMock()
     agent.close()
     agent._fs_index.close_db.assert_called_once_with()
+
+
+def test_close_also_releases_the_history_the_agent_opened():
+    """The flagship's close() runs the base Agent's, not just its own teardown."""
+    from gaia.agents.base.history import SessionHistory
+
+    agent = _agent(GaiaAgent, None)
+    history = SessionHistory()
+    agent._owned_history = history
+    agent.conversation_history = history
+
+    agent.close()
+
+    assert agent.conversation_history == []
+    with pytest.raises(Exception):
+        history.turns(agent)
