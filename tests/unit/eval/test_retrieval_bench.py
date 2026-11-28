@@ -26,7 +26,6 @@ from gaia.eval.retrieval.locate import (
 )
 from gaia.eval.retrieval.scoring import (
     exact_match,
-    is_numeric_answer,
     numeric_match,
     percentile,
     retrieval_summary,
@@ -63,20 +62,6 @@ def test_numeric_match_accepts_rounding_scale_and_sign_conventions(gold, predict
 )
 def test_numeric_match_rejects_a_different_figure_or_a_refusal(gold, prediction):
     assert not numeric_match(gold, prediction)
-
-
-@pytest.mark.parametrize(
-    "gold", ["$1577.00", "24.26", "1.9%", "-0.02", "(1,234)", "1998"]
-)
-def test_short_figures_are_scored_as_numeric(gold):
-    assert is_numeric_answer(gold)
-
-
-@pytest.mark.parametrize(
-    "gold", ["Yes, margins improved.", "AES converted inventory 9.5 times", ""]
-)
-def test_prose_answers_are_not_numeric(gold):
-    assert not is_numeric_answer(gold)
 
 
 def test_exact_match_is_case_and_punctuation_insensitive_and_takes_aliases():

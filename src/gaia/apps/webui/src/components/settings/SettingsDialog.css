@@ -819,6 +819,13 @@
     text-decoration: underline;
 }
 
+.skill-row-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 6px;
+}
+
+.skill-row-actions > button,
 .model-row > button,
 .skill-row > button {
     flex-shrink: 0;
@@ -1328,15 +1335,6 @@
 .skill-link-warning p {
     margin-top: 6px;
     color: var(--text-secondary);
-}
-
-.skill-link-desc {
-    display: block;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: clip;
-    animation: fade-cut-inline both;
-    animation-timeline: scroll(self inline);
 }
 
 .skill-link-tag {

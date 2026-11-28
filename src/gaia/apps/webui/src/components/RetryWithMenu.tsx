@@ -79,7 +79,7 @@ export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | nu
         </button>
     );
     return (
-        <>
+        <span className="retry-menu-anchor">
             <button
                 ref={anchor}
                 type="button"
@@ -91,7 +91,7 @@ export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | nu
             >
                 <Shuffle size={12} />
             </button>
-            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Retry with" placement="below" align="end">
+            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Retry with" placement="below" align="start">
                 <div className="retry-menu">
                     <div className="retry-menu-head">{t('retry.head')}</div>
                     {error && <div className="retry-menu-error" role="alert">{error}</div>}
@@ -111,6 +111,6 @@ export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | nu
                     )}
                 </div>
             </Popover>
-        </>
+        </span>
     );
 }

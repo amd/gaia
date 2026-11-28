@@ -26,12 +26,16 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.home import chat_data_dirs
+from gaia.utils.sizes import format_size
 from gaia.utils.terminal import stdin_is_interactive
 
 logger = logging.getLogger(__name__)
 
 # Audit logger — separate from main logger for file operation tracking
 audit_logger = logging.getLogger("gaia.security.audit")
+
+# Old private name, still imported by tests.
+_format_size = format_size
 
 
 def ensure_audit_log_handler(cache_dir: Optional[Path] = None) -> None:
@@ -2263,7 +2267,7 @@ class PathValidator:
             )
             return True
 
-        size_str = _format_size(existing_size)
+        size_str = format_size(existing_size)
         with self._prompt_guard():
             print(f"\n⚠️  File already exists: {path} ({size_str})")
 
@@ -2297,7 +2301,7 @@ class PathValidator:
             status: Result status (success, denied, error).
             detail: Additional detail about the operation.
         """
-        size_str = _format_size(size) if size > 0 else "N/A"
+        size_str = format_size(size) if size > 0 else "N/A"
         msg = f"{operation.upper()} | {status} | {path} | {size_str}"
         if detail:
             msg += f" | {detail}"
@@ -2401,15 +2405,3 @@ def _is_interactive() -> bool:
     inside the Agent UI server, API server, or any non-TTY context (CI, pipe).
     """
     return stdin_is_interactive()
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format byte count to human-readable string."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"

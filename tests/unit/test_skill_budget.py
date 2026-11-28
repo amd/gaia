@@ -654,3 +654,8 @@ def test_a_mid_turn_load_keeps_the_other_summaries(make_agent):
     assert skill_budget_report(agent)["full"] == ["gamma"]
     assert skill_budget_report(agent)["summarized"] == ["alpha", "beta"]
     assert "(instructions hidden" not in prompt  # still summaries, not a menu
+
+
+def test_cjk_skill_body_is_charged_per_character():
+    assert skill_budget.body_tokens(SimpleNamespace(body="a" * 400)) == 100
+    assert skill_budget.body_tokens(SimpleNamespace(body="技能" * 200)) == 400

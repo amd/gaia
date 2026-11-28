@@ -1,12 +1,15 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import type { MessageKey, Params } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
+import { requestErrorText } from '../../utils/requestErrors';
+import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { AddSkillsFromLink } from './AddSkillsFromLink';
+import { SkillDescription } from './SkillDescription';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import type { SkillInfo, SkillSource } from '../../types';
 
@@ -27,43 +30,6 @@ function skipReason(why: string): MessageKey {
     return 'settings.skills.skipped.other';
 }
 
-/** A skill's description, cut at two lines until the reader asks for the rest. */
-function SkillDescription({ text }: { text: string }) {
-    const t = useT();
-    const ref = useRef<HTMLSpanElement>(null);
-    const [open, setOpen] = useState(false);
-    const [cut, setCut] = useState(false);
-
-    useLayoutEffect(() => {
-        const el = ref.current;
-        if (!el || open) return;
-        const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
-        measure();
-        if (typeof ResizeObserver === 'undefined') return;
-        const ro = new ResizeObserver(measure);
-        ro.observe(el);
-        return () => ro.disconnect();
-    }, [text, open]);
-
-    return (
-        <>
-            <span
-                ref={ref}
-                className={`skill-row-desc${open ? ' is-open' : ''}${cut || open ? ' is-toggle' : ''}`}
-                dir="auto"
-                onClick={cut || open ? () => setOpen(!open) : undefined}
-            >
-                <bdi>{text}</bdi>
-            </span>
-            {(cut || open) && (
-                <button type="button" className="skill-row-more" aria-expanded={open} onClick={() => setOpen(!open)}>
-                    {t(open ? 'settings.skills.less' : 'settings.skills.more')}
-                </button>
-            )}
-        </>
-    );
-}
-
 /** The skills GAIA can load, with a way to start a chat that uses one. */
 export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => void }) {
     const t = useT();
@@ -71,6 +37,8 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
     const [invalid, setInvalid] = useState<Record<string, string>>({});
     const [error, setError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    const [removing, setRemoving] = useState<{ name: string; busy: boolean } | null>(null);
+    const [removeError, setRemoveError] = useState<string | null>(null);
     const search = useRef<HTMLInputElement>(null);
     const active = useRef(true);
 
@@ -88,6 +56,19 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
         return () => { active.current = false; window.removeEventListener('focus', load); };
     }, [load]);
 
+    const remove = async (name: string) => {
+        setRemoving({ name, busy: true });
+        setRemoveError(null);
+        try {
+            await api.removeSkill(name);
+        } catch (err) {
+            if (active.current) setRemoveError(t('settings.skills.removeFailed', { name, error: requestErrorText(err, t) }));
+        } finally {
+            if (active.current) setRemoving(null);
+            load();
+        }
+    };
+
     const q = query.trim().toLowerCase();
     const shown = (skills ?? []).filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
 
@@ -103,16 +84,28 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                 </span>
                 <SkillDescription text={s.description} />
             </div>
-            {!s.always_on && (
-                <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => onUseSkill(s.name)}
-                    aria-label={t('settings.skills.useAria', { name: s.name })}
-                >
-                    {t('settings.skills.try')}
-                </button>
-            )}
+            <div className="skill-row-actions">
+                {!s.always_on && (
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => onUseSkill(s.name)}
+                        aria-label={t('settings.skills.useAria', { name: s.name })}
+                    >
+                        {t('settings.skills.try')}
+                    </button>
+                )}
+                {s.source === 'user' && (
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => { setRemoveError(null); setRemoving({ name: s.name, busy: false }); }}
+                        aria-label={t('settings.skills.removeAria', { name: s.name })}
+                    >
+                        {t('settings.skills.remove')}
+                    </button>
+                )}
+            </div>
         </li>
     );
 
@@ -126,6 +119,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
             </details>
             <AddSkillsFromLink onAdded={load} />
             {error && <p className="settings-error" role="alert">{error}</p>}
+            {removeError && <p className="settings-error" role="alert">{removeError}</p>}
             {!skills && !error && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
             {skills && skills.length > 6 && (
                 <input
@@ -167,6 +161,19 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                         ))}
                     </ul>
                 </div>
+            )}
+            {removing && (
+                <ConfirmSheet
+                    title={t('settings.skills.removeTitle', { name: removing.name })}
+                    confirmLabel={t('settings.skills.remove')}
+                    cancelLabel={t('settings.skills.keep')}
+                    danger
+                    busy={removing.busy}
+                    onConfirm={() => void remove(removing.name)}
+                    onCancel={() => setRemoving(null)}
+                >
+                    <p>{t('settings.skills.removeBody', SKILLS_DIR)}</p>
+                </ConfirmSheet>
             )}
         </div>
     );
