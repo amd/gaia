@@ -704,6 +704,7 @@ int runMcp(const Cli& cli) {
         return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::UNATTENDED;
     });
     agent.setUnattendedRemedy("Run gaiacpp again with --dangerously-skip-permissions to allow it.");
+    agent.setNobodyToAsk([skip = cli.skipPermissions] { return skip; });
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
     gaia::McpStdioServer server(agent, "gaiacpp", GAIACPP_VERSION, std::cin, transport);
     server.run();
@@ -816,6 +817,7 @@ int runPrint(const Cli& cli) {
         return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::UNATTENDED;
     });
     agent.setUnattendedRemedy("Run gaiacpp again with --dangerously-skip-permissions to allow it.");
+    agent.setNobodyToAsk([skip = cli.skipPermissions] { return skip; });
     if (!settings.mcpConfig.empty()) {
         std::streambuf* saved = std::cout.rdbuf(std::cerr.rdbuf());
         try { connectMcp(agent, settings.mcpConfig); } catch (...) { std::cout.rdbuf(saved); throw; }
@@ -917,6 +919,7 @@ int runServe(const Cli& cli) {
     agent.setToolConfirmCallback([](const std::string&, const gaia::json& args) {
         return needsPerson(args) ? gaia::ToolConfirmResult::UNATTENDED : gaia::ToolConfirmResult::ALLOW_ONCE;
     });
+    agent.setNobodyToAsk([] { return true; });
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
 
     gaia::ServerOptions opts;
@@ -975,6 +978,7 @@ int runInteractive(const Cli& cli) {
             agent.releaseNpu();
             return ask(tool, args);
         });
+        agent.setNobodyToAsk([] { return !gaia::stdinIsAPerson(); });
     }
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
     gaia::ReplRunner repl(agent);

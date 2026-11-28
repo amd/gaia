@@ -45,9 +45,6 @@ std::string eventPathSegment(const std::string& eventId) {
 
 std::string utcNoZone(const Moment& m) { return isoformat(withOffset(m, 0), true).substr(0, 19); }
 
-// The transport's exception, named as httpx would name a failed connection.
-constexpr const char* kTransportError = "ConnectError";
-
 // ---- Google (google.py) ----
 
 const std::string kGoogleBase = "https://www.googleapis.com/calendar/v3";
@@ -237,14 +234,13 @@ private:
         const std::string where = method + " " + path;
         HttpCall call{method, kGoogleBase + path + mail::queryString(params), {}, body ? body->dump() : ""};
         HttpResponse response;
+        // Outside the try: a token or vault failure keeps its own cause, as in Python.
+        call.headers["Authorization"] = "Bearer " + token_();
+        if (body) call.headers["Content-Type"] = "application/json";
         try {
-            call.headers["Authorization"] = "Bearer " + token_();
-            if (body) call.headers["Content-Type"] = "application/json";
             response = transport_(call);
-        } catch (const CalendarError&) {
-            throw;
-        } catch (const std::exception&) {
-            throw CalendarError(std::string("Couldn't reach Google Calendar (") + kTransportError + ") on " + where +
+        } catch (const mail::TransportError& e) {
+            throw CalendarError("Couldn't reach Google Calendar (" + e.kind + ") on " + where +
                                 ". If this was a change, check the calendar before retrying: it may have gone "
                                 "through.");
         }
@@ -502,15 +498,14 @@ private:
         const std::string where = method + " " + path;
         HttpCall call{method, url + mail::queryString(params), {}, body ? body->dump() : ""};
         HttpResponse response;
+        // Outside the try: a token or vault failure keeps its own cause, as in Python.
+        call.headers["Authorization"] = "Bearer " + token_();
+        call.headers["Prefer"] = kPreferUtc;
+        if (body) call.headers["Content-Type"] = "application/json";
         try {
-            call.headers["Authorization"] = "Bearer " + token_();
-            call.headers["Prefer"] = kPreferUtc;
-            if (body) call.headers["Content-Type"] = "application/json";
             response = transport_(call);
-        } catch (const CalendarError&) {
-            throw;
-        } catch (const std::exception&) {
-            throw CalendarError(std::string("Couldn't reach Microsoft Graph (") + kTransportError + ") on " + where +
+        } catch (const mail::TransportError& e) {
+            throw CalendarError("Couldn't reach Microsoft Graph (" + e.kind + ") on " + where +
                                 ". If this was a change, check the calendar before retrying: it may have gone "
                                 "through.");
         }

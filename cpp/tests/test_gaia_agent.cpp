@@ -2515,21 +2515,25 @@ TEST(GaiaAgentTest, EveryToolIsOnTheListTheAppsWordInPlainLanguage) {
 }
 
 namespace {
-// The shipped calendar SKILL.md, in a skills folder of its own.
-struct CalendarSkillHome {
+// A clean install: GAIA_HOME and HOME are empty folders, so no skill is on disk.
+struct EmptyHomes {
     Workdir dir;
-    CalendarSkillHome() {
-        fs::create_directories(dir.path / "skills" / "calendar");
-        fs::copy_file(fs::path(GAIA_CPP_SOURCE_DIR) / ".." / "hub" / "skills" / "calendar" / "SKILL.md",
-                      dir.path / "skills" / "calendar" / "SKILL.md");
-        set(dir.path.u8string().c_str());
+    std::string savedHome;
+    EmptyHomes() {
+        const char* home = std::getenv("HOME");
+        savedHome = home ? home : "";
+        set("GAIA_HOME", (dir.path / "gaia").u8string());
+        set("HOME", dir.path.u8string());
     }
-    ~CalendarSkillHome() { set(""); }
-    static void set(const char* v) {
+    ~EmptyHomes() {
+        set("GAIA_HOME", "");
+        set("HOME", savedHome);
+    }
+    static void set(const char* name, const std::string& v) {
 #ifdef _WIN32
-        _putenv_s("GAIA_HOME", v);
+        _putenv_s(name, v.c_str());
 #else
-        if (*v) setenv("GAIA_HOME", v, 1); else unsetenv("GAIA_HOME");
+        if (!v.empty()) setenv(name, v.c_str(), 1); else unsetenv(name);
 #endif
     }
 };
@@ -2537,7 +2541,7 @@ struct CalendarSkillHome {
 
 TEST(GaiaAgentTest, TheCalendarToolsTurnOnWhenTheSkillLoads) {
     Workdir w;
-    CalendarSkillHome home;
+    EmptyHomes home;
     bench::MockLlmServer mock;
     GaiaAgent::Options o = optionsFor(w);
     o.skills = true;
@@ -2546,9 +2550,15 @@ TEST(GaiaAgentTest, TheCalendarToolsTurnOnWhenTheSkillLoads) {
     GaiaAgent agent(cfg, o);
     ASSERT_FALSE(cfg.compactFeatures());
     for (const auto& name : CalendarTools::toolNames()) EXPECT_FALSE(agent.toolRegistry().isEnabled(name)) << name;
+    json listed = agent.toolRegistry().executeTool("list_skills", json::object());
+    ASSERT_EQ(listed["status"], "success") << listed.dump();
+    bool calendarListed = false;
+    for (const auto& skill : listed["skills"]) calendarListed |= skill.value("name", "") == "calendar";
+    EXPECT_TRUE(calendarListed) << "built in, so a clean install lists it: " << listed.dump();
 
     json loaded = agent.toolRegistry().executeTool("load_skill", json{{"name", "calendar"}});
     ASSERT_EQ(loaded["status"], "success") << loaded.dump();
+    EXPECT_NE(loaded["instructions"].get<std::string>().find("calendar"), std::string::npos);
     EXPECT_EQ(loaded["tools_available"], json(CalendarTools::toolNames()));
     mock.pushResponse(answer("hi"));
     agent.processQuery("hello");

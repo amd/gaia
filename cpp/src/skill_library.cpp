@@ -34,6 +34,7 @@ namespace gaia {
 
 namespace {
 
+constexpr const char* kBuiltInRoot = "built-in";
 // Mirrors Python's skill_catalog.CATALOG_HEADER in intent.
 constexpr const char* kCatalogHeader =
     "==== SKILLS ====\n"
@@ -161,15 +162,31 @@ void SkillLibrary::refresh() {
             }
         }
     }
+    addBuiltIns();
+}
+
+void SkillLibrary::addBuiltIns() {
+    // One on disk wins, as an earlier root's does.
+    for (const auto& [name, skill] : builtIn_) {
+        auto it = skills_.find(name);
+        if (it != skills_.end()) {
+            shadowed_.push_back(name + " (" + std::string(kBuiltInRoot) + ") shadowed by " + it->second.root);
+            continue;
+        }
+        Skill meta = skill;
+        meta.body.clear();
+        skills_.emplace(name, std::move(meta));
+    }
 }
 
 std::string SkillLibrary::renderPrompt() const {
     std::ostringstream out;
     bool any = false;
     for (const auto& [name, skill] : skills_) {
-        const bool listed = std::any_of(roots_.begin(), roots_.end(), [&](const SkillRoot& r) {
-            return r.label == skill.root && r.listed;
-        });
+        const bool listed = skill.root == kBuiltInRoot ||
+                            std::any_of(roots_.begin(), roots_.end(), [&](const SkillRoot& r) {
+                                return r.label == skill.root && r.listed;
+                            });
         if (!listed) continue;
         if (!any) out << kCatalogHeader << "\n";
         any = true;
@@ -195,6 +212,7 @@ Skill SkillLibrary::loadFull(const std::string& name) const {
         throw SkillError("No installed skill named '" + name + "'. Installed: " +
                          (known.empty() ? "none" : known) + ".");
     }
+    if (it->second.root == kBuiltInRoot) return builtIn_.at(name);
     return parseSkillFile(it->second.directory(), it->second.root, it->second.readOnly);
 }
 
@@ -270,6 +288,16 @@ void SkillLibrary::registerTools(ToolRegistry& registry) {
 
 void SkillLibrary::setNativeTools(const std::string& name, NativeSkillTools tools) {
     if (!tools.activate) throw std::invalid_argument("setNativeTools needs activate for skill '" + name + "'");
+    if (!tools.builtIn.empty()) {
+        Skill skill = parseSkill(tools.builtIn, "built-in " + name + "/SKILL.md");
+        if (skill.name != name) {
+            throw std::invalid_argument("built-in SKILL.md is named '" + skill.name + "', not '" + name + "'");
+        }
+        skill.root = kBuiltInRoot;
+        skill.readOnly = true;
+        builtIn_[name] = std::move(skill);
+        refresh();
+    }
     native_[name] = std::move(tools);
 }
 

@@ -237,6 +237,7 @@ def case(
     now=WINTER,
     token_errors=None,
     eval_mailbox=False,
+    nobody_to_ask=False,
 ):
     CASES.append(
         {
@@ -247,6 +248,7 @@ def case(
             "grants": grants if grants is not None else GOOGLE_GRANT,
             "token_errors": token_errors or {},
             "eval_mailbox": eval_mailbox,
+            "nobody_to_ask": nobody_to_ask,
             "routes": list(routes),
             "steps": steps,
         }
@@ -742,6 +744,16 @@ case(
     ],
 )
 case(
+    "writes_with_nobody_to_ask",
+    [
+        call("create_calendar_event", **CREATE),
+        call("update_calendar_event", **TARGET, new_title="Budget sync"),
+        call("cancel_calendar_event", **TARGET),
+    ],
+    routes=[GET_G1],
+    nobody_to_ask=True,
+)
+case(
     "update_changed_while_asking",
     [call("update_calendar_event", **TARGET, new_title="Budget sync")],
     routes=[
@@ -1214,6 +1226,8 @@ def run(spec):
         with patch("gaia.agents.base.agent.AgentSDK"):
             agent = _CalendarAgent(silent_mode=True, skip_lemonade=True)
         agent.console = _Console()
+        if spec["nobody_to_ask"]:
+            agent.console.auto_approve_confirmations_enabled = lambda: True
         agent.config = SimpleNamespace(surface=spec["surface"] or None)
         module = sys.modules["gaia_skill_calendar_tools"]
         module.datetime = _frozen_datetime(spec["now"])

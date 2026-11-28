@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "gaia/idna.h"
 #include "mail_text.h"
 
 namespace gaia::approval {
@@ -204,86 +205,6 @@ bool isAscii(const std::string& s) {
     return true;
 }
 
-// RFC 3492 punycode of one label's code points.
-std::string punycode(const std::u32string& input) {
-    constexpr uint32_t base = 36, tmin = 1, tmax = 26, skew = 38, damp = 700;
-    auto digit = [](uint32_t d) { return static_cast<char>(d < 26 ? 'a' + d : '0' + (d - 26)); };
-    auto adapt = [&](uint32_t delta, uint32_t points, bool first) {
-        delta = first ? delta / damp : delta / 2;
-        delta += delta / points;
-        uint32_t k = 0;
-        while (delta > ((base - tmin) * tmax) / 2) {
-            delta /= base - tmin;
-            k += base;
-        }
-        return k + (base - tmin + 1) * delta / (delta + skew);
-    };
-    std::string out;
-    for (char32_t c : input) {
-        if (c < 0x80) out += static_cast<char>(c);
-    }
-    const uint32_t basic = static_cast<uint32_t>(out.size());
-    uint32_t handled = basic;
-    if (basic > 0) out += '-';
-    uint32_t n = 0x80, delta = 0, bias = 72;
-    while (handled < input.size()) {
-        uint32_t m = 0x10FFFF;
-        for (char32_t c : input) {
-            if (c >= n && c < m) m = c;
-        }
-        delta += (m - n) * (handled + 1);
-        n = m;
-        for (char32_t c : input) {
-            if (c < n) ++delta;
-            if (c != n) continue;
-            uint32_t q = delta;
-            for (uint32_t k = base;; k += base) {
-                const uint32_t t = k <= bias ? tmin : k >= bias + tmax ? tmax : k - bias;
-                if (q < t) break;
-                out += digit(t + (q - t) % (base - t));
-                q = (q - t) / (base - t);
-            }
-            out += digit(q);
-            bias = adapt(delta, handled + 1, handled == basic);
-            delta = 0;
-            ++handled;
-        }
-        ++delta;
-        ++n;
-    }
-    return out;
-}
-
-// idna.encode(domain, uts46=True), for the mapping every address needs: case
-// folded to lower case, ideographic full stops read as dots, each label that
-// isn't ASCII written as xn--<punycode>.
-std::string asciiDomain(const std::string& domain) {
-    std::u32string cps = mail::text::decode(mail::text::lower(domain));
-    for (char32_t& c : cps) {
-        if (c == 0x3002 || c == 0xFF0E || c == 0xFF61) c = U'.';
-    }
-    std::vector<std::u32string> labels(1);
-    for (char32_t c : cps) {
-        if (c == U'.') labels.emplace_back();
-        else labels.back().push_back(c);
-    }
-    std::string out;
-    for (size_t i = 0; i < labels.size(); ++i) {
-        const std::u32string& label = labels[i];
-        if (label.empty()) {
-            if (i + 1 == labels.size() && i > 0) break;  // a trailing dot names the root
-            throw std::invalid_argument("Empty Label");
-        }
-        bool ascii = true;
-        for (char32_t c : label) ascii = ascii && c < 0x80;
-        const std::string encoded = ascii ? mail::text::encode(label) : "xn--" + punycode(label);
-        if (encoded.size() > 63) throw std::invalid_argument("Label too long");
-        out += (i ? "." : "") + encoded;
-    }
-    if (labels.back().empty() && labels.size() > 1) out += ".";
-    return out;
-}
-
 }  // namespace
 
 std::string sendableAddress(const std::string& address, const std::string& field) {
@@ -318,8 +239,8 @@ std::string sendableAddress(const std::string& address, const std::string& field
     }
     if (isAscii(domain)) return address;
     try {
-        return local + "@" + asciiDomain(domain);
-    } catch (const std::invalid_argument& e) {
+        return local + "@" + idna::encodeUts46(mail::text::decode(domain));
+    } catch (const idna::IdnaError& e) {
         throw std::invalid_argument("`" + field + "` has a domain that can't be used: " + repr(domain) + " (" +
                                     e.what() + "). Check the spelling.");
     }

@@ -151,6 +151,29 @@ TEST(SkillLibraryTest, ASkillWithNativeToolsTurnsThemOnWhenItLoads) {
     EXPECT_NE(other["note"].get<std::string>().find("Python GAIA runtime"), std::string::npos);
 }
 
+TEST(SkillLibraryTest, ABuiltInSkillLoadsUnlessOneOnDiskHasItsName) {
+    TempTree t;
+    const std::string builtIn = "---\nname: planner\ndescription: Built in.\n---\n\nBuilt-in body.\n";
+    {
+        SkillLibrary lib({t.root("user", "user")});
+        ToolRegistry reg;
+        lib.registerTools(reg);
+        lib.setNativeTools("planner", {{}, nullptr, [] {}, builtIn});
+        EXPECT_NE(lib.renderPrompt().find("- planner: Built in."), std::string::npos);
+        json r = reg.executeTool("load_skill", json{{"name", "planner"}});
+        EXPECT_EQ(r["instructions"], "Built-in body.") << r.dump();
+    }
+    t.skill("user", "planner", "On disk.", "Disk body.");
+    SkillLibrary lib({t.root("user", "user")});
+    ToolRegistry reg;
+    lib.registerTools(reg);
+    lib.setNativeTools("planner", {{}, nullptr, [] {}, builtIn});
+    json r = reg.executeTool("load_skill", json{{"name", "planner"}});
+    EXPECT_NE(r["instructions"].get<std::string>().find("Disk body."), std::string::npos) << r.dump();
+    ASSERT_EQ(lib.shadowed().size(), 1u);
+    EXPECT_EQ(lib.shadowed()[0], "planner (built-in) shadowed by user");
+}
+
 TEST(SkillLibraryTest, LoaderSeamPutsBodyInPrompt) {
     TempTree t;
     t.skill("user", "coding", "Write and fix code.", "Always run the tests.");

@@ -24,10 +24,14 @@
 #ifdef _WIN32
 #   include <windows.h>
 #   include <direct.h>
+#   include <io.h>
+#   define GAIA_ISATTY _isatty
 #else
 #   include <climits>
 #   include <cstdlib>
 #   include <sys/stat.h>
+#   include <unistd.h>
+#   define GAIA_ISATTY isatty
 #endif
 
 #include <nlohmann/json.hpp>
@@ -137,9 +141,13 @@ bool isSafeShellArg(const std::string& arg) {
 // makeStdinConfirmCallback
 // ---------------------------------------------------------------------------
 
+bool stdinIsAPerson() { return GAIA_ISATTY(0) && GAIA_ISATTY(2); }
+
 ToolConfirmCallback makeStdinConfirmCallback() {
     return [](const std::string& toolName, const json& args) -> ToolConfirmResult {
         if (args.is_object() && args.value(approval::kNeedsPersonArg, false)) {
+            // Piped input is not a person: `printf 'cancel it\n1\n' | gaiacpp` must not approve.
+            if (!stdinIsAPerson()) return ToolConfirmResult::UNATTENDED;
             // Approved one call at a time, from what the call will really do.
             std::string body;
             if (CalendarTools::isWriteTool(toolName)) {

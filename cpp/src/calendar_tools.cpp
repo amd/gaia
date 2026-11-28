@@ -73,6 +73,12 @@ constexpr const char* kNotGatedMessage =
     "Not changed: this agent does not ask a person before a calendar change, and calendar changes always need "
     "one. Use the GAIA agent, which asks, and tell the user nothing on the calendar changed.";
 
+constexpr const char* kNobodyToAskMessage =
+    "Not changed: calendar changes need a person's approval, and this run approves tools automatically with "
+    "nobody to ask. Turn Full access off in this chat, or start the request from the GAIA terminal UI or Agent UI "
+    "without --dangerously-skip-permissions or GAIA_AUTO_APPROVE_TOOLS. Tell the user nothing on the calendar "
+    "changed.";
+
 constexpr const char* kUncheckedTargetMessage =
     "Nothing was changed: the event couldn't be re-read to show who this change notifies. List the calendar "
     "again with calendar/list_calendar_events, then retry with the event's id, title and start as listed.";
@@ -699,11 +705,12 @@ struct CalendarTools::State {
     }
 
     /// _CalendarPreflight.__call__: refuses before any prompt when the change
-    /// isn't what it says. Whether a person can be asked is the registry's call.
+    /// isn't what it says, or when nobody can be asked.
     std::optional<json> preflight(const std::string& tool, const json& args) {
         const ToolInfo* info = registry ? registry->findTool(kPrefix + tool) : nullptr;
         // Fail closed: an agent that would not ask must not run a change.
         if (!info || info->policy != ToolPolicy::CONFIRM) return refusal(tool, kNotGatedMessage);
+        if (registry->nobodyToAsk()) return refusal(tool, kNobodyToAskMessage);
         std::optional<json> refused = check(tool, args);
         if (!refused && tool != kCreate && !targets.count(callKey(args))) {
             return refusal(tool, kUncheckedTargetMessage);
@@ -833,7 +840,7 @@ struct CalendarTools::State {
                            {"end", mail::detail::field(args, "end")},
                            {"notify_attendees", mail::detail::field(args, "notify_attendees")},
                            {"calendar_account", mail::detail::field(args, "calendar_account")},
-                           {"description", args.value("description", json(""))}};
+                           {"description", mail::detail::field(args, "description")}};
         if (auto refused = checkCreate(checked)) return *refused;
         NewEvent event;
         try {
@@ -923,6 +930,13 @@ const std::vector<std::string>& CalendarTools::toolNames() {
     return names;
 }
 
+std::string CalendarTools::skillMarkdown() {
+    static const unsigned char bytes[] = {
+#include "skill_calendar.inc"
+    };
+    return std::string(reinterpret_cast<const char*>(bytes), sizeof bytes);
+}
+
 bool CalendarTools::isCalendarTool(const std::string& name) {
     const auto& names = toolNames();
     return std::find(names.begin(), names.end(), name) != names.end();
@@ -933,7 +947,7 @@ bool CalendarTools::isWriteTool(const std::string& name) {
            name == std::string(kPrefix) + kCancel;
 }
 
-std::string CalendarTools::approvalSummary(const json& args) {
+CalendarTools::ApprovalCard CalendarTools::approvalCard(const json& args) {
     auto plainOf = [&args](const char* key) { return plain(mail::detail::field(args, key)); };
     auto span = [&plainOf](const char* begins, const char* ends) {
         return plainOf(ends).empty() ? plainOf(begins) : plainOf(begins) + " to " + plainOf(ends);
@@ -951,18 +965,23 @@ std::string CalendarTools::approvalSummary(const json& args) {
         {"Description", plainOf("description")},
         {"New description", plainOf("new_description")},
     };
-    std::vector<std::string> lines;
+    ApprovalCard card;
     for (const auto& [label, value] : rows) {
-        if (!value.empty()) lines.push_back(label + ": " + value);
+        if (!value.empty()) card.rows.push_back(label + ": " + value);
     }
-    std::vector<std::string> names;
     const json& people = mail::detail::field(args, "notify_attendees");
     if (people.is_array()) {
-        for (const auto& p : people) names.push_back(stripMarkers(p.is_string() ? p.get<std::string>()
-                                                                                : mail::detail::pyStr(p)));
+        for (const auto& p : people) {
+            card.notifies.push_back(stripMarkers(p.is_string() ? p.get<std::string>() : mail::detail::pyStr(p)));
+        }
     }
-    lines.push_back("Notifies: " + (names.empty() ? std::string("nobody") : joined(names, ", ")));
-    return joined(lines, "\n");
+    return card;
+}
+
+std::string CalendarTools::approvalSummary(const json& args) {
+    ApprovalCard card = approvalCard(args);
+    card.rows.push_back("Notifies: " + (card.notifies.empty() ? std::string("nobody") : joined(card.notifies, ", ")));
+    return joined(card.rows, "\n");
 }
 
 void CalendarTools::registerAll(ToolRegistry& registry) {
@@ -998,6 +1017,7 @@ void CalendarTools::registerAll(ToolRegistry& registry) {
     auto people = [](const char* description) {
         ToolParameter p{"notify_attendees", ToolParamType::ARRAY, true, description};
         p.schema = {{"type", "array"}, {"items", {{"type", "string"}}}};
+        p.toolChecksType = true;
         return p;
     };
     const ToolParameter eventId{"event_id", ToolParamType::STRING, true,

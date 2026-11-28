@@ -48,6 +48,17 @@ public:
     using MailboxError::MailboxError;
 };
 
+/// What a Transport throws when no answer arrived. `kind` names the failure as
+/// httpx does (ConnectError, ReadTimeout, ...); `neverSent` means the request
+/// never left this PC, so a write certainly did not happen.
+class GAIA_API TransportError : public std::runtime_error {
+public:
+    TransportError(std::string kind, bool neverSent, const std::string& message)
+        : std::runtime_error(message), kind(std::move(kind)), neverSent(neverSent) {}
+    std::string kind;
+    bool neverSent;
+};
+
 // ---- HTTP ----
 
 struct HttpCall {

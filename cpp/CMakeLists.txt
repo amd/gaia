@@ -300,6 +300,7 @@ add_library(gaia_core
     src/connect_card.cpp
     src/email_tools.cpp
     src/person_approval.cpp
+    src/idna.cpp
     src/calendar_model.cpp
     src/calendar_backends.cpp
     src/calendar_tools.cpp
@@ -322,6 +323,23 @@ if(GAIA_BUILD_TUI)
     )
     target_compile_definitions(gaia_core PUBLIC GAIA_HAS_TUI=1)
 endif()
+
+# A skill whose tools gaiacpp ports ships its SKILL.md inside the program, so it
+# loads on a clean install. The bytes become generated/skill_<name>.inc.
+function(gaia_embed_skill name)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/../hub/skills/${name}/SKILL.md")
+    if(NOT EXISTS "${source}")
+        message(FATAL_ERROR "gaia_embed_skill: ${source} is missing; gaia_core builds from the full GAIA checkout")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}")
+    file(READ "${source}" hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${hex}")
+    string(REGEX REPLACE "(0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,)" "\\1\n" bytes "${bytes}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/skill_${name}.inc"
+         "// Generated from hub/skills/${name}/SKILL.md by CMake. Do not edit.\n${bytes}\n")
+endfunction()
+gaia_embed_skill(calendar)
+target_include_directories(gaia_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_library(gaia::gaia_core ALIAS gaia_core)
 target_compile_definitions(gaia_core PRIVATE GAIA_CORE_VERSION="${PROJECT_VERSION}")

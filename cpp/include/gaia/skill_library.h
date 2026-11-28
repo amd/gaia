@@ -11,6 +11,7 @@
 //   2. user           ~/.gaia/skills/<name>/   ($GAIA_HOME/skills when set)
 //   3. claude-project ./.claude/skills/<name>/ (loadable, not listed)
 //   4. claude-import  ~/.claude/skills/<name>/ (loadable, not listed)
+//   5. built-in       a SKILL.md compiled into the program (setNativeTools)
 //
 // Skills that ship their own tools (tools.py) need the Python runtime; here
 // they load as instructions only, and load_skill says so, unless this runtime
@@ -40,6 +41,9 @@ struct GAIA_API NativeSkillTools {
     std::function<std::string()> refusal;
     /// Turns the tools on.
     std::function<void()> activate;
+    /// The skill's SKILL.md, built into this program: listed and loadable when
+    /// no skill of that name is on disk. "" = the skill must be installed.
+    std::string builtIn;
 };
 
 struct GAIA_API SkillRoot {
@@ -81,7 +85,8 @@ public:
     void registerTools(ToolRegistry& registry);
 
     /// Tools for skill `name` that this runtime ports, so load_skill turns them
-    /// on instead of saying the skill's tools need Python.
+    /// on instead of saying the skill's tools need Python. A built-in SKILL.md
+    /// is parsed here and throws SkillValidationError if it doesn't parse.
     void setNativeTools(const std::string& name, NativeSkillTools tools);
 
     /// The user root (~/.gaia/skills, or $GAIA_HOME/skills).
@@ -129,6 +134,8 @@ private:
     std::vector<std::string> shadowed_;
 
     std::map<std::string, NativeSkillTools> native_;
+    std::map<std::string, Skill> builtIn_;  // parsed from NativeSkillTools::builtIn
+    void addBuiltIns();
 
     mutable std::mutex loadedMutex_;
     std::map<std::string, Skill> loaded_;  // full skills loaded via the seam

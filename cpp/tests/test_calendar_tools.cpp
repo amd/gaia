@@ -126,7 +126,7 @@ struct Router {
             if (!match) continue;
             if (route.contains("times") && used[i] >= route["times"].get<int>()) continue;
             ++used[i];
-            if (route["status"] == -1) throw std::runtime_error("refused");
+            if (route["status"] == -1) throw mail::TransportError("ConnectError", true, "refused");
             HttpResponse resp;
             resp.status = route["status"].get<int>();
             if (!route["json"].is_null()) resp.body = route["json"].dump();
@@ -326,18 +326,14 @@ TEST_F(CalendarToolsTest, EveryCaseMatchesThePythonSkill) {
         connect(c["connections"], c["grants"]);
         router = std::make_shared<Router>(c["routes"]);
         build();
+        const bool nobody = c["nobody_to_ask"].get<bool>();
+        registry.setNobodyToAsk([nobody] { return nobody; });
         for (size_t i = 0; i < c["steps"].size(); ++i) {
             const json& step = c["steps"][i];
             SCOPED_TRACE("step " + std::to_string(i) + " " + step["tool"].get<std::string>());
             const size_t asked = prompts.size();
             const size_t sent = router->seen.size();
             const json got = callTool(step["tool"], step["args"]);
-            if (name == "update_refusals" && i == 4) {
-                // The registry checks argument types before any tool runs; Python's tool refuses it itself.
-                EXPECT_EQ(got["status"], "error");
-                EXPECT_NE(got["error"].get<std::string>().find("Invalid arguments"), std::string::npos) << got.dump(1);
-                continue;
-            }
             const json& want = c["expected"][i];
             EXPECT_TRUE(got == want) << "got:  " << got.dump(1) << "\nwant: " << want.dump(1);
 
@@ -360,7 +356,7 @@ TEST_F(CalendarToolsTest, EveryCaseMatchesThePythonSkill) {
             ++compared;
         }
     }
-    EXPECT_GE(compared, 90u);
+    EXPECT_GE(compared, 93u);
 }
 
 TEST_F(CalendarToolsTest, TimesParseAsThePythonSkillParsesThem) {

@@ -639,6 +639,7 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
 NativeSkillTools GaiaAgent::calendarSkillTools() {
     NativeSkillTools set;
     set.tools = CalendarTools::toolNames();
+    set.builtIn = CalendarTools::skillMarkdown();
     set.refusal = [this] {
         if (!config().compactFeatures()) return std::string();
         std::vector<std::string> names = CalendarTools::toolNames();

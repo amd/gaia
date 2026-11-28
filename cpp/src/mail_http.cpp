@@ -362,6 +362,24 @@ std::string describe(httplib::Error err, const std::string& host) {
     }
 }
 
+const char* kindOf(httplib::Error err) {
+    switch (err) {
+        case httplib::Error::ConnectionTimeout: return "ConnectTimeout";
+        case httplib::Error::Connection:
+        case httplib::Error::SSLConnection:
+        case httplib::Error::SSLLoadingCerts:
+        case httplib::Error::SSLServerVerification: return "ConnectError";
+        case httplib::Error::Read: return "ReadError";
+        case httplib::Error::Write: return "WriteError";
+        default: return "TransportError";
+    }
+}
+
+bool neverSent(httplib::Error err) {
+    const std::string kind = kindOf(err);
+    return kind == "ConnectError" || kind == "ConnectTimeout";
+}
+
 struct Idle {
     std::unique_ptr<httplib::SSLClient> client;
     std::chrono::steady_clock::time_point since;
@@ -423,7 +441,10 @@ Transport httpsTransport() {
 
         auto cli = pool->take(t);
         httplib::Result result = cli->send(req);
-        if (!result) throw std::runtime_error(describe(result.error(), t.host));
+        if (!result) {
+            const httplib::Error err = result.error();
+            throw TransportError(kindOf(err), neverSent(err), describe(err, t.host));
+        }
 
         HttpResponse response;
         response.status = result->status;

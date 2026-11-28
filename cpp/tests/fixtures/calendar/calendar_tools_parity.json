@@ -413,6 +413,7 @@
    "grants": {},
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -474,6 +475,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -541,6 +543,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -578,6 +581,7 @@
    "grants": {},
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -623,6 +627,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -671,6 +676,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -708,6 +714,7 @@
    "grants": {},
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -753,6 +760,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -801,6 +809,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -838,6 +847,7 @@
    "grants": {},
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -883,6 +893,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -931,6 +942,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -980,6 +992,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -1025,6 +1038,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -1070,6 +1084,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -1116,6 +1131,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -1163,6 +1179,7 @@
     "google": "ConnectionRevokedError"
    },
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -1228,6 +1245,7 @@
     "google": "ConnectionRevokedError"
    },
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -1275,6 +1293,7 @@
    },
    "token_errors": {},
    "eval_mailbox": true,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -1322,6 +1341,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -2019,6 +2039,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -2276,6 +2297,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [],
    "steps": [
     {
@@ -2400,6 +2422,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -2715,6 +2738,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -2858,6 +2882,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -3365,6 +3390,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -3461,6 +3487,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "POST",
@@ -3607,6 +3634,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "POST",
@@ -3722,6 +3750,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "POST",
@@ -4119,6 +4148,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "POST",
@@ -4266,6 +4296,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "POST",
@@ -4424,6 +4455,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "POST",
@@ -4524,6 +4556,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "POST",
@@ -4619,6 +4652,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -5027,6 +5061,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -5597,6 +5632,133 @@
    ]
   },
   {
+   "name": "writes_with_nobody_to_ask",
+   "surface": "cli",
+   "now": "2030-01-10T12:00:00Z",
+   "connections": {
+    "google": {
+     "scopes": [
+      "https://www.googleapis.com/auth/calendar.events"
+     ],
+     "account_email": "me@example.com"
+    }
+   },
+   "grants": {
+    "google": [
+     "https://www.googleapis.com/auth/calendar.events"
+    ]
+   },
+   "token_errors": {},
+   "eval_mailbox": false,
+   "nobody_to_ask": true,
+   "routes": [
+    {
+     "method": "GET",
+     "path": "/calendar/v3/calendars/primary/events/g1",
+     "status": 200,
+     "json": {
+      "id": "g1",
+      "summary": "Budget review",
+      "start": {
+       "dateTime": "2030-01-10T09:00:00-05:00"
+      },
+      "end": {
+       "dateTime": "2030-01-10T10:00:00-05:00"
+      },
+      "organizer": {
+       "self": true
+      },
+      "htmlLink": "https://calendar.google.com/event?eid=g1",
+      "attendees": [
+       {
+        "email": "me@example.com",
+        "self": true
+       },
+       {
+        "email": "dana@example.com"
+       }
+      ],
+      "location": "Room 4"
+     }
+    }
+   ],
+   "steps": [
+    {
+     "tool": "calendar/create_calendar_event",
+     "args": {
+      "title": "Planning",
+      "start": "2030-01-14T10:00:00-05:00",
+      "end": "2030-01-14T11:00:00-05:00",
+      "notify_attendees": [
+       "dana@example.com"
+      ],
+      "calendar_account": "me@example.com"
+     }
+    },
+    {
+     "tool": "calendar/update_calendar_event",
+     "args": {
+      "event_id": "g1",
+      "expected_title": "Budget review",
+      "expected_start": "2030-01-10T09:00:00-05:00",
+      "notify_attendees": [
+       "dana@example.com"
+      ],
+      "new_title": "Budget sync"
+     }
+    },
+    {
+     "tool": "calendar/cancel_calendar_event",
+     "args": {
+      "event_id": "g1",
+      "expected_title": "Budget review",
+      "expected_start": "2030-01-10T09:00:00-05:00",
+      "notify_attendees": [
+       "dana@example.com"
+      ]
+     }
+    }
+   ],
+   "expected": [
+    {
+     "status": "error",
+     "success": false,
+     "action": "create_calendar_event",
+     "error": "Not changed: calendar changes need a person's approval, and this run approves tools automatically with nobody to ask. Turn Full access off in this chat, or start the request from the GAIA terminal UI or Agent UI without --dangerously-skip-permissions or GAIA_AUTO_APPROVE_TOOLS. Tell the user nothing on the calendar changed.",
+     "executed": false
+    },
+    {
+     "status": "error",
+     "success": false,
+     "action": "update_calendar_event",
+     "error": "Not changed: calendar changes need a person's approval, and this run approves tools automatically with nobody to ask. Turn Full access off in this chat, or start the request from the GAIA terminal UI or Agent UI without --dangerously-skip-permissions or GAIA_AUTO_APPROVE_TOOLS. Tell the user nothing on the calendar changed.",
+     "executed": false
+    },
+    {
+     "status": "error",
+     "success": false,
+     "action": "cancel_calendar_event",
+     "error": "Not changed: calendar changes need a person's approval, and this run approves tools automatically with nobody to ask. Turn Full access off in this chat, or start the request from the GAIA terminal UI or Agent UI without --dangerously-skip-permissions or GAIA_AUTO_APPROVE_TOOLS. Tell the user nothing on the calendar changed.",
+     "executed": false
+    }
+   ],
+   "prompts": [
+    null,
+    null,
+    null
+   ],
+   "summaries": [
+    null,
+    null,
+    null
+   ],
+   "requests": [
+    [],
+    [],
+    []
+   ]
+  },
+  {
    "name": "update_changed_while_asking",
    "surface": "cli",
    "now": "2030-01-10T12:00:00Z",
@@ -5615,6 +5777,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -5769,6 +5932,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -5895,6 +6059,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -6064,6 +6229,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -6243,6 +6409,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -6537,6 +6704,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -6754,6 +6922,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",
@@ -7593,6 +7762,7 @@
    },
    "token_errors": {},
    "eval_mailbox": false,
+   "nobody_to_ask": false,
    "routes": [
     {
      "method": "GET",

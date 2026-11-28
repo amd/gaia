@@ -23,34 +23,39 @@ namespace gaia::calendar {
 
 // ---- errors (errors.py) ----
 
-class CalendarError : public std::runtime_error {
+class CalendarError : public PythonNamedError {
 public:
     explicit CalendarError(const std::string& message, std::vector<std::string> connect = {},
                            std::vector<std::string> reconnect = {}, bool setup = false)
-        : std::runtime_error(message),
+        : PythonNamedError(message),
           connect(std::move(connect)),
           reconnect(std::move(reconnect)),
           setup(setup) {}
     std::vector<std::string> connect;
     std::vector<std::string> reconnect;
     bool setup = false;
+    const char* pythonName() const override { return "CalendarError"; }
 };
 
 class CalendarAuthError : public CalendarError {
 public:
     using CalendarError::CalendarError;
+    const char* pythonName() const override { return "CalendarAuthError"; }
 };
 class CalendarEventGone : public CalendarError {
 public:
     using CalendarError::CalendarError;
+    const char* pythonName() const override { return "CalendarEventGone"; }
 };
 class CalendarEventNotFound : public CalendarError {
 public:
     using CalendarError::CalendarError;
+    const char* pythonName() const override { return "CalendarEventNotFound"; }
 };
 class CalendarWriteUnreadable : public CalendarError {
 public:
     using CalendarError::CalendarError;
+    const char* pythonName() const override { return "CalendarWriteUnreadable"; }
 };
 
 // ---- time ----

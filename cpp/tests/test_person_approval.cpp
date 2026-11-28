@@ -5,10 +5,16 @@
 
 #include <gtest/gtest.h>
 
+#include <fstream>
 #include <stdexcept>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include <gaia/person_approval.h>
+
+#include <gaia/idna.h>
+#include "../src/mail_text.h"
 
 using namespace gaia::approval;
 
@@ -60,4 +66,41 @@ TEST(PersonApproval, ShowsHiddenCharactersAsCodes) {
     EXPECT_STREQ(kHiddenNote,
                  "This text holds characters that don't show. Those that hide or reorder text appear as [U+XXXX]; "
                  "ideograph variant marks are kept as written.");
+}
+
+namespace {
+
+nlohmann::json addressParity() {
+    std::ifstream in(std::string(GAIA_TEST_FIXTURES_DIR) + "/calendar/address_parity.json");
+    EXPECT_TRUE(in) << "cpp/tests/fixtures/calendar/address_parity.json";
+    return nlohmann::json::parse(in);
+}
+
+}  // namespace
+
+TEST(PersonApproval, EveryAddressIsSentOrRefusedAsPythonDoes) {
+    const auto parity = addressParity();
+    ASSERT_GT(parity["addresses"].size(), 3000u);
+    size_t mismatches = 0;
+    for (const auto& row : parity["addresses"]) {
+        const std::string address = row["address"];
+        std::string got;
+        try {
+            got = "sent " + sendableAddress(address, "notify_attendees");
+        } catch (const std::invalid_argument& e) {
+            got = std::string("error ") + e.what();
+        }
+        const std::string want =
+            row.contains("sent") ? "sent " + row["sent"].get<std::string>() : "error " + row["error"].get<std::string>();
+        if (got != want && ++mismatches <= 20) ADD_FAILURE() << address << "\n  got:  " << got << "\n  want: " << want;
+    }
+    EXPECT_EQ(mismatches, 0u);
+}
+
+TEST(PersonApproval, NormalizesToFormCAsPythonDoes) {
+    const auto parity = addressParity();
+    for (const auto& row : parity["nfc"]) {
+        const std::string in = row[0], want = row[1];
+        EXPECT_EQ(gaia::mail::text::encode(gaia::idna::nfc(gaia::mail::text::decode(in))), want) << in;
+    }
 }

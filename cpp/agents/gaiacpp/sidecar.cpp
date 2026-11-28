@@ -570,6 +570,10 @@ private:
         agent->setAllowedToolsStore(s.grants);
         agent->setToolConfirmCallback(
             [this, raw](const std::string& tool, const json& args) { return confirm(*raw, tool, args); });
+        agent->setNobodyToAsk([raw] {
+            std::lock_guard<std::mutex> lock(raw->currentMu);
+            return raw->current && raw->current->skipPermissions;
+        });
         // Stop holds even when it lands before the run resets its own flag.
         agent->setCancelCheck([raw] {
             std::lock_guard<std::mutex> lock(raw->currentMu);

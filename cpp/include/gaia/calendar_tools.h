@@ -42,6 +42,8 @@ public:
 
     /// calendar/<tool> for each tool, in the skill's order.
     static const std::vector<std::string>& toolNames();
+    /// hub/skills/calendar/SKILL.md, as built into this program.
+    static std::string skillMarkdown();
     /// True for any of the five.
     static bool isCalendarTool(const std::string& name);
     /// True for the three tools that change the calendar.
@@ -50,6 +52,12 @@ public:
     /// What a calendar change's approval card says, from the arguments it shows:
     /// sse_translation.render_calendar_summary.
     static std::string approvalSummary(const json& shownArgs);
+    /// The same card split up: its rows before "Notifies:", and who it notifies.
+    struct ApprovalCard {
+        std::vector<std::string> rows;
+        std::vector<std::string> notifies;
+    };
+    static ApprovalCard approvalCard(const json& shownArgs);
 
     /// Replace the clock (microseconds since 1970, UTC). Empty restores it.
     static void setClockForTesting(std::function<int64_t()> utcMicros);
