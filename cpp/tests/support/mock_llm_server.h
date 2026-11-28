@@ -273,11 +273,14 @@ private:
         });
 
         // Echoes the request body back; reports the received Content-Type.
-        server_->Post("/test/echo", [](const httplib::Request& req, httplib::Response& res) {
+        auto echo = [](const httplib::Request& req, httplib::Response& res) {
             res.set_header("X-Gaia-Content-Type", req.get_header_value("Content-Type"));
+            res.set_header("X-Gaia-Has-Content-Type", req.has_header("Content-Type") ? "yes" : "no");
             res.set_header("X-Gaia-Test-Seen", req.get_header_value("X-Gaia-Test"));
             res.set_content(req.body, "text/plain");
-        });
+        };
+        server_->Post("/test/echo", echo);
+        server_->Put("/test/echo", echo);
 
         // Reports the client's source port, which names the connection used.
         auto peer = [](const httplib::Request& req, httplib::Response& res) {

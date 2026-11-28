@@ -18,6 +18,7 @@ on:
       - '.github/scripts/**'
       - 'cpp/**'
       - 'hub/skills/calendar/SKILL.md'  # built into gaiacpp
+      - 'hub/skills/send-email/SKILL.md'  # built into gaiacpp
       # test_skill.cpp discovers these corpora from disk, so adding a fixture
       # can break the C++ build. Without them here the breaking PR never runs
       # this workflow and main goes red on the next unrelated push (#2693).
@@ -37,6 +38,7 @@ on:
       - '.github/scripts/**'
       - 'cpp/**'
       - 'hub/skills/calendar/SKILL.md'  # built into gaiacpp
+      - 'hub/skills/send-email/SKILL.md'  # built into gaiacpp
       - 'tests/fixtures/skills/**'
       - 'tests/fixtures/*_skills/**'
       - '.github/workflows/build_cpp.yml'

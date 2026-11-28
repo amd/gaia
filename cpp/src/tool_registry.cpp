@@ -245,9 +245,15 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
 
     // 2. Argument validation (runs before confirmation so user sees clean args)
     json effectiveArgs = args;
+    // What an approval card shows is set by GAIA, never by the model's own arguments.
+    if (effectiveArgs.is_object()) {
+        for (const char* key : {approval::kExactTextArg, approval::kNeedsPersonArg, approval::kRiskNoteArg}) {
+            effectiveArgs.erase(key);
+        }
+    }
     if (tool->validateArgs.has_value()) {
         try {
-            effectiveArgs = (*tool->validateArgs)(resolvedName, args);
+            effectiveArgs = (*tool->validateArgs)(resolvedName, effectiveArgs);
         } catch (const std::invalid_argument& e) {
             return json{{"status", "error"}, {"error", std::string("Argument validation failed: ") + e.what()}};
         }

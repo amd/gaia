@@ -580,8 +580,9 @@ HttpResponse HttpClient::Impl::doSend(const char* method, const std::string& pat
     const int readSec    = readTimeout(timeoutSec);
     const int connectSec = connectTimeout(connectTimeoutSec);
     const std::string verb = method;
-    const bool bodiless = verb == "DELETE" && body.empty();
-    std::string contentType = "application/json";
+    // No body, no Content-Type: Graph's send and createReply take an empty POST, as httpx sends it.
+    const bool bodiless = body.empty();
+    std::string contentType = bodiless ? "" : "application/json";
     const httplib::Headers hdrs = mergeHeaders(headers, t.url, bodiless ? nullptr : &contentType);
     logRequest(method, t);
 

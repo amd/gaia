@@ -222,6 +222,17 @@ TEST(HttpClientTest, PostSendsBodyAndDefaultsToJsonContentType) {
     EXPECT_EQ(res.header("X-Gaia-Content-Type"), "application/json");
 }
 
+TEST(HttpClientTest, AnEmptyBodyCarriesNoContentType) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+
+    EXPECT_EQ(http.post("/test/echo", "").header("X-Gaia-Has-Content-Type"), "no");
+    EXPECT_EQ(http.put("/test/echo", "").header("X-Gaia-Has-Content-Type"), "no");
+    HttpResponse put = http.put("/test/echo", R"({"k":"v"})");
+    EXPECT_EQ(put.body, R"({"k":"v"})");
+    EXPECT_EQ(put.header("X-Gaia-Content-Type"), "application/json");
+}
+
 TEST(HttpClientTest, PostHonoursExplicitContentTypeAndHeaders) {
     bench::MockLlmServer server;
     HttpClient http(server.baseUrl());
