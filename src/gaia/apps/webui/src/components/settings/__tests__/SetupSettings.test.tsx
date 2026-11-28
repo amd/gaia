@@ -49,9 +49,23 @@ describe('SetupSettings', () => {
         useModelStore.setState({ active: { ...CLOUD, restore: { status: 'failed', message, model_id: CLOUD.model! } } });
         render(<SetupSettings />);
         expect(await screen.findByText("Your chat model can't be used yet")).toBeTruthy();
-        expect(screen.getByText(message)).toBeTruthy();
+        expect(screen.getByText(message, { exact: false })).toBeTruthy();
         expect(screen.queryByText('Ready')).toBeNull();
         expect(screen.queryByText(/^Running /)).toBeNull();
+    });
+
+    it('words the restore failure in the chosen language, like the banner', async () => {
+        const message = "Couldn't restore your last model, deepseek-v4p1-flash: it has no working key. Pick a model to continue.";
+        const restore = { status: 'failed' as const, message, model: 'deepseek-v4p1-flash', reason: 'it has no working key', reason_code: 'no_key', model_id: CLOUD.model! };
+        useModelStore.setState({ active: { ...CLOUD, restore } });
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<SetupSettings />);
+            expect(await screen.findByText(/تعذّرت استعادة آخر نموذج استخدمته/)).toBeTruthy();
+            expect(screen.getByText(/لا يوجد له مفتاح صالح/)).toBeTruthy();
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
     });
 
     it('keeps saying Ready when the failed restore is about a different model than the one in use', async () => {

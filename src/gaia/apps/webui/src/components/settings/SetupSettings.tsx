@@ -10,6 +10,7 @@ import { displayModelName, useModelStore } from '../../stores/modelStore';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { formatSize, ltrIn, totalMemory } from '../setup/format';
 import { isServerDown } from './ErrorNotice';
+import { restoreFailedText } from '../../utils/restoreNotice';
 import type { GpuMemoryStatus, PreflightReport, ProviderId, SetupPlan } from '../../types';
 
 interface Row {
@@ -34,7 +35,10 @@ export function SetupSettings() {
     const serverDown = useChatStore((s) => s.systemStatus?.lemonade_running === false);
     // The failed restore the main window's banner reports, when it is about the model in use.
     const restoreFailed = active?.restore?.status === 'failed' && !!active.model && active.restore.model_id === active.model;
-    const chatFailure = restoreFailed ? active?.restore?.message ?? null : null;
+    const restore = active?.restore;
+    const chatFailure = restoreFailed && restore?.message
+        ? restoreFailedText(t, { message: restore.message, model: restore.model, reason: restore.reason, reasonCode: restore.reason_code })
+        : null;
     const chatUnusable = !serverDown && restoreFailed;
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
