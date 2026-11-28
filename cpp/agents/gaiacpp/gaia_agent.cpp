@@ -958,47 +958,313 @@ std::vector<std::string> requestPaths(const std::string& request) {
     return out;
 }
 
+const std::string kFileExts =
+    "(?:md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml)";
+
+std::string asciiLower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+std::string normalizeQuotes(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text.compare(i, 3, "\xE2\x80\x98") == 0 || text.compare(i, 3, "\xE2\x80\x99") == 0) {
+            out += '\'';
+            i += 2;
+        } else if (text.compare(i, 3, "\xE2\x80\x9C") == 0 || text.compare(i, 3, "\xE2\x80\x9D") == 0) {
+            out += '"';
+            i += 2;
+        } else {
+            out += text[i];
+        }
+    }
+    return out;
+}
+
+bool hasKnownFileExt(const std::string& path) {
+    static const std::regex ext(R"(\.)" + kFileExts + R"($)", std::regex::icase);
+    std::smatch m;
+    if (!std::regex_search(path, m, ext)) return false;
+    const size_t dot = static_cast<size_t>(m.position(0));
+    if (dot == 0) return false;
+    // The stem must contain at least one visible filename character, not only separators.
+    for (size_t i = 0; i < dot; ++i) {
+        const unsigned char c = static_cast<unsigned char>(path[i]);
+        if (c > ' ' && c != '/' && c != '\\' && c != '.') return true;
+    }
+    return false;
+}
+
+bool validDelimitedPath(const std::string& inner) {
+    if (inner.empty() || inner.size() > 220) return false;
+    if (std::isspace(static_cast<unsigned char>(inner.front())) ||
+        std::isspace(static_cast<unsigned char>(inner.back()))) {
+        return false;
+    }
+    for (const char c : inner) {
+        if (c == '\n' || c == '\r' || c == '<' || c == '>' || c == '|' || c == '*') return false;
+    }
+    if (inner.find("; ") != std::string::npos) return false;
+    return hasKnownFileExt(inner);
+}
+
+bool opensQuotedPath(const std::string& s, size_t at) {
+    if (at == 0) return true;
+    const unsigned char prev = static_cast<unsigned char>(s[at - 1]);
+    return std::isspace(prev) || prev == '(' || prev == '[' || prev == ':' || prev == '=' || prev == ',';
+}
+
+bool isThirdPartyAgentAfterPassive(const std::string& text, size_t afterVerb) {
+    static const std::regex byThirdParty(
+        R"(\s+by\s+(?!(?:me|us|gaia|(?:the\s+)?(?:agent|assistant|script|command|tool|code|program|python|pipeline|build|system))\b)[A-Za-z])",
+        std::regex::icase);
+    return std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(afterVerb), text.end(), byThirdParty,
+                             std::regex_constants::match_continuous);
+}
+
+bool isThirdPartyPronoun(const std::string& w) {
+    static const std::set<std::string> pronouns = {
+        "he", "she", "they", "who", "someone", "somebody", "anyone", "anybody", "everyone", "everybody", "nobody"};
+    return pronouns.count(w) > 0;
+}
+
+std::string stripWordEdge(std::string w) {
+    auto isEdge = [](unsigned char c) { return !std::isalnum(c) && c != '_' && c != '\''; };
+    while (!w.empty() && isEdge(static_cast<unsigned char>(w.front()))) w.erase(w.begin());
+    while (!w.empty() && isEdge(static_cast<unsigned char>(w.back()))) w.pop_back();
+    return asciiLower(std::move(w));
+}
+
+std::vector<std::string> splitWords(const std::string& s) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+        const size_t start = i;
+        while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+        if (i > start) {
+            std::string w = stripWordEdge(s.substr(start, i - start));
+            if (!w.empty()) out.push_back(std::move(w));
+        }
+    }
+    return out;
+}
+
+// "In 1920, the explorer wrote journal.txt": a third-person actor is prose, not a claim that GAIA saved a file.
+bool isThirdPartyWrite(const std::string& text, size_t verb, size_t verbEnd) {
+    constexpr size_t kReach = 200;
+    size_t sentStart = verb;
+    while (sentStart > 0 && verb - sentStart < kReach && !endsSentence(text, sentStart - 1)) --sentStart;
+
+    size_t clauseStart = verb;
+    while (clauseStart > sentStart) {
+        const char c = text[clauseStart - 1];
+        if (c == ',' || c == ';' || c == ':' || c == '(' || c == '[') break;
+        --clauseStart;
+    }
+
+    const std::string verbWord = asciiLower(text.substr(verb, verbEnd - verb));
+    std::vector<std::string> words = splitWords(text.substr(clauseStart, verb - clauseStart));
+
+    static const std::set<std::string> adverbs = {
+        "now", "already", "just", "also", "then", "successfully", "finally", "actually", "still", "automatically",
+        "recently", "quickly", "quietly", "secretly", "carefully"};
+    while (!words.empty() && adverbs.count(words.back())) words.pop_back();
+
+    static const std::set<std::string> passiveAux = {"was", "were", "is", "are", "been", "be", "got", "gets"};
+    if (!words.empty() && passiveAux.count(words.back())) {
+        return isThirdPartyAgentAfterPassive(text, verbEnd);
+    }
+
+    static const std::set<std::string> perfAux = {"have", "has", "had"};
+    while (!words.empty() && (perfAux.count(words.back()) || adverbs.count(words.back()))) words.pop_back();
+
+    if (words.empty()) return false;
+
+    const std::string& last = words.back();
+    if (last == "i" || last == "we" || last == "i've" || last == "we've" || last == "i'd" || last == "we'd") {
+        return false;
+    }
+    if (isThirdPartyPronoun(last)) return true;
+
+    // Reduced passive ("File created: x.xlsx", "Report saved to out.md") names the artifact, not a third-party actor.
+    if (verbWord != "wrote") {
+        static const std::regex reducedPassive(R"(^\s*(?::|(?:to|in|into|at|as)\b))", std::regex::icase);
+        if (std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(verbEnd), text.end(), reducedPassive,
+                              std::regex_constants::match_continuous)) {
+            return false;
+        }
+    }
+
+    static const std::set<std::string> conjunctions = {"and", "but", "or", "so", "then"};
+    if (conjunctions.count(last)) {
+        const std::vector<std::string> prior = splitWords(text.substr(sentStart, clauseStart - sentStart));
+        if (!prior.empty() && isThirdPartyPronoun(prior.front())) return true;
+        return false;
+    }
+
+    static const std::set<std::string> agentSubjects = {
+        "gaia",     "agent",     "assistant", "script",   "command",   "tool",     "code",      "program",
+        "python",   "node",      "bash",      "shell",    "compiler",  "build",    "step",      "job",
+        "process",  "run",       "pipeline",  "converter","generator", "exporter", "parser",    "renderer",
+        "helper",   "worker",    "handler",   "system",   "model",     "it",       "this",      "that",
+        "file_write", "bash_execute", "file", "files",    "report",    "summary",  "output",    "result",
+        "results",  "table",     "chart",     "document", "draft",     "notes",    "data",      "copy",
+        "backup",   "log",       "nothing",   "none"};
+    return agentSubjects.count(last) == 0;
+}
+
+struct ExtractedPath {
+    size_t start = std::string::npos;
+    size_t end = 0;
+    std::string path;
+};
+
+ExtractedPath findNextClaimedPath(const std::string& prose, size_t from) {
+    constexpr size_t kWindow = 180;
+    const size_t limit = std::min(prose.size(), from + kWindow);
+    size_t stop = from;
+    while (stop < limit && prose[stop] != '\n') ++stop;
+    const std::string window = prose.substr(from, stop - from);
+
+    ExtractedPath best;
+
+    // 1. Delimited filenames (`...`, "...", '...', **...**) preserve spaces and special characters.
+    auto considerDelimited = [&](size_t openPos, const std::string& closeDelim, size_t innerStart) {
+        if (openPos >= best.start) return;
+        const size_t closePos = window.find(closeDelim, innerStart);
+        if (closePos == std::string::npos) return;
+        const std::string inner = window.substr(innerStart, closePos - innerStart);
+        if (!validDelimitedPath(inner)) return;
+        best = {openPos, closePos + closeDelim.size(), inner};
+    };
+
+    for (size_t i = 0; i < window.size() && i < best.start; ++i) {
+        const char c = window[i];
+        if (c == '`') {
+            considerDelimited(i, "`", i + 1);
+        } else if (c == '"' && opensQuotedPath(window, i)) {
+            considerDelimited(i, "\"", i + 1);
+        } else if (c == '\'' && opensQuotedPath(window, i)) {
+            considerDelimited(i, "'", i + 1);
+        } else if (c == '*' && i + 1 < window.size() && window[i + 1] == '*' && opensQuotedPath(window, i)) {
+            considerDelimited(i, "**", i + 2);
+        }
+    }
+
+    // 2. Bare/unquoted filename or path token.
+    static const std::regex bare(
+        R"(([A-Za-z]:[\\/][^\s`'"*<>|]+?|(?:[A-Za-z0-9_~./\\$&-][A-Za-z0-9_~./\\$&+@#%()-]*)?[A-Za-z0-9_~)&-])\.)" +
+            kFileExts + R"(\b)",
+        std::regex::icase);
+    std::smatch m;
+    if (std::regex_search(window, m, bare)) {
+        const size_t start = static_cast<size_t>(m.position(0));
+        if (start < best.start) {
+            std::string p = m[0].str();
+            while (!p.empty() && (p.back() == '.' || p.back() == ',')) p.pop_back();
+            best = {start, start + static_cast<size_t>(m.length(0)), std::move(p)};
+        }
+    }
+
+    return best;
+}
+
+std::optional<std::string> extractPrecedingPath(const std::string& prose, size_t beforePos) {
+    size_t end = beforePos;
+    while (end > 0 && std::isspace(static_cast<unsigned char>(prose[end - 1]))) --end;
+    if (end == 0) return std::nullopt;
+
+    const size_t minStart = end > 220 ? end - 220 : 0;
+    auto scanDelimited = [&](const std::string& delim, bool checkOpen) -> std::optional<std::string> {
+        if (end < delim.size() || prose.compare(end - delim.size(), delim.size(), delim) != 0) return std::nullopt;
+        const size_t innerEnd = end - delim.size();
+        for (size_t i = innerEnd; i-- > minStart;) {
+            if (prose[i] == '\n') break;
+            if (i + delim.size() <= innerEnd && prose.compare(i, delim.size(), delim) == 0) {
+                if (checkOpen && !opensQuotedPath(prose, i)) continue;
+                const std::string inner = prose.substr(i + delim.size(), innerEnd - (i + delim.size()));
+                if (validDelimitedPath(inner)) return inner;
+                return std::nullopt;
+            }
+        }
+        return std::nullopt;
+    };
+
+    if (auto p = scanDelimited("`", false)) return p;
+    if (auto p = scanDelimited("\"", true)) return p;
+    if (auto p = scanDelimited("'", true)) return p;
+    if (auto p = scanDelimited("**", true)) return p;
+
+    // Unquoted token immediately before passive verb (also handling parenthesized `(b.txt)`).
+    if (prose[end - 1] == ')') {
+        size_t open = end - 1;
+        while (open > minStart && prose[open] != '(' && prose[open] != '\n') --open;
+        if (prose[open] == '(' && open + 1 < end - 1) {
+            const std::string inside = prose.substr(open + 1, end - 1 - (open + 1));
+            if (inside.find_first_of(" \t\r\n") == std::string::npos && hasKnownFileExt(inside)) {
+                return inside;
+            }
+        }
+    }
+
+    size_t start = end;
+    while (start > minStart) {
+        const char c = prose[start - 1];
+        if (std::isspace(static_cast<unsigned char>(c)) || c == '`' || c == '"' || c == '\'' || c == '*' ||
+            c == '<' || c == '>' || c == '|') {
+            break;
+        }
+        if (c == '(' && start == end) break;
+        --start;
+    }
+    std::string token = prose.substr(start, end - start);
+    while (!token.empty() && (token.front() == '(' || token.front() == '[')) token.erase(token.begin());
+    while (!token.empty() && (token.back() == '.' || token.back() == ',')) token.pop_back();
+    if (hasKnownFileExt(token)) return token;
+    return std::nullopt;
+}
+
 }  // namespace
 
 std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
-    static const std::regex claim(
-        R"(\b)" + kWriteVerbs + R"(\b[^\n]{0,80}?)"
-        R"(([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
-        R"((md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))\b)",
-        std::regex::icase);
-    static const std::regex verbEnd(kWriteVerbs, std::regex::icase);
-    const std::string prose = dropCounterfactual(plainPunctuation(answer, ";"));
+    static const std::regex verbRe(R"(\b)" + kWriteVerbs + R"(\b)", std::regex::icase);
+    const std::string prose = dropCounterfactual(normalizeQuotes(plainPunctuation(answer, ";")));
     std::vector<std::string> out;
     size_t pos = 0;
     std::smatch m;
     while (pos < prose.size() &&
-           std::regex_search(prose.begin() + static_cast<std::ptrdiff_t>(pos), prose.end(), m, claim,
+           std::regex_search(prose.begin() + static_cast<std::ptrdiff_t>(pos), prose.end(), m, verbRe,
                              pos ? std::regex_constants::match_prev_avail
                                  : std::regex_constants::match_default)) {
         const size_t verb = pos + static_cast<size_t>(m.position(0));
-        std::smatch v;
-        std::regex_search(prose.begin() + static_cast<std::ptrdiff_t>(verb), prose.end(), v, verbEnd,
-                          std::regex_constants::match_continuous);
-        const size_t afterVerb = verb + static_cast<size_t>(v.length(0));
-        if (isDeniedWrite(prose, verb, afterVerb)) {
-            pos = afterVerb;  // a later verb in the same span may still claim a save
+        const size_t afterVerb = verb + static_cast<size_t>(m.length(0));
+        if (isDeniedWrite(prose, verb, afterVerb) || isThirdPartyWrite(prose, verb, afterVerb)) {
+            pos = afterVerb;
             continue;
         }
-        std::string p = m[1].str();
-        while (!p.empty() && (p.back() == '.' || p.back() == ',')) p.pop_back();
-        if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
-        pos = verb + static_cast<size_t>(m.length(0));
+        const ExtractedPath found = findNextClaimedPath(prose, afterVerb);
+        if (found.start != std::string::npos) {
+            if (std::find(out.begin(), out.end(), found.path) == out.end()) out.push_back(found.path);
+            pos = afterVerb + found.end;
+        } else {
+            pos = afterVerb;
+        }
     }
-    // "`summary.md` has been created": the file comes before the verb. The name starts after a
-    // character that can't be in one, so a long word is tried once, not at every letter.
-    static const std::regex passive(
-        R"((?:^|[^A-Za-z0-9_~./\\:-])([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
-        R"((?:md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))[`'"*]*\s+)"
-        R"((?:has been|have been|has now been|is now|was)\s+(?:successfully\s+)?)" + kWriteVerbs + R"(\b)",
+
+    // "`summary.md` has been created": find the passive verb first so scanning stays linear.
+    static const std::regex passiveVerb(
+        R"(\s+(?:has been|have been|has now been|is now|was)\s+(?:successfully\s+)?)" + kWriteVerbs + R"(\b)",
         std::regex::icase);
-    for (auto it = std::sregex_iterator(prose.begin(), prose.end(), passive); it != std::sregex_iterator(); ++it) {
-        const std::string p = (*it)[1].str();
-        if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
+    for (auto it = std::sregex_iterator(prose.begin(), prose.end(), passiveVerb); it != std::sregex_iterator(); ++it) {
+        const size_t vStart = static_cast<size_t>(it->position(0));
+        const size_t vEnd = vStart + static_cast<size_t>(it->length(0));
+        if (isThirdPartyAgentAfterPassive(prose, vEnd)) continue;
+        if (auto p = extractPrecedingPath(prose, vStart)) {
+            if (std::find(out.begin(), out.end(), *p) == out.end()) out.push_back(std::move(*p));
+        }
     }
     return out;
 }
@@ -2832,19 +3098,59 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         return std::nullopt;
     };
 
+    // Unquoted filenames with spaces (e.g. "I created meeting notes.txt") extract the trailing token;
+    // reconcile it against a real file in the working folders whose full name appears in the answer.
+    auto locateSpacedMatch = [&](const std::string& tail) -> std::optional<fs::path> {
+        const fs::path parsed = fs::u8path(native(tail));
+        if (parsed.has_parent_path()) return std::nullopt;
+        auto matchesTail = [&](const fs::path& cand) {
+            const std::string name = cand.filename().u8string();
+            if (name.size() <= tail.size()) return false;
+            if (name.compare(name.size() - tail.size(), tail.size(), tail) != 0) return false;
+            const unsigned char prev = static_cast<unsigned char>(name[name.size() - tail.size() - 1]);
+            if (std::isalnum(prev) || prev == '_') return false;
+            return answer.find(name) != std::string::npos;
+        };
+        for (auto c = calls.rbegin(); c != calls.rend(); ++c) {
+            if (!c->succeeded || (c->name != "file_write" && c->name != "file_edit")) continue;
+            if (!c->args.is_object() || !c->args.contains("path") || !c->args["path"].is_string()) continue;
+            const fs::path written = fs::u8path(c->args["path"].get<std::string>());
+            if (!matchesTail(written)) continue;
+            if (written.is_absolute() && fs::exists(written, ec)) return written;
+            for (const auto& root : roots) {
+                if (fs::exists(root / written, ec)) return root / written;
+            }
+        }
+        for (const auto& root : roots) {
+            if (fs::is_regular_file(root, ec) && matchesTail(root)) return root;
+            fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+            int budget = 20000;
+            for (; it != end && !ec && budget-- > 0; it.increment(ec)) {
+                if (it.depth() > 5) { it.disable_recursion_pending(); continue; }
+                if (matchesTail(it->path())) return it->path();
+            }
+        }
+        return std::nullopt;
+    };
+
     std::vector<std::string> notes;
 
     std::vector<std::string> missing;
     std::string savedText;
     bool comparable = true;  // every saved file is a small text file this check can read
     for (const auto& f : claimedFiles(answer)) {
+        std::optional<fs::path> spaced;
         if (!exists(f)) {
-            missing.push_back(f);
-            continue;
+            spaced = locateSpacedMatch(f);
+            if (!spaced) {
+                missing.push_back(f);
+                continue;
+            }
         }
+        const std::string effective = spaced ? spaced->filename().u8string() : f;
         static const std::regex textFile(R"(\.(md|txt|csv|tsv|json|html|yaml|yml|xml)$)", std::regex::icase);
-        auto at = writtenThisTurn(f);
-        const std::string leaf = fs::u8path(native(f)).filename().u8string();
+        auto at = writtenThisTurn(effective);
+        const std::string leaf = fs::u8path(native(effective)).filename().u8string();
         const bool ranOnIt = std::any_of(calls.begin(), calls.end(), [&leaf](const auto& c) {
             return (c.name == "bash_execute" || c.name == "file_write") && c.args.dump().find(leaf) != std::string::npos;
         });
@@ -2852,10 +3158,12 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
             comparable = false;
             continue;
         }
-        if (!at) at = locate(f);
-        if (!at && !fs::path(native(f)).has_parent_path()) at = writtenBesideNamedInput(fs::path(native(f)));
+        if (!at) at = spaced ? spaced : locate(effective);
+        if (!at && !fs::path(native(effective)).has_parent_path()) {
+            at = writtenBesideNamedInput(fs::path(native(effective)));
+        }
         std::string text;
-        if (at && std::regex_search(f, textFile) && fs::file_size(*at, ec) <= 200000 && !ec) {
+        if (at && std::regex_search(effective, textFile) && fs::file_size(*at, ec) <= 200000 && !ec) {
             std::ifstream in(*at, std::ios::binary);
             if (in) text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }

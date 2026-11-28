@@ -2524,3 +2524,92 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
     }
     EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
 }
+
+TEST(GaiaAgentTest, ClaimedFilesHandlesSpacesAndSpecialCharacters) {
+    using Files = std::vector<std::string>;
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created `meeting notes.txt` in the current folder."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created 'meeting notes.txt' in the current folder."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created \"meeting notes.txt\" in the current folder."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created **meeting notes.txt** in the current folder."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Saved `my notes (2026) & $10.txt` in the working folder."),
+              Files{"my notes (2026) & $10.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Saved 'my notes (2026) & $10.txt' in the working folder."),
+              Files{"my notes (2026) & $10.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Wrote `/tmp/my folder/meeting notes.txt`."),
+              Files{"/tmp/my folder/meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Saved \"C:\\My Docs\\Q4 report (final).xlsx\"."),
+              Files{"C:\\My Docs\\Q4 report (final).xlsx"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("`meeting notes.txt` has been created."),
+              Files{"meeting notes.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("'my notes (2026) & $10.txt' was saved."),
+              Files{"my notes (2026) & $10.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I saved notes(2026).txt and wrote a&b.csv."),
+              (Files{"notes(2026).txt", "a&b.csv"}));
+}
+
+TEST(GaiaAgentTest, ThirdPartyAndFictionalProseIsNotAClaimedFile) {
+    using Files = std::vector<std::string>;
+    for (const char* prose : {
+             "In 1920, the explorer wrote journal.txt before vanishing.",
+             "She saved diary.txt before leaving the city.",
+             "He created notes.md last year.",
+             "They exported data.csv before retiring.",
+             "Alice wrote report.txt in 1995.",
+             "The character created secret.txt in chapter 3.",
+             "journal.txt was written by the explorer in 1920.",
+         }) {
+        EXPECT_TRUE(GaiaAgent::claimedFiles(prose).empty()) << prose;
+    }
+    EXPECT_EQ(GaiaAgent::claimedFiles("The script wrote output.csv."), Files{"output.csv"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("GAIA saved summary.md."), Files{"summary.md"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("File created: recon_tables.xlsx."), Files{"recon_tables.xlsx"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Report saved to report.md."), Files{"report.md"});
+}
+
+TEST(GaiaAgentTest, SavedFilesWithSpacesOrSpecialCharsAreAcceptedWithoutRetry) {
+    Workdir w;
+    std::ofstream(w.path / "meeting notes.txt") << "Q4 kickoff\n";
+    std::ofstream(w.path / "my notes (2026) & $10.txt") << "budget\n";
+
+    for (const char* reply : {
+             "I created `meeting notes.txt` containing 'Q4 kickoff'.",
+             "I created 'meeting notes.txt' containing 'Q4 kickoff'.",
+             "I created meeting notes.txt in the current folder.",
+             "Saved `my notes (2026) & $10.txt` in the current folder.",
+             "I created my notes (2026) & $10.txt in the current folder.",
+         }) {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(reply));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        json r = agent.processQuery("create the note");
+        EXPECT_EQ(r["result"], reply);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << "false send-back on: " << reply;
+    }
+
+    // A genuinely missing spaced file is still caught and reported by its full name.
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer("I created 'missing notes.txt' in the current folder."));
+        mock.pushResponse(answer("Correction: I did not create 'missing notes.txt'."));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        json r = agent.processQuery("create missing notes.txt");
+        EXPECT_EQ(r["result"], "Correction: I did not create 'missing notes.txt'.");
+        ASSERT_EQ(mock.receivedBodies().size(), 2u);
+        EXPECT_NE(mock.receivedBodies()[1].find("missing notes.txt"), std::string::npos);
+    }
+
+    // Fictional prose naming a file does not trigger a false missing-file loop.
+    {
+        bench::MockLlmServer mock;
+        const std::string story = "In 1920, the explorer wrote journal.txt before vanishing.";
+        mock.pushResponse(answer(story));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        json r = agent.processQuery("Write a one-sentence story about an explorer.");
+        EXPECT_EQ(r["result"], story);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u);
+    }
+}
