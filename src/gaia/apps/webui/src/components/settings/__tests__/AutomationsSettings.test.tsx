@@ -124,6 +124,23 @@ describe('AutomationsSettings', () => {
         expect(await screen.findByText(/No automations yet/)).toBeTruthy();
     });
 
+    it('does not tell Fast and light users to recreate a removed automation in chat', async () => {
+        useActiveAgentStore.setState({ current: 'gaiacpp' });
+        routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
+        render(<AutomationsSettings />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+        const sheet = screen.getByRole('alertdialog');
+        expect(sheet.textContent).toMatch(/switch to Full-featured/);
+        expect(sheet.textContent).not.toMatch(/ask GAIA in chat/);
+    });
+
+    it('keeps the chat hint in the remove dialog on Full-featured', async () => {
+        routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
+        render(<AutomationsSettings />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+        expect(screen.getByRole('alertdialog').textContent).toMatch(/ask GAIA in chat/);
+    });
+
     it('shows the backend reason when a change fails', async () => {
         routes = {
             'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }),

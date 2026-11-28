@@ -867,6 +867,22 @@ describe('ModelChip in Arabic', () => {
         const chip = screen.getByRole('button', { name: /Gemma/ });
         expect(chip).toHaveClass('is-warning');
         expect(chip.querySelector('[aria-label*="غير منزَّل"]')).not.toBeNull();
+        expect(chip.getAttribute('title')).toContain('لم يُنزَّل');
+    });
+
+    it('localizes the queued next-model indicator and isolates the model name LTR in Arabic', () => {
+        useModelStore.setState({ active: CLOUD_ACTIVE, queued: 'fireworks.glm-5p3-flash' });
+        render(<ModelChip />);
+        const chip = screen.getByRole('button', { name: /kimi-k2/ });
+        const next = chip.querySelector('.composer-chip-next');
+        expect(next).not.toBeNull();
+        expect(next?.textContent).not.toContain('→');
+        expect(next?.textContent).not.toContain('next');
+        expect(next?.querySelector('.composer-chip-next-arrow')).not.toBeNull();
+        const modelBdi = next?.querySelector('bdi[dir="ltr"].composer-chip-next-model');
+        expect(modelBdi).toHaveTextContent('glm-5p3-flash');
+        expect(next).toHaveTextContent('التالي');
+        expect(chip.getAttribute('title')).toContain('بدءًا من رسالتك التالية');
     });
 
     it('localizes cloud and local model InfoBubble details and aria-labels in Arabic with LTR isolation', async () => {

@@ -976,12 +976,26 @@ std::vector<std::string> requestPaths(const std::string& request) {
     return out;
 }
 
+// Source files: a coding answer that says it wrote main.c is checked like one that says it saved report.md.
+const std::string kCodeKinds =
+    "c|h|cc|cpp|hpp|cs|java|kt|go|rs|rb|php|swift|js|jsx|mjs|cjs|ts|tsx|css|scss|sql|toml|bat|ps1|ipynb";
+
 const std::string kFileExts =
-    "(?:md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml)";
+    "(?:md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml|" + kCodeKinds + ")";
 
 std::string asciiLower(std::string s) {
     for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
+}
+
+// Node.js, Vue.js: a library with a file's ending, not a file the answer says it made.
+bool isLibraryName(const std::string& name) {
+    static const std::set<std::string> libraries = {"node.js",  "next.js",  "nuxt.js",  "vue.js",   "react.js",
+                                                    "three.js", "d3.js",    "express.js", "nest.js", "chart.js",
+                                                    "p5.js",    "alpine.js", "ember.js", "backbone.js", "moment.js",
+                                                    "discord.js", "angular.js", "svelte.js", "solid.js",
+                                                    "electron.js", "jquery.js", "preact.js", "knockout.js"};
+    return libraries.count(asciiLower(name)) > 0;
 }
 
 std::string normalizeQuotes(const std::string& text) {
@@ -1290,7 +1304,9 @@ std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
         }
         const ExtractedPath found = findNextClaimedPath(prose, afterVerb);
         if (found.start != std::string::npos) {
-            if (std::find(out.begin(), out.end(), found.path) == out.end()) out.push_back(found.path);
+            if (!isLibraryName(found.path) && std::find(out.begin(), out.end(), found.path) == out.end()) {
+                out.push_back(found.path);
+            }
             pos = afterVerb + found.end;
         } else {
             pos = afterVerb;
@@ -1306,7 +1322,7 @@ std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
         const size_t vEnd = vStart + static_cast<size_t>(it->length(0));
         if (isThirdPartyAgentAfterPassive(prose, vEnd)) continue;
         if (auto p = extractPrecedingPath(prose, vStart)) {
-            if (std::find(out.begin(), out.end(), *p) == out.end()) out.push_back(std::move(*p));
+            if (!isLibraryName(*p) && std::find(out.begin(), out.end(), *p) == out.end()) out.push_back(std::move(*p));
         }
     }
     return out;
@@ -1703,7 +1719,8 @@ std::string passingTestClaim(const std::string& answer) {
         R"(|(?:test\s+)?suite\s+(?:is\s+)?(?:green|)" GAIA_PASS R"())"
         R"(|everything\s+(?:is\s+)?(?:green\b|)" GAIA_PASS R"())"
         R"(|all\s+green\b)"
-        R"(|tests?\s+(?:were|was)\s+(?:run|executed)\b(?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:(?:they|all|both|each)\s+)*pass(?:ed)?)"
+        R"(|tests?\s+(?:were|was)\s+(?:(?:then|also|again|subsequently|afterwards?)\s+)?(?:re-?run|run|executed)\b)"
+        R"((?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:(?:they|all|both|each)\s+)*pass(?:ed)?)"
         R"(|\b(?:ran|run|running)\s+(?:the\s+)?(?:(?:unit|whole|full|entire)\s+)?(?:tests?|test\s+suite|suite))"
         R"((?:[^.!?\n]|[.](?!\s)){0,80}?(?:\band|\s(?:—|–|-))\s+(?:and\s+)?(?:it|they|all|both|each|everything)\s+)"
         R"((?:(?:all|now)\s+)*)" GAIA_PASS
@@ -1718,6 +1735,10 @@ std::string passingTestClaim(const std::string& answer) {
         R"(\b(?:should|would|could|must|please|recommend|suggests?|consider|expect|try|once|if|before|need to|)"
         R"(make sure|ensure|to (?:confirm|verify|check|ensure|see))\b)",
         std::regex::icase);
+    static const std::regex afterthought(
+        R"(,\s*(?:thus\s+|thereby\s+)?(?:confirming|verifying|ensuring|showing|demonstrating|indicating|proving|)"
+        R"(which\s+(?:confirms?|verifies|shows?|proves?|means))\b)",
+        std::regex::icase);
     static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
     // A dash that only leads to the result ("ran the tests — they pass") doesn't split the claim.
     static const std::regex contrast(
@@ -1731,7 +1752,14 @@ std::string passingTestClaim(const std::string& answer) {
         for (std::sregex_token_iterator c(cleaned.begin(), cleaned.end(), contrast, -1); c != end; ++c) {
             const std::string clause = *c;
             std::smatch m;
-            if (!std::regex_search(clause, m, claim) || std::regex_search(clause, negation)) continue;
+            if (!std::regex_search(clause, m, claim)) continue;
+            // "..., confirming the change did not break anything" says what the pass shows, not that it failed.
+            std::string judged = clause;
+            std::smatch shows;
+            if (std::regex_search(judged, shows, afterthought) && shows.position(0) >= m.position(0) + m.length(0)) {
+                judged.resize(static_cast<size_t>(shows.position(0)));
+            }
+            if (std::regex_search(judged, negation)) continue;
             // Advice is judged on the part of the clause the claim sits in: "Ensure the suite is green: all tests pass".
             const std::string before = clause.substr(0, static_cast<size_t>(m.position(0)));
             std::string part = clause.substr(static_cast<size_t>(m.position(0)));
@@ -1807,6 +1835,8 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
     static const std::regex jest(R"([ \t]*Tests:[ \t]+(?:\d+ (?:failed|passed|skipped|todo|total)(?:, )?)+[ \t]*)");
     static const std::regex vitest(R"([ \t]*Tests[ \t]+(?:\d+ (?:failed|passed|skipped|todo)(?: \| )?)+ \(\d+\)[ \t]*)");
     static const std::regex mocha(R"([ \t]*(\d+) (passing|failing)(?: \(\d+(?:\.\d+)?m?s\))?[ \t]*)");
+    // node --test: an info mark then "pass 2" on a terminal, "# pass 2" as TAP.
+    static const std::regex nodeTest("(?:\xE2\x84\xB9|#) (tests|pass|fail) (\\d+)[ \\t]*");
     static const std::regex go(
         R"((ok|FAIL)[ \t]+\S+(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s)(?:[ \t]+\[[^\]\n]*\])?|[ \t]+\[[^\]\n]*\])(?:[ \t]+coverage:.*)?[ \t]*)");
     static const std::regex cargo(
@@ -1857,6 +1887,13 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
             note(std::regex_search(line, counted), std::regex_search(line, failure));
         } else if (std::regex_match(line, m, mocha)) {
             note(m[1].str() != "0", m[2].str() == "failing" && m[1].str() != "0");
+        } else if (std::regex_match(line, m, nodeTest)) {
+            const bool some = m[2].str() != "0";
+            if (m[1].str() == "fail") {
+                if (some) note(true, true);
+            } else if (m[1].str() == "pass" ? some : !some) {
+                note(some, false);
+            }
         } else if (std::regex_match(line, m, go)) {
             note(line.find("[no tests to run]") == std::string::npos, m[1].str() == "FAIL");
         } else if (std::regex_match(line, m, cargo)) {
@@ -1889,6 +1926,7 @@ const std::regex& testRunnerWords() {
         R"((?:^|[\s;&|(`/\\])(?:pytest|py\.test|tox|nox|ctest|jest|vitest|mocha|nose2|phpunit|rspec)(?:\.exe|\.cmd)?(?=[\s;&|)`]|$))"
         R"(|(?:^|[\s;&|(`/\\])(?:python[0-9.]*|py)(?:\.exe)?\s+(?:-\S+\s+)*-m\s*(?:pytest|unittest)\b)"
         R"(|\b(?:npm|yarn|pnpm|bun)(?:\.cmd)?\s+(?:run\s+)?test\b|\bnpx\s+(?:jest|vitest|mocha)\b)"
+        R"(|\bnode(?:\.exe)?\s+(?:\S+\s+)*?--test\b)"
         R"(|\b(?:go|cargo|dotnet|deno|swift)\s+test\b|\b(?:mvn|mvnw)\s+(?:\S+\s+)*(?:test|verify)\b)"
         R"(|\bgradlew?(?:\.bat)?\s+(?:\S+\s+)*(?:test|check)\b|\b(?:make|gmake|ninja)\s+(?:\S+\s+)*(?:tests?|check)\b)"
         R"(|\b(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+(?:\S+\s+)*?(?:pytest|python\s+-m\s+(?:pytest|unittest))\b)"

@@ -497,8 +497,23 @@ TEST(WebToolsTest, RefusesLocalAndPrivateAddresses) {
                             "http://[::1]:8080/"}) {
         json r = reg.executeTool("web_fetch", json{{"url", url}});
         EXPECT_EQ(r["status"], "error") << url;
-        EXPECT_NE(r["error"].get<std::string>().find("Refused"), std::string::npos) << url << r.dump();
+        const std::string err = r["error"].get<std::string>();
+        EXPECT_NE(err.find("Refused"), std::string::npos) << url << r.dump();
+        EXPECT_EQ(err.find("web_fetch"), std::string::npos) << url << r.dump();
+        EXPECT_EQ(err.find("GAIA_WEB_FETCH_ALLOW_PRIVATE"), std::string::npos) << url << r.dump();
     }
+}
+
+TEST(WebToolsTest, DnsFailureUsesPlainWordingWithoutEnvVarHint) {
+    ToolRegistry reg;
+    WebTools::registerAll(reg);
+    reg.setConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    json r = reg.executeTool("web_fetch", json{{"url", "https://nonexistent.invalid/demo"}});
+    EXPECT_EQ(r["status"], "error");
+    const std::string err = r["error"].get<std::string>();
+    EXPECT_NE(err.find("nonexistent.invalid"), std::string::npos) << err;
+    EXPECT_EQ(err.find("web_fetch"), std::string::npos) << err;
+    EXPECT_EQ(err.find("GAIA_WEB_FETCH_ALLOW_PRIVATE"), std::string::npos) << err;
 }
 
 TEST(AgentResilience, EmptyReplyIsRetriedOnce) {
@@ -1637,6 +1652,39 @@ TEST(AgentResilience, ATextToolCallWithWordsAfterItIsSentBackNotTakenForTheAnswe
     const auto bodies = mock.receivedBodies();
     ASSERT_GE(bodies.size(), 2u);
     EXPECT_NE(bodies[1].find("must be the last thing in a reply"), std::string::npos);
+}
+
+TEST(AgentResilience, ATextToolCallWithItsArgumentsBesideTheNameRunsWithThem) {
+    for (const char* reply :
+         {R"({"tool": "add", "a": 1, "b": 2})", "I'll add them.\n\n{\"tool\": \"add\", \"a\": 1, \"b\": 2}"}) {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(reply));
+        mock.pushResponse(answer("The sum is 3."));
+        ResilienceAgent agent(cfgFor(mock));
+        agent.initForTest();
+        json r = agent.processQuery("add 1 and 2");
+        EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"})) << reply;
+        EXPECT_EQ(r["result"], "The sum is 3.") << reply;
+        const auto bodies = mock.receivedBodies();
+        ASSERT_EQ(bodies.size(), 2u) << reply;
+        EXPECT_EQ(bodies[1].find("no arguments"), std::string::npos) << "the arguments were dropped: " << reply;
+    }
+}
+
+TEST(AgentResilience, AWholeRunWrittenOutInOneReplyIsSentBackNotTakenForTheAnswer) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("I'll add them.\n\n{\"tool\": \"add\", \"a\": 1, \"b\": 2}\n\nThat gave 3. Checking again.\n\n"
+                             "{\"tool\": \"add\", \"a\": 2, \"b\": 1}\n\nBoth runs gave 3, so the sum is 3."));
+    mock.pushResponse(answer(R"({"tool": "add", "tool_args": {"a": 1, "b": 2}})"));
+    mock.pushResponse(answer("The sum is 3."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("add 1 and 2");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"}));
+    EXPECT_EQ(r["result"], "The sum is 3.");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_GE(bodies.size(), 2u);
+    EXPECT_NE(bodies[1].find("held several tool calls and none of them ran"), std::string::npos);
 }
 
 TEST(AgentResilience, APlanWithNoCallAndNoAnswerIsSentBack) {

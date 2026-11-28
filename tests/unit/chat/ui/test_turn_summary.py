@@ -509,3 +509,133 @@ def test_the_turn_summary_survives_a_reload():
     assert restored.cost.kind == "unreported"
     others = [r for i, r in responses.items() if i != msg_id]
     assert others[0].turn_summary is None
+
+
+def test_gaiacpp_query_documents_results_populate_sources_with_pages():
+    ledger = TurnLedger()
+    upload = "C:/Users/me/.gaia/chat/uploads/f27f4885-cec8-4161-9dbd-ebc8a3c25005.pdf"
+    results = [
+        {
+            "file": upload,
+            "page": 2,
+            "text": "Battery Replacement Cost: $18,200",
+            "score": 0.016,
+        },
+        {
+            "file": upload,
+            "page": 1,
+            "text": "Total Active Units: 4,210",
+            "score": 0.015,
+        },
+        {
+            "file": upload,
+            "page": 2,
+            "text": "Battery Replacement Cost: $18,200",
+            "score": 0.016,
+        },
+    ]
+    _call(
+        ledger,
+        "query_documents",
+        {"query": "Total Active Units"},
+        {"status": "success", "retrieval": "keyword only", "results": results},
+    )
+    docs = ledger.summary(
+        location=LOCAL,
+        display_names={
+            "f27f4885-cec8-4161-9dbd-ebc8a3c25005.pdf": "quarterly_report.pdf"
+        },
+    )["documents"]
+    assert docs == [
+        {
+            "name": "quarterly_report.pdf",
+            "path": upload,
+            "pages": [1, 2],
+            "passages": 2,
+        }
+    ]
+
+
+def test_search_code_index_results_are_not_treated_as_document_sources():
+    ledger = TurnLedger()
+    _call(
+        ledger,
+        "search_code_index",
+        {"query": "main"},
+        {
+            "status": "success",
+            "results": [{"file": "/repo/app.py", "snippet": "def main(): pass"}],
+        },
+    )
+    assert ledger.summary(location=LOCAL)["documents"] == []
+
+
+def test_gaiacpp_indexed_documents_reads_single_and_batch_results(tmp_path):
+    ledger = TurnLedger()
+    doc_a = str(tmp_path / "a.pdf")
+    doc_b = str(tmp_path / "b.pdf")
+    _call(
+        ledger,
+        "index_document",
+        {"file_path": doc_a},
+        {"status": "success", "indexed": [{"file": doc_a, "chunks": 3}], "chunks": 3},
+    )
+    _call(
+        ledger,
+        "index_documents",
+        {"documents": ["b.pdf"]},
+        [
+            {
+                "document": "b.pdf",
+                "result": {
+                    "status": "success",
+                    "indexed": [{"file": doc_b, "chunks": 5}],
+                    "chunks": 5,
+                },
+            }
+        ],
+    )
+    assert ledger.indexed_documents() == [(doc_a, 3), (doc_b, 5)]
+    outputs = ledger.summary(location=LOCAL)["outputs"]
+    assert outputs == [{"kind": "document", "name": "a.pdf", "path": doc_a}]
+
+
+def test_gaiacpp_batch_summary_counts_indexed_files_even_when_one_failed(tmp_path):
+    ledger = TurnLedger()
+    memo = str(tmp_path / "memo.txt")
+    sheet = str(tmp_path / "budget_sheet.xlsx")
+    _call(
+        ledger,
+        "index_documents",
+        {"documents": ["memo.txt", "budget_sheet.xlsx"]},
+        {
+            "status": "partial",
+            "has_errors": True,
+            "indexed": [{"document": "memo.txt", "file": memo, "chunks": 4}],
+            "failed": [
+                {
+                    "document": "budget_sheet.xlsx",
+                    "file": sheet,
+                    "error": "Can't index budget_sheet.xlsx: Excel (.xlsx) files aren't supported.",
+                }
+            ],
+            "summary": "Indexed memo.txt (4 passages); couldn't index 1 document:",
+        },
+        success=False,
+    )
+    assert ledger.indexed_documents() == [(memo, 4)]
+
+
+def test_batch_rows_without_an_absolute_path_are_left_out():
+    ledger = TurnLedger()
+    _call(
+        ledger,
+        "index_documents",
+        {"documents": ["x.xlsx"]},
+        {
+            "status": "error",
+            "indexed": [{"file": "relative.txt", "chunks": 1}],
+            "failed": [],
+        },
+    )
+    assert ledger.indexed_documents() == []
