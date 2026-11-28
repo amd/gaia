@@ -14,6 +14,7 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -189,7 +190,28 @@ public:
     /// The agent loop checks this flag between steps and exits early
     /// with a partial result. Safe to call from any thread.
     /// The flag is automatically reset at the start of the next processQuery().
-    void requestCancel() { cancelled_.store(true); }
+    void requestCancel() {
+        cancelled_.store(true);
+        std::lock_guard<std::mutex> lock(followupMutex_);
+        acceptingFollowups_ = false;
+        pendingFollowups_.clear();
+    }
+
+    /// Hand the running processQuery() turn a user follow-up to fold in at the
+    /// next step boundary (or before sealing a final answer). Returns false
+    /// when text is blank, the turn is cancelled, or no turn is accepting
+    /// follow-ups. Safe to call from any thread.
+    bool queueFollowup(const std::string& text);
+
+    /// Discard any queued mid-turn follow-ups. Safe to call from any thread.
+    void clearPendingFollowups();
+
+    /// Number of queued mid-turn follow-ups waiting to be drained.
+    size_t pendingFollowupCount() const;
+
+    /// Framing prepended to each mid-turn follow-up so the model finishes the
+    /// work in progress before addressing the addition.
+    static const std::string FOLLOWUP_PREAMBLE;
 
     /// Also stop when `check` returns true. Unlike requestCancel(), it isn't
     /// reset when a run starts, so a Stop that lands just before one holds.
@@ -411,6 +433,11 @@ private:
     /// history write (text-only; image parts stripped).
     json processQueryInternal(const std::vector<Message>& userMessages, int maxSteps);
 
+    void applyFollowups(const std::deque<std::string>& batch, std::vector<Message>& messages,
+                        bool replacingDraft = false);
+    size_t drainFollowups(std::vector<Message>& messages);
+    bool drainFollowupsOrSeal(std::vector<Message>& messages, bool canContinue);
+
     /// Whether to send native ``tools`` for cfg's model under the Auto policy:
     /// the built-in table, else the ``tool-calling`` label in the server's catalog.
     bool autoNativeToolCalls(const AgentConfig& cfg);
@@ -508,6 +535,11 @@ private:
     std::function<void(const json&)> stepLogger_;
     std::function<int()> requestTimeout_;
     bool cancelRequested() const { return cancelled_.load() || (cancelCheck_ && cancelCheck_()); }
+
+    // Mid-turn follow-up queue guarded by followupMutex_.
+    mutable std::mutex followupMutex_;
+    std::deque<std::string> pendingFollowups_;
+    bool acceptingFollowups_ = false;
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;

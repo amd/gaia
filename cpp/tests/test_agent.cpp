@@ -4,6 +4,13 @@
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
 
+#include <chrono>
+#include <future>
+#include <mutex>
+#include <thread>
+
+#include "support/mock_llm_server.h"
+
 using namespace gaia;
 
 // Helper to create ToolParameter (C++17 compatible)
@@ -309,6 +316,201 @@ TEST(AgentTest, EnvVarGaiaModelIdOverridesDefault) {
 }
 #endif
 
-// Note: processQuery tests require an LLM server running,
-// so they are not included here. Use integration tests for full loop testing.
-// The tests above verify the components independently.
+namespace {
+
+class RecordingConsole : public SilentConsole {
+public:
+    void printInfo(const std::string& message) override {
+        std::lock_guard<std::mutex> lock(mu_);
+        infos_.push_back(message);
+    }
+    std::vector<std::string> infos() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return infos_;
+    }
+
+private:
+    mutable std::mutex mu_;
+    std::vector<std::string> infos_;
+};
+
+AgentConfig mockLoopConfig(const bench::MockLlmServer& mock, int maxSteps = 5) {
+    AgentConfig cfg;
+    cfg.baseUrl = mock.baseUrl();
+    cfg.modelId = "mock-model";
+    cfg.maxSteps = maxSteps;
+    cfg.silentMode = true;
+    cfg.streaming = false;
+    cfg.llmRetries = 0;
+    return cfg;
+}
+
+std::string jsonAnswer(const std::string& text) {
+    return json{{"choices", json::array({{{"message", {{"role", "assistant"}, {"content", text}}}}})}}.dump();
+}
+
+}  // namespace
+
+TEST(AgentTest, QueueFollowupRejectedWhenIdleOrBlank) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+
+    EXPECT_FALSE(agent.queueFollowup("hello"));
+    EXPECT_FALSE(agent.queueFollowup(""));
+    EXPECT_FALSE(agent.queueFollowup("   \t\n  "));
+    EXPECT_EQ(agent.pendingFollowupCount(), 0u);
+}
+
+TEST(AgentTest, FollowupQueuedDuringToolStepInjectedBeforeNextLlmCall) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(bench::kToolCall);
+    mock.pushResponse(jsonAnswer("Handled both requests."));
+
+    MockAgent agent(mockLoopConfig(mock));
+    auto console = std::make_unique<RecordingConsole>();
+    RecordingConsole* consolePtr = console.get();
+    agent.setOutputHandler(std::move(console));
+
+    bool queued = false;
+    agent.tools().registerTool(
+        "steer_hook", "Queues a follow-up while running",
+        [&](const json&) -> json {
+            queued = agent.queueFollowup("  also include totals  ");
+            return json{{"ok", true}};
+        });
+    mock.clearQueue();
+    mock.pushResponse(
+        R"({"choices":[{"message":{"content":"{\"thought\":\"step1\",\"goal\":\"run\",\"tool\":\"steer_hook\",\"tool_args\":{}}"}}]})");
+    mock.pushResponse(jsonAnswer("Handled both requests."));
+
+    const json res = agent.processQuery("summarize sales");
+
+    EXPECT_TRUE(queued);
+    EXPECT_EQ(res["status"], "success");
+    EXPECT_EQ(res["result"], "Handled both requests.");
+    EXPECT_EQ(agent.pendingFollowupCount(), 0u);
+    ASSERT_EQ(mock.requestCount(), 2);
+    const json secondReq = json::parse(mock.receivedBodies()[1]);
+    bool sawFramed = false;
+    for (const auto& m : secondReq["messages"]) {
+        if (m.value("role", "") == "user" &&
+            m.value("content", "") == Agent::FOLLOWUP_PREAMBLE + "also include totals") {
+            sawFramed = true;
+        }
+    }
+    EXPECT_TRUE(sawFramed) << secondReq.dump();
+    const auto infos = consolePtr->infos();
+    EXPECT_NE(std::find(infos.begin(), infos.end(), "Picked up your follow-up: also include totals"), infos.end());
+    EXPECT_FALSE(agent.queueFollowup("after turn"));
+}
+
+TEST(AgentTest, FollowupQueuedDuringFinalAnswerTriggersExtraStep) {
+    bench::MockLlmServer mock;
+    std::promise<void> release;
+    mock.holdNextResponse(release.get_future().share());
+    mock.pushResponse(jsonAnswer("Updated with follow-up."));
+
+    MockAgent agent(mockLoopConfig(mock, 5));
+    std::future<json> fut = std::async(std::launch::async, [&] { return agent.processQuery("initial ask"); });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (mock.requestCount() < 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(mock.requestCount(), 1);
+    EXPECT_TRUE(agent.queueFollowup("also add a summary"));
+    EXPECT_FALSE(agent.queueFollowup("   "));
+    release.set_value();
+
+    const json res = fut.get();
+    EXPECT_EQ(res["status"], "success");
+    EXPECT_EQ(res["result"], "Updated with follow-up.");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_NE(mock.receivedBodies()[1].find("also add a summary"), std::string::npos);
+}
+
+TEST(AgentTest, MultipleFollowupsDeliveredInOrder) {
+    bench::MockLlmServer mock;
+    std::promise<void> release;
+    mock.holdNextResponse(release.get_future().share());
+    mock.pushResponse(jsonAnswer("All three handled."));
+
+    MockAgent agent(mockLoopConfig(mock, 5));
+    std::future<json> fut = std::async(std::launch::async, [&] { return agent.processQuery("start"); });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (mock.requestCount() < 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(mock.requestCount(), 1);
+    ASSERT_TRUE(agent.queueFollowup("first note"));
+    ASSERT_TRUE(agent.queueFollowup("second note"));
+    ASSERT_TRUE(agent.queueFollowup("third note"));
+    release.set_value();
+
+    const json res = fut.get();
+    EXPECT_EQ(res["status"], "success");
+    ASSERT_EQ(mock.requestCount(), 2);
+    const json secondReq = json::parse(mock.receivedBodies()[1]);
+    std::vector<std::string> followups;
+    for (const auto& m : secondReq["messages"]) {
+        const std::string c = m.value("content", "");
+        if (m.value("role", "") == "user" && c.rfind(Agent::FOLLOWUP_PREAMBLE, 0) == 0) {
+            std::string body = c.substr(Agent::FOLLOWUP_PREAMBLE.size());
+            const size_t sep = body.find("\n\nGive your complete combined answer");
+            if (sep != std::string::npos) body = body.substr(0, sep);
+            followups.push_back(body);
+        }
+    }
+    EXPECT_EQ(followups, (std::vector<std::string>{"first note", "second note", "third note"}));
+}
+
+TEST(AgentTest, RequestCancelClearsPendingFollowups) {
+    bench::MockLlmServer mock;
+    std::promise<void> release;
+    mock.holdNextResponse(release.get_future().share());
+    mock.pushResponse(jsonAnswer("Must not be reached."));
+
+    MockAgent agent(mockLoopConfig(mock, 5));
+    std::future<json> fut = std::async(std::launch::async, [&] { return agent.processQuery("work"); });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (mock.requestCount() < 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(mock.requestCount(), 1);
+    ASSERT_TRUE(agent.queueFollowup("queued before cancel"));
+    EXPECT_EQ(agent.pendingFollowupCount(), 1u);
+
+    agent.requestCancel();
+    EXPECT_EQ(agent.pendingFollowupCount(), 0u);
+    EXPECT_FALSE(agent.queueFollowup("queued after cancel"));
+    release.set_value();
+
+    const json res = fut.get();
+    EXPECT_EQ(res["status"], "cancelled");
+    EXPECT_EQ(mock.requestCount(), 1);
+    EXPECT_EQ(agent.pendingFollowupCount(), 0u);
+}
+
+TEST(AgentTest, FollowupRefusedOnFinalAllowedStep) {
+    bench::MockLlmServer mock;
+    std::promise<void> release;
+    mock.holdNextResponse(release.get_future().share());
+
+    MockAgent agent(mockLoopConfig(mock, 1));
+    std::future<json> fut = std::async(std::launch::async, [&] { return agent.processQuery("one step only", 1); });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (mock.requestCount() < 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(mock.requestCount(), 1);
+    EXPECT_FALSE(agent.queueFollowup("cannot fit in 1 step"));
+    release.set_value();
+
+    const json res = fut.get();
+    EXPECT_EQ(res["status"], "success");
+    EXPECT_EQ(mock.requestCount(), 1);
+}

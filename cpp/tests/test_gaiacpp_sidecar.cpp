@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <gaia/agent.h>
 #include <httplib.h>
 
 #include <chrono>
@@ -1260,9 +1261,6 @@ TEST_F(GaiacppSidecar, SecondQueryWhileOneIsInFlightGets409) {
         EXPECT_EQ(dupe.status(), 409) << dupe.describe();
         EXPECT_NE(dupe.errorBody().value("detail", "").find("Duplicate run_id"), std::string::npos) << dupe.raw();
     }
-    auto followup = send("POST", "/v1/gaia/query/run-busy-1/followup", bearer(), R"({"text":"also this"})");
-    ASSERT_TRUE(followup);
-    EXPECT_EQ(followup->status, 409) << "a mid-turn message is refused so the UI sends it next: " << followup->body;
     auto followupNoRun = send("POST", "/v1/gaia/query/no-run/followup", bearer(), R"({"text":"x"})");
     ASSERT_TRUE(followupNoRun);
     EXPECT_EQ(followupNoRun->status, 404);
@@ -2760,6 +2758,134 @@ TEST_F(GaiacppSidecar, AnswerCheckRetractsStreamedDraftWithoutLeakingReviewPromp
     EXPECT_GT(retractIndex, firstDraftToken) << "answer_check retraction must follow the draft tokens: " << t.describe();
     EXPECT_EQ(afterRetract, "I could not save report.md; here is the summary inline.");
     EXPECT_EQ(events.back()["answer"], "I could not save report.md; here is the summary inline.");
+}
+
+TEST_F(GaiacppSidecar, FollowupAcceptedDuringSingleStepAnswerAndInjectedOnNextStep) {
+    Hold& held = hold();
+    mock().pushResponse(answerReply("Answered original request and follow-up."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-fu-1", "summarize the report", {{"session_id", "chat-fu-1"}}));
+    ASSERT_TRUE(waitUntil([&] { return mock().requestCount() >= 1; }, seconds(30))) << t.describe();
+
+    auto fu = send("POST", "/v1/gaia/query/run-fu-1/followup", bearer(), R"({"text":"  only the Q4 numbers  "})");
+    ASSERT_TRUE(fu);
+    EXPECT_EQ(fu->status, 200) << fu->body;
+    const json fuBody = json::parse(fu->body);
+    EXPECT_EQ(fuBody["run_id"], "run-fu-1");
+    EXPECT_EQ(fuBody["delivered"], true);
+
+    held.release();
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+    EXPECT_EQ(t.events().back()["answer"], "Answered original request and follow-up.");
+
+    ASSERT_EQ(mock().requestCount(), 2);
+    const json secondReq = json::parse(mock().receivedBodies()[1]);
+    bool sawFollowup = false;
+    for (const auto& m : secondReq["messages"]) {
+        const std::string c = m.value("content", "");
+        if (m.value("role", "") == "user" &&
+            c.rfind(gaia::Agent::FOLLOWUP_PREAMBLE + "only the Q4 numbers", 0) == 0 &&
+            c.find("replaces your previous draft") != std::string::npos) {
+            sawFollowup = true;
+        }
+    }
+    EXPECT_TRUE(sawFollowup) << secondReq.dump();
+
+    bool sawStatus = false;
+    for (const auto& ev : t.events()) {
+        if (ev.value("type", "") == "status" &&
+            ev.value("message", "").find("Picked up your follow-up: only the Q4 numbers") != std::string::npos) {
+            sawStatus = true;
+        }
+    }
+    EXPECT_TRUE(sawStatus) << t.describe();
+
+    auto afterDone = send("POST", "/v1/gaia/query/run-fu-1/followup", bearer(), R"({"text":"too late"})");
+    ASSERT_TRUE(afterDone);
+    EXPECT_EQ(afterDone->status, 404) << afterDone->body;
+}
+
+TEST_F(GaiacppSidecar, MultipleFollowupsQueuedMidToolTurnArriveInFifoOrder) {
+    mock().pushResponse(toolReply("file_write", {{"path", (work_ / "note.txt").string()}, {"content", "tool-ok"}}));
+    mock().pushResponse(answerReply("Done with all three follow-ups."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-fu-order", "run check",
+                            {{"session_id", "chat-fu-order"}, {"allowed_paths", json::array({work_.string()})}}));
+    auto card = t.waitEvent([](const json& e) { return e.value("type", "") == "needs_confirmation"; });
+    ASSERT_TRUE(card) << t.describe();
+
+    for (const char* text : {"first addition", "second addition", "third addition"}) {
+        auto fu = send("POST", "/v1/gaia/query/run-fu-order/followup", bearer(), json{{"text", text}}.dump());
+        ASSERT_TRUE(fu);
+        EXPECT_EQ(fu->status, 200) << text << ": " << fu->body;
+    }
+
+    auto ok = decide("run-fu-order", "allow", (*card)["confirm_id"].get<std::string>());
+    ASSERT_TRUE(ok);
+    ASSERT_EQ(ok->status, 200) << ok->body;
+
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+    EXPECT_EQ(t.events().back()["answer"], "Done with all three follow-ups.");
+
+    ASSERT_EQ(mock().requestCount(), 2);
+    const json secondReq = json::parse(mock().receivedBodies()[1]);
+    std::vector<std::string> seen;
+    for (const auto& m : secondReq["messages"]) {
+        const std::string c = m.value("content", "");
+        if (m.value("role", "") == "user" && c.rfind(gaia::Agent::FOLLOWUP_PREAMBLE, 0) == 0) {
+            seen.push_back(c.substr(gaia::Agent::FOLLOWUP_PREAMBLE.size()));
+        }
+    }
+    EXPECT_EQ(seen, (std::vector<std::string>{"first addition", "second addition", "third addition"}));
+}
+
+TEST_F(GaiacppSidecar, FollowupRejectsEmptyWhitespaceAndInvalidBodiesWith422) {
+    Hold& held = hold();
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-fu-422", "hello", {{"session_id", "chat-fu-422"}}));
+    ASSERT_TRUE(waitUntil([&] { return mock().requestCount() >= 1; }, seconds(30))) << t.describe();
+
+    for (const char* badBody : {"", "not-json", "[]", "{}", R"({"text":""})", R"({"text":"   \t\n "})", R"({"text":123})"}) {
+        auto r = send("POST", "/v1/gaia/query/run-fu-422/followup", bearer(), badBody);
+        ASSERT_TRUE(r) << badBody;
+        EXPECT_EQ(r->status, 422) << badBody << " -> " << r->body;
+    }
+
+    held.release();
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    EXPECT_EQ(mock().requestCount(), 1);
+}
+
+TEST_F(GaiacppSidecar, CancelClearsPendingFollowupsAndRejectsNewFollowups) {
+    Hold& held = hold();
+    mock().pushResponse(answerReply("Should never be called."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-fu-cancel", "long task", {{"session_id", "chat-fu-cancel"}}));
+    ASSERT_TRUE(waitUntil([&] { return mock().requestCount() >= 1; }, seconds(30))) << t.describe();
+
+    auto fu1 = send("POST", "/v1/gaia/query/run-fu-cancel/followup", bearer(), R"({"text":"steered before cancel"})");
+    ASSERT_TRUE(fu1);
+    EXPECT_EQ(fu1->status, 200) << fu1->body;
+
+    auto cancel = send("POST", "/v1/gaia/query/run-fu-cancel/cancel", bearer(), "{}");
+    ASSERT_TRUE(cancel);
+    EXPECT_EQ(cancel->status, 200) << cancel->body;
+
+    auto fu2 = send("POST", "/v1/gaia/query/run-fu-cancel/followup", bearer(), R"({"text":"after cancel"})");
+    ASSERT_TRUE(fu2);
+    EXPECT_TRUE(fu2->status == 404 || fu2->status == 409) << fu2->status << " " << fu2->body;
+
+    held.release();
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+    EXPECT_EQ(t.events().back()["answer"], "");
+    EXPECT_EQ(mock().requestCount(), 1) << "cancelled turn must not drain pending follow-up into a second LLM call";
 }
 
 }  // namespace

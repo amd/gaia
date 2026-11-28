@@ -424,8 +424,8 @@ def test_a_sidecar_without_followups_says_so_up_front(
     assert seen == [False]
 
 
-def test_gaiacpp_says_followups_unavailable_up_front(monkeypatch):
-    """gaiacpp advertises API >= 2.15 but refuses /followup with 409."""
+def test_gaiacpp_enables_followups_like_python_flagship(monkeypatch):
+    """Both flagship runtimes advertise API >= 2.15 and accept /followup."""
     from gaia.daemon.sidecars import fetch
     from gaia.ui._chat_helpers import _dispatch_sidecar_query
 
@@ -475,5 +475,5 @@ def test_gaiacpp_says_followups_unavailable_up_front(monkeypatch):
         )
         return sse.events
 
-    assert {"type": "followup_unavailable"} in _run_with(fetch.NATIVE_FLAGSHIP)
+    assert {"type": "followup_unavailable"} not in _run_with(fetch.NATIVE_FLAGSHIP)
     assert {"type": "followup_unavailable"} not in _run_with(fetch.PYTHON_FLAGSHIP)

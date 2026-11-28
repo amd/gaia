@@ -101,6 +101,77 @@ When responding conversationally (no tool call needed), just write plain text.
 Do NOT wrap conversational replies in JSON.
 )";
 
+const std::string Agent::FOLLOWUP_PREAMBLE =
+    "The user sent this while you were still working on their previous "
+    "request. Finish that request first, then address this as well — do "
+    "not discard the work already done:\n\n";
+
+bool Agent::queueFollowup(const std::string& text) {
+    const size_t first = text.find_first_not_of(" \t\r\n\f\v");
+    if (first == std::string::npos) return false;
+    const size_t last = text.find_last_not_of(" \t\r\n\f\v");
+    const std::string trimmed = text.substr(first, last - first + 1);
+    if (cancelRequested()) return false;
+    std::lock_guard<std::mutex> lock(followupMutex_);
+    if (!acceptingFollowups_ || cancelled_.load()) return false;
+    pendingFollowups_.push_back(trimmed);
+    return true;
+}
+
+void Agent::clearPendingFollowups() {
+    std::lock_guard<std::mutex> lock(followupMutex_);
+    pendingFollowups_.clear();
+}
+
+size_t Agent::pendingFollowupCount() const {
+    std::lock_guard<std::mutex> lock(followupMutex_);
+    return pendingFollowups_.size();
+}
+
+void Agent::applyFollowups(const std::deque<std::string>& batch, std::vector<Message>& messages,
+                           bool replacingDraft) {
+    for (size_t i = 0; i < batch.size(); ++i) {
+        const std::string& text = batch[i];
+        tools_.beginTurn(text);
+        Message m;
+        m.role = MessageRole::USER;
+        m.content = FOLLOWUP_PREAMBLE + text;
+        if (replacingDraft && i + 1 == batch.size()) {
+            m.content +=
+                "\n\nGive your complete combined answer covering both the original request and "
+                "this addition: it replaces your previous draft above, which the user will not see.";
+        }
+        messages.push_back(std::move(m));
+        console_->printInfo("Picked up your follow-up: " + text);
+    }
+}
+
+size_t Agent::drainFollowups(std::vector<Message>& messages) {
+    std::deque<std::string> batch;
+    {
+        std::lock_guard<std::mutex> lock(followupMutex_);
+        if (pendingFollowups_.empty()) return 0;
+        batch.swap(pendingFollowups_);
+    }
+    applyFollowups(batch, messages, false);
+    return batch.size();
+}
+
+bool Agent::drainFollowupsOrSeal(std::vector<Message>& messages, bool canContinue) {
+    std::deque<std::string> batch;
+    {
+        std::lock_guard<std::mutex> lock(followupMutex_);
+        if (canContinue && !cancelled_.load() && !pendingFollowups_.empty()) {
+            batch.swap(pendingFollowups_);
+        } else {
+            acceptingFollowups_ = false;
+            return false;
+        }
+    }
+    applyFollowups(batch, messages, true);
+    return true;
+}
+
 Agent::Agent(const AgentConfig& config)
     : config_(config),
       lemonade_(LemonadeClientConfig{config.baseUrl, config.modelId, config.contextSize, config.debug}) {
@@ -2079,6 +2150,24 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
     int stepsLimit = (maxSteps > 0) ? maxSteps : cfg.maxSteps;
 
+    // Accept mid-turn follow-ups only while this turn can still run another step.
+    struct FollowupScope {
+        std::mutex& mu;
+        std::deque<std::string>& queue;
+        bool& accepting;
+        FollowupScope(std::mutex& m, std::deque<std::string>& q, bool& acc, bool open)
+            : mu(m), queue(q), accepting(acc) {
+            std::lock_guard<std::mutex> lock(mu);
+            queue.clear();
+            accepting = open;
+        }
+        ~FollowupScope() {
+            std::lock_guard<std::mutex> lock(mu);
+            accepting = false;
+            queue.clear();
+        }
+    } followupScope{followupMutex_, pendingFollowups_, acceptingFollowups_, stepsLimit > 0 && !cancelRequested()};
+
     // Reset state
     executionState_ = AgentState::PLANNING;
     currentPlan_ = json();
@@ -2247,6 +2336,14 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             console_->printWarning("Cancelled by user");
             finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
             break;
+        }
+
+        // Drain queued follow-ups after the cancel check so a cancelled turn
+        // never consumes input it cannot answer; close intake on the last step.
+        drainFollowups(messages);
+        if (stepsTaken + 1 >= stepsLimit) {
+            std::lock_guard<std::mutex> lock(followupMutex_);
+            acceptingFollowups_ = false;
         }
 
         ++stepsTaken;
@@ -2673,6 +2770,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 messages.push_back(*pushback);
                 continue;
             }
+            if (drainFollowupsOrSeal(messages, stepsTaken < stepsLimit && !cancelRequested())) {
+                continue;
+            }
             finalAnswer = withUnresolved(parsed.answer.value());
             markCutOff(llmResult.finishReason);
             if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
@@ -2770,11 +2870,19 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 messages.push_back(*pushback);
                 continue;
             }
+            if (drainFollowupsOrSeal(messages, stepsTaken < stepsLimit && !cancelRequested())) {
+                continue;
+            }
             finalAnswer = withUnresolved(response);
             markCutOff(llmResult.finishReason);
             if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(followupMutex_);
+        acceptingFollowups_ = false;
     }
 
     // Out of steps, stopped in a loop, or no reply: one tool-free call for an honest wrap-up.
