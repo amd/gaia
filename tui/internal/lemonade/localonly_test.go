@@ -202,3 +202,35 @@ func TestPolicyPathExpandsTheHomeDirectory(t *testing.T) {
 		t.Errorf("tilde in var: got %q, want %q", got, want)
 	}
 }
+
+func TestPolicyPathFromLookupDistinguishesEmptyFromUnset(t *testing.T) {
+	home := func() (string, error) { return "/home/u", nil }
+	env := map[string]string{
+		"GAIA_HOME": "~/$EMPTY/g",
+		"EMPTY":     "",
+	}
+	lookup := func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	}
+	if got, want := PolicyPathFromLookup(lookup, home), filepath.Join("/home/u", "g", "policy.json"); filepath.Clean(got) != want {
+		t.Errorf("empty-defined var: got %q, want %q", got, want)
+	}
+
+	env["GAIA_HOME"] = "~/$UNSET_VAR/g"
+	if got, want := PolicyPathFromLookup(lookup, home), filepath.Join("/home/u", "$UNSET_VAR", "policy.json"); filepath.Clean(got) != want {
+		t.Errorf("unset var: got %q, want %q", got, want)
+	}
+
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	t.Setenv("GAIA_POLICY_FILE", "")
+	t.Setenv("GAIA_CONFIG_DIR", "")
+	t.Setenv("GAIA_EMPTY_POLICY_9099", "")
+	t.Setenv("GAIA_HOME", "~/$GAIA_EMPTY_POLICY_9099/pol")
+	if got, want := PolicyPath(), filepath.Join(userHome, "pol", "policy.json"); filepath.Clean(got) != want {
+		t.Errorf("PolicyPath() with empty var: got %q, want %q", got, want)
+	}
+}

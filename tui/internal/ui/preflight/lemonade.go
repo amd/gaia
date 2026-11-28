@@ -106,12 +106,13 @@ type launcher struct {
 // the Windows and Linux answers on a macOS box, and the not-installed answer on
 // a developer box that has Lemonade.
 type hostProbe struct {
-	goos     string
-	lookPath func(string) (string, error)
-	exists   func(string) bool
-	getenv   func(string) string
-	homeDir  func() (string, error)
-	readFile func(string) ([]byte, error)
+	goos      string
+	lookPath  func(string) (string, error)
+	exists    func(string) bool
+	getenv    func(string) string
+	lookupEnv func(string) (string, bool)
+	homeDir   func() (string, error)
+	readFile  func(string) ([]byte, error)
 	// readConfig is the locked reader for the shared config.json. Other probes
 	// keep readFile so their host tests can model ordinary file reads.
 	readConfig func(string) ([]byte, error)
@@ -128,6 +129,7 @@ var realHostProbe = func() hostProbe {
 			return err == nil
 		},
 		getenv:     os.Getenv,
+		lookupEnv:  os.LookupEnv,
 		homeDir:    os.UserHomeDir,
 		readFile:   osReadFile,
 		readConfig: filelock.ReadFile,

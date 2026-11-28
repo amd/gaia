@@ -25,17 +25,34 @@ import (
 // LocalOnlyHint is how to turn Local only off; the same words Python uses.
 const LocalOnlyHint = "To allow cloud models again, run `gaia config set network_policy cloud_allowed`."
 
+// PolicyPath resolves policy.json for the current process environment,
+// using os.LookupEnv so empty-but-defined variables expand like Python.
+func PolicyPath() string {
+	return PolicyPathFromLookup(os.LookupEnv, os.UserHomeDir)
+}
+
 // PolicyPathFrom mirrors gaia.llm.local_only.policy_path: GAIA_POLICY_FILE,
 // then gaia_home() (GAIA_HOME, then GAIA_CONFIG_DIR, then ~/.gaia).
 // "" when no home directory resolves.
 func PolicyPathFrom(getenv func(string) string, homeDir func() (string, error)) string {
-	if file := strings.TrimSpace(getenv("GAIA_POLICY_FILE")); file != "" {
-		return gaiahome.ExpandUser(file, homeDir)
-	}
-	lookup := gaiahome.LookupFromGetenv(getenv)
-	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
-		if dir := strings.TrimSpace(getenv(name)); dir != "" {
-			return filepath.Join(gaiahome.ExpandPathWith(dir, lookup, homeDir), "policy.json")
+	return PolicyPathFromLookup(gaiahome.LookupFromGetenv(getenv), homeDir)
+}
+
+// PolicyPathFromLookup is PolicyPathFrom with a presence-aware env lookup so
+// set-to-empty variables expand rather than remaining literal.
+func PolicyPathFromLookup(lookup func(string) (string, bool), homeDir func() (string, error)) string {
+	if lookup != nil {
+		if raw, ok := lookup("GAIA_POLICY_FILE"); ok {
+			if file := strings.TrimSpace(raw); file != "" {
+				return gaiahome.ExpandUser(file, homeDir)
+			}
+		}
+		for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
+			if raw, ok := lookup(name); ok {
+				if dir := strings.TrimSpace(raw); dir != "" {
+					return filepath.Join(gaiahome.ExpandPathWith(dir, lookup, homeDir), "policy.json")
+				}
+			}
 		}
 	}
 	home, err := homeDir()
@@ -148,7 +165,7 @@ func LocalOnlyAt(path string) bool {
 // LocalOnly reads the policy for this process's environment, fresh each call
 // so a change made by another front end takes effect on the next request.
 func LocalOnly() bool {
-	return LocalOnlyAt(PolicyPathFrom(os.Getenv, os.UserHomeDir))
+	return LocalOnlyAt(PolicyPath())
 }
 
 // refuseCloudSetup is the Local only error for a request that would register

@@ -36,7 +36,7 @@ type customModel struct {
 // as local recommendations that register on their first pull. A missing file
 // or key is no models; a malformed one is an error, as it is in Python.
 func ReadCustomModels() ([]Recommended, error) {
-	path := ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	path := ConfigPath()
 	if path == "" {
 		return nil, nil
 	}
@@ -53,7 +53,7 @@ func ReadCustomModels() ([]Recommended, error) {
 // ReadChosenModels returns config.json's default_model and last_model, the
 // models the user already chose. A missing file or key is none.
 func ReadChosenModels() ([]string, error) {
-	path := ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	path := ConfigPath()
 	if path == "" {
 		return nil, nil
 	}

@@ -82,8 +82,10 @@ func HasTildePrefixForOS(path string, isWindows bool) bool {
 	return isWindows && strings.HasPrefix(path, `~\`)
 }
 
-// LookupFromGetenv adapts a single-return getenv function (where "" is treated
-// as unset, matching existing TUI test doubles) to a presence-aware lookup.
+// LookupFromGetenv adapts a single-return getenv test double (where "" is
+// treated as unset because Go's func(string) string cannot distinguish empty
+// from absent) to a presence-aware lookup. Production callers must pass
+// os.LookupEnv directly via ExpandPath or *FromLookup.
 func LookupFromGetenv(getenv func(string) string) func(string) (string, bool) {
 	return func(name string) (string, bool) {
 		if getenv == nil {

@@ -69,13 +69,35 @@ type Choice struct {
 	Path          string
 }
 
+// ConfigPath resolves config.json for the current process environment,
+// using os.LookupEnv so empty-but-defined variables expand like Python.
+func ConfigPath() string {
+	return ConfigPathFromLookup(os.LookupEnv, os.UserHomeDir)
+}
+
+// ConfigDir resolves GAIA's config directory for the current process
+// environment, using os.LookupEnv so empty-but-defined variables expand like Python.
+func ConfigDir() string {
+	return ConfigDirFromLookup(os.LookupEnv, os.UserHomeDir)
+}
+
 // ConfigPathFrom mirrors gaia.config: GAIA_CONFIG_FILE, then config.json in
 // ConfigDirFrom. "" when no home directory resolves.
 func ConfigPathFrom(getenv func(string) string, homeDir func() (string, error)) string {
-	if file := strings.TrimSpace(getenv("GAIA_CONFIG_FILE")); file != "" {
-		return file
+	return ConfigPathFromLookup(gaiahome.LookupFromGetenv(getenv), homeDir)
+}
+
+// ConfigPathFromLookup is ConfigPathFrom with a presence-aware env lookup so
+// set-to-empty variables expand rather than remaining literal.
+func ConfigPathFromLookup(lookup func(string) (string, bool), homeDir func() (string, error)) string {
+	if lookup != nil {
+		if raw, ok := lookup("GAIA_CONFIG_FILE"); ok {
+			if file := strings.TrimSpace(raw); file != "" {
+				return file
+			}
+		}
 	}
-	dir := ConfigDirFrom(getenv, homeDir)
+	dir := ConfigDirFromLookup(lookup, homeDir)
 	if dir == "" {
 		return ""
 	}
@@ -86,11 +108,23 @@ func ConfigPathFrom(getenv func(string) string, homeDir func() (string, error)) 
 // GAIA_HOME, then ~/.gaia, expanding them as Python does. "" when no home
 // directory resolves.
 func ConfigDirFrom(getenv func(string) string, homeDir func() (string, error)) string {
-	if dir := strings.TrimSpace(getenv("GAIA_CONFIG_DIR")); dir != "" {
-		return gaiahome.ExpandUser(dir, homeDir)
-	}
-	if dir := strings.TrimSpace(getenv("GAIA_HOME")); dir != "" {
-		return gaiahome.ExpandPathWith(dir, gaiahome.LookupFromGetenv(getenv), homeDir)
+	return ConfigDirFromLookup(gaiahome.LookupFromGetenv(getenv), homeDir)
+}
+
+// ConfigDirFromLookup is ConfigDirFrom with a presence-aware env lookup so
+// set-to-empty variables expand rather than remaining literal.
+func ConfigDirFromLookup(lookup func(string) (string, bool), homeDir func() (string, error)) string {
+	if lookup != nil {
+		if raw, ok := lookup("GAIA_CONFIG_DIR"); ok {
+			if dir := strings.TrimSpace(raw); dir != "" {
+				return gaiahome.ExpandUser(dir, homeDir)
+			}
+		}
+		if raw, ok := lookup("GAIA_HOME"); ok {
+			if dir := strings.TrimSpace(raw); dir != "" {
+				return gaiahome.ExpandPathWith(dir, lookup, homeDir)
+			}
+		}
 	}
 	home, err := homeDir()
 	if err != nil || home == "" {
@@ -102,7 +136,7 @@ func ConfigDirFrom(getenv func(string) string, homeDir func() (string, error)) s
 // ReadChoice reads the saved setting. A missing file is not an error; an
 // unreadable or invalid one is, because Python refuses it too.
 func ReadChoice() (Choice, error) {
-	path := ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	path := ConfigPath()
 	if path == "" {
 		return Choice{}, nil
 	}

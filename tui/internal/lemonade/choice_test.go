@@ -542,3 +542,54 @@ func TestConfigDirExpandsLikePython(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigDirFromLookupDistinguishesEmptyFromUnset(t *testing.T) {
+	home := filepath.Join("fake", "home")
+	homeDir := func() (string, error) { return home, nil }
+	env := map[string]string{
+		"GAIA_HOME": "~/$EMPTY/g",
+		"EMPTY":     "",
+	}
+	lookup := func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	}
+	wantEmpty := filepath.Join(home, "g")
+	if got := ConfigDirFromLookup(lookup, homeDir); filepath.Clean(got) != wantEmpty {
+		t.Errorf("empty-defined var: ConfigDirFromLookup = %q, want %q", got, wantEmpty)
+	}
+	if got := ConfigPathFromLookup(lookup, homeDir); filepath.Clean(got) != filepath.Join(wantEmpty, "config.json") {
+		t.Errorf("empty-defined var: ConfigPathFromLookup = %q, want %q", got, filepath.Join(wantEmpty, "config.json"))
+	}
+
+	env["GAIA_HOME"] = "~/$UNSET_VAR/g"
+	wantUnset := filepath.Join(home, "$UNSET_VAR", "g")
+	if got := ConfigDirFromLookup(lookup, homeDir); filepath.Clean(got) != wantUnset {
+		t.Errorf("unset var: ConfigDirFromLookup = %q, want %q", got, wantUnset)
+	}
+}
+
+func TestConfigPathAndDirPreserveEmptyEnvInProcess(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	t.Setenv("GAIA_CONFIG_FILE", "")
+	t.Setenv("GAIA_CONFIG_DIR", "")
+	t.Setenv("GAIA_EMPTY_9099", "")
+	t.Setenv("GAIA_HOME", "~/$GAIA_EMPTY_9099/cfg")
+
+	wantDir := filepath.Join(userHome, "cfg")
+	if got := ConfigDir(); filepath.Clean(got) != wantDir {
+		t.Errorf("ConfigDir() with empty env var = %q, want %q", got, wantDir)
+	}
+	if got := ConfigPath(); filepath.Clean(got) != filepath.Join(wantDir, "config.json") {
+		t.Errorf("ConfigPath() with empty env var = %q, want %q", got, filepath.Join(wantDir, "config.json"))
+	}
+
+	t.Setenv("GAIA_HOME", "~/$GAIA_UNSET_9099/cfg")
+	wantUnset := filepath.Join(userHome, "$GAIA_UNSET_9099", "cfg")
+	if got := ConfigDir(); filepath.Clean(got) != wantUnset {
+		t.Errorf("ConfigDir() with unset env var = %q, want %q", got, wantUnset)
+	}
+}

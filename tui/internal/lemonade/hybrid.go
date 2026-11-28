@@ -100,7 +100,7 @@ func HybridLocalOnlyRefusal() error {
 // HybridSettings.load applies: empty is the default, and the classifier is the
 // cheap model unless set. A malformed value is an error, as it is in Python.
 func ReadHybridModels() (HybridModels, error) {
-	path := ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	path := ConfigPath()
 	if path == "" {
 		return resolveHybrid(nil, "")
 	}
