@@ -154,6 +154,7 @@ void GaiaAgent::registerTools() {
         skillToolsRegistered_ = true;
     }
     if (memory_) memory_->registerTools(toolRegistry());
+    registerLoopControlTools();
     // The model means the script's own $; the shell would blank it and the script would still exit 0.
     toolRegistry().setArgRewrite([this](const ToolInfo& tool, json& args) {
         if (tool.name != "bash_execute" || !args.is_object() || !args.contains("command") ||
@@ -362,6 +363,74 @@ void GaiaAgent::registerTools() {
                    : std::function<std::string(const std::string&)>()));
         }
     }
+}
+
+void GaiaAgent::registerLoopControlTools() {
+    ToolInfo info;
+    info.name = "set_loop_state";
+    info.description =
+        "Signal the autonomous background goal loop what to do next. Call this when you have finished "
+        "working on a goal, need to check back later, or need to pause. Only effective inside the "
+        "background goal loop (safe no-op in interactive chat).";
+    info.policy = ToolPolicy::ALLOW;
+    info.parameters = {
+        {"state",
+         ToolParamType::STRING,
+         true,
+         "\"idle\" (nothing more to do right now), \"scheduled\" (wake up in wake_in_seconds seconds), "
+         "or \"paused\" (stop the autonomous loop until the user restarts it).",
+         json{{"type", "string"}, {"enum", json::array({"idle", "scheduled", "paused"})}}},
+        {"reason",
+         ToolParamType::STRING,
+         false,
+         "Human-readable explanation shown in the activity log and goal progress notes."},
+        {"wake_in_seconds",
+         ToolParamType::INTEGER,
+         false,
+         "Seconds until next wakeup when state is \"scheduled\" (clamped to 30..86400)."},
+        {"goal_outcome",
+         ToolParamType::STRING,
+         false,
+         "\"done\" if the goal is achieved, \"failed\" if it cannot be done (explain why in reason), "
+         "or \"\" if unfinished.",
+         json{{"type", "string"}, {"enum", json::array({"", "done", "failed"})}}},
+    };
+    info.callback = [](const json& args) -> json {
+        const std::string state = args.value("state", "");
+        if (state != "idle" && state != "scheduled" && state != "paused") {
+            return json{{"status", "error"},
+                        {"error", "Invalid state '" + state +
+                                      "'. Must be one of: ['idle', 'paused', 'scheduled']"}};
+        }
+        const std::string goalOutcome = args.value("goal_outcome", "");
+        if (goalOutcome != "" && goalOutcome != "done" && goalOutcome != "failed") {
+            return json{{"status", "error"},
+                        {"error", "Invalid goal_outcome '" + goalOutcome +
+                                      "'. Must be one of: ['', 'done', 'failed']"}};
+        }
+        const std::string reason = args.value("reason", "");
+        int64_t wakeInSeconds = 0;
+        if (state == "scheduled") {
+            const int64_t rawWake =
+                args.contains("wake_in_seconds") ? args["wake_in_seconds"].get<int64_t>() : 0;
+            wakeInSeconds = std::clamp<int64_t>(rawWake, 30, 86400);
+        }
+
+        std::string msg = "Loop state set to '" + state + "'.";
+        if (!goalOutcome.empty()) msg += " Goal marked " + goalOutcome + ".";
+        if (!reason.empty()) msg += " Reason: " + reason;
+        if (state == "scheduled") msg += " Next wakeup in " + std::to_string(wakeInSeconds) + "s.";
+
+        return json{
+            {"status", "ok"},
+            {"state", state},
+            {"reason", reason},
+            {"wake_in_seconds", wakeInSeconds},
+            {"goal_outcome", goalOutcome},
+            {"message", msg},
+        };
+    };
+    toolRegistry().registerTool(std::move(info));
 }
 
 std::string GaiaAgent::returnShellInside(const Workspace& ws, ShellSession& session) {

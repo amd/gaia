@@ -275,6 +275,7 @@ private:
     std::unique_ptr<DocumentIndex> code_;
 
     void registerCodeTools(std::shared_ptr<const Workspace> ws);
+    void registerLoopControlTools();
     std::unique_ptr<MemoryStore> memory_;
     std::unique_ptr<LemonadeClient> visionClient_;
 

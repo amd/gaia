@@ -3143,3 +3143,80 @@ TEST(GaiaAgentTest, NewlyInstalledSkillIsDiscoveredOnTheNextTurn) {
     EXPECT_EQ(loaded.value("status", ""), "success") << loaded.dump();
     EXPECT_NE(loaded.value("instructions", "").find("FRESH_OK"), std::string::npos) << loaded.dump();
 }
+
+TEST(GaiaAgentTest, SetLoopStateRegistersSchemaAndHandlesTransitionsAndErrors) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+
+    const ToolInfo* info = agent.tools().findTool("set_loop_state");
+    ASSERT_NE(info, nullptr);
+    EXPECT_EQ(info->policy, ToolPolicy::ALLOW);
+    EXPECT_TRUE(agent.tools().isEnabled("set_loop_state"));
+
+    const json schemas = agent.tools().buildOpenAiToolSchemas();
+    json fnSchema;
+    for (const auto& entry : schemas) {
+        if (entry.contains("function") && entry["function"].value("name", "") == "set_loop_state") {
+            fnSchema = entry["function"];
+            break;
+        }
+    }
+    ASSERT_TRUE(fnSchema.is_object()) << "set_loop_state missing from OpenAI tool schemas";
+    const json& params = fnSchema["parameters"];
+    EXPECT_EQ(params["required"], json::array({"state"}));
+    EXPECT_EQ(params["properties"]["state"]["enum"], json::array({"idle", "scheduled", "paused"}));
+    EXPECT_EQ(params["properties"]["goal_outcome"]["enum"], json::array({"", "done", "failed"}));
+    EXPECT_EQ(params["properties"]["wake_in_seconds"]["type"], "integer");
+    EXPECT_EQ(params["properties"]["reason"]["type"], "string");
+
+    json done = agent.toolRegistry().executeTool(
+        "set_loop_state",
+        {{"state", "idle"}, {"goal_outcome", "done"}, {"reason", "Computed 14 * 12 = 168"}});
+    EXPECT_EQ(done["status"], "ok") << done.dump();
+    EXPECT_EQ(done["state"], "idle");
+    EXPECT_EQ(done["goal_outcome"], "done");
+    EXPECT_EQ(done["reason"], "Computed 14 * 12 = 168");
+    EXPECT_EQ(done["wake_in_seconds"], 0);
+    EXPECT_EQ(done["message"], "Loop state set to 'idle'. Goal marked done. Reason: Computed 14 * 12 = 168");
+
+    json failed = agent.toolRegistry().executeTool(
+        "set_loop_state",
+        {{"state", "idle"}, {"goal_outcome", "failed"}, {"reason", "Missing credentials"}});
+    EXPECT_EQ(failed["status"], "ok") << failed.dump();
+    EXPECT_EQ(failed["goal_outcome"], "failed");
+    EXPECT_NE(failed["message"].get<std::string>().find("Goal marked failed."), std::string::npos);
+
+    json scheduledLow = agent.toolRegistry().executeTool(
+        "set_loop_state",
+        {{"state", "scheduled"}, {"wake_in_seconds", 5}, {"reason", "Waiting for build"}});
+    EXPECT_EQ(scheduledLow["status"], "ok") << scheduledLow.dump();
+    EXPECT_EQ(scheduledLow["state"], "scheduled");
+    EXPECT_EQ(scheduledLow["wake_in_seconds"], 30);
+    EXPECT_NE(scheduledLow["message"].get<std::string>().find("Next wakeup in 30s."), std::string::npos);
+
+    json scheduledHigh = agent.toolRegistry().executeTool(
+        "set_loop_state",
+        {{"state", "scheduled"}, {"wake_in_seconds", 200000}});
+    EXPECT_EQ(scheduledHigh["status"], "ok") << scheduledHigh.dump();
+    EXPECT_EQ(scheduledHigh["wake_in_seconds"], 86400);
+
+    json paused = agent.toolRegistry().executeTool(
+        "set_loop_state", {{"state", "paused"}, {"reason", "Need user decision"}});
+    EXPECT_EQ(paused["status"], "ok") << paused.dump();
+    EXPECT_EQ(paused["state"], "paused");
+    EXPECT_EQ(paused["wake_in_seconds"], 0);
+
+    json badState = agent.toolRegistry().executeTool("set_loop_state", {{"state", "completed"}});
+    EXPECT_EQ(badState["status"], "error") << badState.dump();
+    EXPECT_NE(badState["error"].get<std::string>().find("Invalid state 'completed'"), std::string::npos);
+
+    json badOutcome = agent.toolRegistry().executeTool(
+        "set_loop_state", {{"state", "idle"}, {"goal_outcome", "completed"}});
+    EXPECT_EQ(badOutcome["status"], "error") << badOutcome.dump();
+    EXPECT_NE(badOutcome["error"].get<std::string>().find("Invalid goal_outcome 'completed'"), std::string::npos);
+
+    json missingState = agent.toolRegistry().executeTool("set_loop_state", json::object());
+    EXPECT_EQ(missingState["status"], "error") << missingState.dump();
+    EXPECT_NE(missingState["error"].get<std::string>().find("state"), std::string::npos);
+}

@@ -29,6 +29,7 @@
     "recall",
     "remember",
     "search_code",
+    "set_loop_state",
     "take_screenshot",
     "transcribe_audio",
     "update_memory",

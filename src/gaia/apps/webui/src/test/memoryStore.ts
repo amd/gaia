@@ -13,12 +13,12 @@ export const PYTHON_MEMORY_STORE: MemoryStore = {
     },
 };
 
-/** The same answer with gaiacpp selected: its store keeps the text of a memory and little else. */
+/** The same answer with gaiacpp selected: goals are shared via goals.db, while memory-cpp.db keeps text only. */
 export const NATIVE_MEMORY_STORE: MemoryStore = {
     agent: 'gaiacpp',
     other_available: true,
     supports: {
         due_dates: false, sources: false, sensitive_toggle: false, recategorize: false,
-        goals: false, profile: false, advanced: false,
+        goals: true, profile: false, advanced: false,
     },
 };

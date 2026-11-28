@@ -35,7 +35,7 @@ const PYTHON_ONLY = [
     'getMemoryActivity', 'getEntities', 'getToolSummary', 'getMemoryConversations', 'searchMemoryConversations',
     'getConversationDetail', 'getUpcomingItems', 'getEmbeddingCoverage', 'consolidateSessions', 'rebuildEmbeddings',
     'reconcileMemory', 'rebuildFts', 'refreshSystemContext', 'openDiscoveryStream', 'openInferenceStream',
-    'commitDiscovery', 'commitInference', 'clearAllMemory', 'reinitializeMemory', 'listGoals', 'getGoalStats',
+    'commitDiscovery', 'commitInference', 'clearAllMemory', 'reinitializeMemory',
 ] as const;
 
 beforeEach(() => {
@@ -102,12 +102,14 @@ describe('Memory page with gaiacpp selected', () => {
         expect(screen.queryByLabelText('When to remind you')).not.toBeInTheDocument();
     });
 
-    it('replaces Goals, Profile setup and Advanced with one line each, and asks the store for none of them', async () => {
+    it('shows full Goals management on Fast and light while replacing Profile setup and Advanced with one line each', async () => {
         await openNative();
 
         fireEvent.click(screen.getByRole('tab', { name: /Goals/ }));
-        expect(screen.getByText("Goals work on Full-featured's memory and aren't available while Fast and light is your agent.")).toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: /New goal/i })).not.toBeInTheDocument();
+        expect(screen.queryByText("Goals work on Full-featured's memory and aren't available while Fast and light is your agent.")).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /New goal/i })).toBeInTheDocument();
+        expect(mockedApi.listGoals).toHaveBeenCalled();
+        expect(mockedApi.getGoalStats).toHaveBeenCalled();
 
         fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
         expect(screen.getByText("Profile setup works on Full-featured's memory and isn't available while Fast and light is your agent.")).toBeInTheDocument();
@@ -202,7 +204,7 @@ describe('Memory page with the Python agent selected', () => {
 
         await waitFor(() => expect(banner()).toHaveTextContent('Showing what Fast and light remembers.'));
         await screen.findByText("Fast and light doesn't record where a memory came from.");
-        expect(mockedApi.listGoals).toHaveBeenCalledTimes(1);
+        expect(mockedApi.listGoals).toHaveBeenCalledTimes(2);
     });
 });
 

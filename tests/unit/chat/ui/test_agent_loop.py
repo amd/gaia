@@ -151,8 +151,14 @@ class TestRunStepModeGate:
         directive = await self._run(None, tmp_path)
         assert directive.directive == "idle"
 
-    async def test_gaiacpp_pauses_without_running_goals(self, tmp_path, monkeypatch):
+    async def test_gaiacpp_runs_queued_goals_and_marks_completed(
+        self, tmp_path, monkeypatch
+    ):
         import gaia.config as config_mod
+        import gaia.ui._chat_helpers as helpers
+        from gaia.agents.base.goal_store import GoalStore
+        from gaia.ui.database import ChatDatabase
+        from gaia.ui.sidecar.relay import _dispatch_one
 
         gaia_dir = tmp_path / ".gaia"
         initialized = gaia_dir / "chat" / "initialized"
@@ -161,24 +167,73 @@ class TestRunStepModeGate:
         config_file = gaia_dir / "config.json"
         config_file.write_text('{"flagship_agent": "gaiacpp"}\n', encoding="utf-8")
         monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
-        db = FakeDB({"agent_mode": "goal_driven"}, sessions=[])
-        loop = self._make_loop(db)
-        with (
-            patch.dict(os.environ, {"GAIA_HOME": str(gaia_dir)}),
-            patch.object(
-                AgentLoop, "_get_actionable_goals", return_value=[{"id": "g1"}]
-            ) as get_goals,
-            patch.object(AgentLoop, "_execute_tick") as exec_tick,
-        ):
-            directive = await loop._run_step(
-                agent_loop_mod.AgentTrigger("idle_tick", None)
+        # Even when gaiapy is importable in-process (is_sidecar=False), gaiacpp must relay.
+        monkeypatch.setattr(
+            helpers,
+            "_agent_registry",
+            SimpleNamespace(get=lambda _id: SimpleNamespace(is_sidecar=False)),
+        )
+
+        relayed = []
+
+        def fake_relay(handler, prompt, **kwargs):
+            relayed.append((prompt, kwargs["agent_type"]))
+            _dispatch_one(
+                handler,
+                {
+                    "type": "tool_call",
+                    "tool": "set_loop_state",
+                    "args": {
+                        "state": "idle",
+                        "goal_outcome": "done",
+                        "reason": "14 * 12 = 168",
+                    },
+                },
             )
-        assert directive.directive == "paused"
-        assert directive.reason == "flagship_agent=gaiacpp"
-        get_goals.assert_not_called()
-        exec_tick.assert_not_called()
-        assert db._sessions == []
-        assert loop._calls_this_hour == 0
+            _dispatch_one(
+                handler,
+                {
+                    "type": "tool_result",
+                    "tool": "set_loop_state",
+                    "data": {
+                        "status": "ok",
+                        "state": "idle",
+                        "goal_outcome": "done",
+                        "reason": "14 * 12 = 168",
+                        "wake_in_seconds": 0,
+                        "message": "Loop state set to 'idle'. Goal marked done. Reason: 14 * 12 = 168",
+                    },
+                },
+            )
+            return "14 * 12 = 168."
+
+        monkeypatch.setattr(helpers, "relay_one_prompt", fake_relay)
+
+        db = ChatDatabase(":memory:")
+        try:
+            loop = self._make_loop(db)
+            with patch.dict(os.environ, {"GAIA_HOME": str(gaia_dir)}):
+                goal = GoalStore().create_goal(
+                    "Compute 14 * 12",
+                    "Compute 14 * 12 and mark this goal completed",
+                    source="user",
+                )
+                directive = await loop._run_step(
+                    agent_loop_mod.AgentTrigger("idle_tick", None)
+                )
+                settled = GoalStore().get_goal(goal.id)
+        finally:
+            db.close()
+
+        assert directive.directive == "idle"
+        assert directive.reason == "14 * 12 = 168"
+        assert len(relayed) == 1
+        assert relayed[0][1] == "gaia"
+        assert "Compute 14 * 12" in relayed[0][0]
+        assert loop._calls_this_hour == 1
+        assert settled is not None
+        assert settled.status == "completed"
+        assert "14 * 12 = 168" in (settled.progress_notes or "")
 
 
 class TestHourlyBudgetOnlySpentOnRealTicks:
