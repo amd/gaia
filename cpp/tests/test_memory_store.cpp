@@ -3,11 +3,18 @@
 
 #include <gtest/gtest.h>
 
+#include <httplib.h>
+#include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
 #include <gaia/tool_registry.h>
 
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <random>
+#include <thread>
 
 using namespace gaia;
 namespace fs = std::filesystem;
@@ -180,4 +187,249 @@ TEST(MemoryStoreTest, AListingReachesPastAHundredButTheModelsRecallDoesNot) {
     m.registerTools(reg);
     const json q = reg.executeTool("recall", json{{"query", "milestone"}, {"limit", 500}});
     EXPECT_EQ(q["count"], 100) << q.dump().substr(0, 300);
+}
+
+namespace {
+
+std::string lowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+// Semantic topic vectors: vehicle terms map near [1,0,0], food near [0,1,0], work near [0,0,1].
+std::vector<float> topicVector(const std::string& text) {
+    const std::string s = lowerAscii(text);
+    float v = 0.0f, f = 0.0f, w = 0.0f;
+    for (const char* k : {"car", "automobile", "vehicle", "sedan", "garage", "tire", "motor"}) {
+        if (s.find(k) != std::string::npos) v += 1.0f;
+    }
+    for (const char* k : {"pizza", "pasta", "bread", "dinner", "cuisine", "italian"}) {
+        if (s.find(k) != std::string::npos) f += 1.0f;
+    }
+    for (const char* k : {"sprint", "standup", "release", "deploy", "server", "gateway"}) {
+        if (s.find(k) != std::string::npos) w += 1.0f;
+    }
+    if (v == 0.0f && f == 0.0f && w == 0.0f) return {0.0f, 0.0f, 0.0f, 1.0f};
+    return {v, f, w, 0.0f};
+}
+
+}  // namespace
+
+TEST(MemoryStoreTest, SemanticRecallOverLemonadeEmbeddingsFindsMeaningWithoutWordOverlap) {
+    httplib::Server srv;
+    std::atomic<int> calls{0};
+    std::string seenAuth;
+    std::string seenModel;
+    srv.Post("/api/v1/embeddings", [&](const httplib::Request& req, httplib::Response& res) {
+        ++calls;
+        seenAuth = req.get_header_value("Authorization");
+        const json body = json::parse(req.body);
+        seenModel = body.value("model", "");
+        json data = json::array();
+        const auto& inputs = body.at("input");
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            data.push_back({{"index", i}, {"embedding", topicVector(inputs[i].get<std::string>())}});
+        }
+        res.set_content(json{{"data", data}}.dump(), "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread serverThread([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    LemonadeClient client("http://127.0.0.1:" + std::to_string(port) + "/api/v1");
+    client.setApiKey("test-embed-key");
+    EmbedFunction embed = [&client](const std::vector<std::string>& texts) {
+        return client.embeddings("user.embeddinggemma-300m-GGUF", texts);
+    };
+
+    MemoryStore m(":memory:", embed, "user.embeddinggemma-300m-GGUF");
+    EXPECT_TRUE(m.usesEmbeddings());
+    const std::string carId = m.remember("My car is parked in the garage");
+    m.remember("I love pepperoni pizza for dinner");
+
+    // Zero lexical overlap between "automobile" and "car"/"garage": cosine similarity finds it.
+    const auto hits = m.recall("automobile");
+    ASSERT_EQ(hits.size(), 1u);
+    EXPECT_EQ(hits[0].id, carId);
+    EXPECT_EQ(seenAuth, "Bearer test-embed-key");
+    EXPECT_EQ(seenModel, "user.embeddinggemma-300m-GGUF");
+    EXPECT_EQ(calls.load(), 3);
+
+    ToolRegistry reg;
+    m.registerTools(reg);
+    const json toolOut = reg.executeTool("recall", json{{"query", "automobile"}});
+    ASSERT_EQ(toolOut["status"], "success");
+    ASSERT_EQ(toolOut["count"], 1);
+    EXPECT_EQ(toolOut["memories"][0]["id"], carId);
+    EXPECT_NE(toolOut["retrieval"].get<std::string>().find("hybrid"), std::string::npos);
+
+    srv.stop();
+    serverThread.join();
+}
+
+TEST(MemoryStoreTest, RrfHybridRankingCombinesLexicalAndVectorSignals) {
+    EmbedFunction embed = [](const std::vector<std::string>& texts) {
+        std::vector<std::vector<float>> out;
+        for (const auto& t : texts) {
+            if (t.find("both-signal") != std::string::npos) out.push_back({0.95f, 0.31f, 0.0f});
+            else if (t.find("vector-only") != std::string::npos) out.push_back({1.0f, 0.0f, 0.0f});
+            else if (t.find("keyword-only") != std::string::npos) out.push_back({0.0f, 1.0f, 0.0f});
+            else out.push_back({1.0f, 0.0f, 0.0f});  // query vector
+        }
+        return out;
+    };
+    MemoryStore m(":memory:", embed, "test-embed");
+    const std::string vecOnly = m.remember("vector-only semantic match for vehicle");
+    const std::string kwOnly = m.remember("keyword-only cobalt blueprint cobalt");
+    const std::string both = m.remember("both-signal cobalt motor");
+
+    // "cobalt" hits BM25 for kwOnly and both; vector hits vecOnly (#1) and both (#2).
+    // RRF boosts "both" above single-signal matches, while still retrieving vector-only and keyword-only.
+    const auto hits = m.recall("cobalt", "", 5);
+    ASSERT_EQ(hits.size(), 3u);
+    EXPECT_EQ(hits[0].id, both) << "entry matching both BM25 and vector must rank first under RRF";
+    EXPECT_EQ(hits[1].id, vecOnly) << "vector-only match beats keyword-only when vector RRF weight is 0.6";
+    EXPECT_EQ(hits[2].id, kwOnly) << "keyword-only match is still retained";
+}
+
+TEST(MemoryStoreTest, SchemaMigrationV1ToV2PreservesExistingRowsAndBackfillsEmbeddings) {
+    std::mt19937_64 rng(std::random_device{}());
+    const fs::path dbPath = fs::temp_directory_path() / ("gaia-mem-mig-" + std::to_string(rng()) + ".db");
+    {
+        // Build a raw v1 schema (no embedding column, no meta table).
+        Database raw(dbPath.string());
+        raw.migrate({Migration::fromSql(1, "knowledge + fts", R"(
+CREATE TABLE knowledge (
+    id TEXT PRIMARY KEY, category TEXT NOT NULL, content TEXT NOT NULL,
+    domain TEXT, entity TEXT, sensitive INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE VIRTUAL TABLE knowledge_fts USING fts5(id UNINDEXED, content, domain, category,
+    tokenize='porter unicode61');
+)")});
+        raw.run("INSERT INTO knowledge VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "m-legacy", "fact", "My vehicle needs new tires", "", "", 0,
+                "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z");
+        raw.run("INSERT INTO knowledge_fts (id, content, domain, category) VALUES (?, ?, ?, ?)",
+                "m-legacy", "My vehicle needs new tires", "", "fact");
+    }
+
+    std::atomic<int> embedCalls{0};
+    EmbedFunction embed = [&embedCalls](const std::vector<std::string>& texts) {
+        ++embedCalls;
+        std::vector<std::vector<float>> out;
+        for (const auto& t : texts) out.push_back(topicVector(t));
+        return out;
+    };
+    {
+        MemoryStore m(dbPath.string(), embed, "embed-v1");
+        EXPECT_EQ(m.count(), 1u) << "v1 row must survive migration";
+        const auto hits = m.recall("car");
+        ASSERT_EQ(hits.size(), 1u);
+        EXPECT_EQ(hits[0].id, "m-legacy");
+        EXPECT_EQ(embedCalls.load(), 2) << "1 backfill batch + 1 query embed";
+    }
+    {
+        embedCalls = 0;
+        MemoryStore m(dbPath.string(), embed, "embed-v1");
+        const auto hits = m.recall("car");
+        ASSERT_EQ(hits.size(), 1u);
+        EXPECT_EQ(embedCalls.load(), 1) << "persisted BLOB avoids re-embedding on reopen";
+    }
+    {
+        embedCalls = 0;
+        MemoryStore m(dbPath.string(), embed, "embed-v2");
+        const auto hits = m.recall("car");
+        ASSERT_EQ(hits.size(), 1u);
+        EXPECT_EQ(embedCalls.load(), 2) << "changing embedder model clears stale vectors and re-embeds";
+    }
+
+    std::error_code ec;
+    fs::remove(dbPath, ec);
+}
+
+TEST(MemoryStoreTest, EmbeddingHttp500AndBadJsonFailLoudlyWithoutSilentFallback) {
+    httplib::Server srv;
+    std::atomic<int> mode{0};  // 0 = ok, 1 = HTTP 500, 2 = malformed JSON
+    srv.Post("/api/v1/embeddings", [&](const httplib::Request& req, httplib::Response& res) {
+        const int m = mode.load();
+        if (m == 1) {
+            res.status = 500;
+            res.set_content(R"({"error":"embedder crashed"})", "application/json");
+            return;
+        }
+        if (m == 2) {
+            res.status = 200;
+            res.set_content("not valid json {{{", "application/json");
+            return;
+        }
+        const json body = json::parse(req.body);
+        json data = json::array();
+        for (size_t i = 0; i < body.at("input").size(); ++i) {
+            data.push_back({{"index", i}, {"embedding", topicVector(body.at("input")[i].get<std::string>())}});
+        }
+        res.set_content(json{{"data", data}}.dump(), "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread serverThread([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    LemonadeClient client("http://127.0.0.1:" + std::to_string(port) + "/api/v1");
+    EmbedFunction embed = [&client](const std::vector<std::string>& texts) {
+        return client.embeddings("embed-model", texts);
+    };
+
+    MemoryStore m(":memory:", embed, "embed-model");
+    mode = 1;
+    EXPECT_THROW(m.remember("My car is green"), HttpError);
+    EXPECT_EQ(m.count(), 0u) << "failed embedding must not silently persist unembedded row";
+
+    mode = 2;
+    EXPECT_THROW(m.remember("My car is green"), std::exception);
+    EXPECT_EQ(m.count(), 0u);
+
+    mode = 0;
+    const std::string id = m.remember("My car is green");
+    ASSERT_EQ(m.count(), 1u);
+
+    // HTTP 500 during recall must fail loudly (no silent keyword fallback).
+    mode = 1;
+    EXPECT_THROW(m.recall("car"), HttpError);
+    ToolRegistry reg;
+    m.registerTools(reg);
+    const json toolErr = reg.executeTool("recall", json{{"query", "car"}});
+    EXPECT_EQ(toolErr["status"], "error");
+    EXPECT_NE(toolErr.value("error", "").find("500"), std::string::npos) << toolErr.dump();
+
+    // HTTP 500 during update leaves old row intact.
+    EXPECT_THROW(m.update(id, "My car is yellow"), HttpError);
+    mode = 0;
+    const auto stillGreen = m.recall("green");
+    ASSERT_EQ(stillGreen.size(), 1u);
+    EXPECT_NE(stillGreen[0].content.find("green"), std::string::npos);
+
+    srv.stop();
+    serverThread.join();
+}
+
+TEST(MemoryStoreTest, SensitiveAndCategoryFiltersApplyToSemanticRecall) {
+    EmbedFunction embed = [](const std::vector<std::string>& texts) {
+        std::vector<std::vector<float>> out;
+        for (const auto& t : texts) out.push_back(topicVector(t));
+        return out;
+    };
+    MemoryStore m(":memory:", embed, "test-embed");
+    const std::string secretCar = m.remember("My car is a red sedan", "fact", "", "", true);
+    const std::string prefCar = m.remember("Prefers an electric vehicle", "preference", "", "", false);
+
+    const auto nonSensitive = m.recall("automobile", "", 10, false);
+    ASSERT_EQ(nonSensitive.size(), 1u);
+    EXPECT_EQ(nonSensitive[0].id, prefCar);
+
+    const auto withSensitive = m.recall("automobile", "", 10, true);
+    ASSERT_EQ(withSensitive.size(), 2u);
+
+    const auto factOnly = m.recall("automobile", "fact", 10, true);
+    ASSERT_EQ(factOnly.size(), 1u);
+    EXPECT_EQ(factOnly[0].id, secretCar);
 }

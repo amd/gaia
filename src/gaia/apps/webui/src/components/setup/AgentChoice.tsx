@@ -29,7 +29,6 @@ const OPTIONS: Option[] = [
 const DIFFERENCES: MessageKey[] = [
     'setup.agent.diff.memory',
     'setup.agent.diff.undo',
-    'setup.agent.diff.search',
     'setup.agent.diff.media',
     'setup.agent.diff.context',
 ];

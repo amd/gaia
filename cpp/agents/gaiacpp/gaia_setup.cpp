@@ -376,6 +376,44 @@ std::string resolveGaiaModel() {
     return kGaiaFallbackModel;
 }
 
+std::string resolveGaiaEmbeddingModel() {
+    const fs::path path = gaiaConfigFile();
+    const json cfg = readJsonObject(path);
+    const std::string dev = lower(stringSetting(cfg, "embedding_device", path));
+    if (dev.empty() || dev == "auto" || dev == "gpu") return kGaiaGpuEmbeddingModel;
+    if (dev == "npu") return kGaiaNpuEmbeddingModel;
+    throw std::runtime_error("GAIA's settings at " + path.u8string() +
+                             ": \"embedding_device\" must be auto, gpu or npu, got '" + dev +
+                             "'. Fix it with `gaia config set embedding_device auto`.");
+}
+
+std::string resolveServerEmbeddingModel(LemonadeClient& client, const std::string& wanted) {
+    if (wanted.empty() || !isLemonadeUrl(client.baseUrl())) return "";
+    auto stripUser = [](std::string id) {
+        id = lower(std::move(id));
+        if (id.rfind("user.", 0) == 0) id.erase(0, 5);
+        return id;
+    };
+    const std::string target = stripUser(wanted);
+    json catalog;
+    try {
+        catalog = client.listModels(true);
+    } catch (const HttpError&) {
+        return "";
+    } catch (const json::exception&) {
+        return "";
+    }
+    if (!catalog.is_object() || !catalog.contains("data") || !catalog["data"].is_array()) return "";
+    for (const auto& m : catalog["data"]) {
+        if (!m.is_object()) continue;
+        const std::string id = m.value("id", "");
+        if (id.empty() || stripUser(id) != target) continue;
+        const bool downloaded = !m.contains("downloaded") || m.value("downloaded", false) == true;
+        if (downloaded) return id;
+    }
+    return "";
+}
+
 std::string embeddedKeyFor(const GaiaServer& server, const std::string& url) {
     if (!server.runningPort || server.runningKey.empty()) return "";
     const std::string prefix = "http://";

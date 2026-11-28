@@ -38,11 +38,24 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
         skills_ = std::make_unique<SkillLibrary>();
         setSkillLoader(skills_.get());
     }
+    EmbedFunction embed;
+    if (!options_.embeddingModel.empty() && (options_.documents || options_.memory)) {
+        embedClient_ = std::make_unique<LemonadeClient>();
+        embedClient_->setAbortCheck([this] { return isCancelled(); });
+        // Follow the agent's endpoint and key as they are when the call is made.
+        embed = [this](const std::vector<std::string>& texts) {
+            const AgentConfig c = this->config();
+            std::lock_guard<std::mutex> lock(embedMu_);
+            embedClient_->setBaseUrl(c.baseUrl);
+            embedClient_->setApiKey(resolveApiKey(c));
+            return embedClient_->embeddings(options_.embeddingModel, texts);
+        };
+    }
     if (options_.memory) {
         const std::string memoryPath =
             options_.memoryPath.empty() ? MemoryStore::defaultPath() : options_.memoryPath;
         try {
-            memory_ = std::make_unique<MemoryStore>(memoryPath);
+            memory_ = std::make_unique<MemoryStore>(memoryPath, embed, options_.embeddingModel);
         } catch (const std::exception& e) {
             throw std::runtime_error("The memory store at " + memoryPath + " could not be opened: " + e.what() +
                                      "\nNothing was changed. Move that file aside to start a new memory, or run "
@@ -50,18 +63,6 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
         }
     }
     if (options_.documents) {
-        EmbedFunction embed;
-        if (!options_.embeddingModel.empty()) {
-            embedClient_ = std::make_unique<LemonadeClient>();
-            embedClient_->setAbortCheck([this] { return isCancelled(); });
-            // Follow the agent's endpoint and key as they are when the call is made.
-            embed = [this](const std::vector<std::string>& texts) {
-                const AgentConfig c = this->config();
-                embedClient_->setBaseUrl(c.baseUrl);
-                embedClient_->setApiKey(c.apiKey);
-                return embedClient_->embeddings(options_.embeddingModel, texts);
-            };
-        }
         docs_ = std::make_unique<DocumentIndex>(embed, options_.embeddingModel);
         // Code gets its own index so a document question never ranks source files.
         code_ = std::make_unique<DocumentIndex>(embed, options_.embeddingModel, ChunkingConfig{200, 40});

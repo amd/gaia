@@ -270,6 +270,7 @@ private:
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
     bool skillToolsRegistered_ = false;
+    mutable std::mutex embedMu_;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
     std::unique_ptr<DocumentIndex> code_;

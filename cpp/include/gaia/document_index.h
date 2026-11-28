@@ -31,10 +31,6 @@
 
 namespace gaia {
 
-/// Turns text into vectors; throws on failure. Typically wraps
-/// LemonadeClient::embeddings for the configured embedding model.
-using EmbedFunction = std::function<std::vector<std::vector<float>>(const std::vector<std::string>&)>;
-
 struct GAIA_API DocumentChunk {
     std::string file;
     int page = 0;  // 1-based; 0 when the format has no pages

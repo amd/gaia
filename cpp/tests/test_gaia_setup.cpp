@@ -229,6 +229,34 @@ TEST_F(GaiaSetup, BrokenConfigFailsLoudly) {
     EXPECT_THROW(resolveGaiaModel(), std::runtime_error);
 }
 
+TEST_F(GaiaSetup, EmbeddingModelFollowsConfigDeviceAndRejectsInvalidValues) {
+    EXPECT_EQ(resolveGaiaEmbeddingModel(), kGaiaGpuEmbeddingModel) << "no config.json defaults to GPU embedder";
+    writeConfig({{"embedding_device", "auto"}});
+    EXPECT_EQ(resolveGaiaEmbeddingModel(), kGaiaGpuEmbeddingModel);
+    writeConfig({{"embedding_device", "gpu"}});
+    EXPECT_EQ(resolveGaiaEmbeddingModel(), kGaiaGpuEmbeddingModel);
+    writeConfig({{"embedding_device", "npu"}});
+    EXPECT_EQ(resolveGaiaEmbeddingModel(), kGaiaNpuEmbeddingModel);
+    writeConfig({{"embedding_device", "tpu"}});
+    EXPECT_THROW(resolveGaiaEmbeddingModel(), std::runtime_error);
+    writeConfig({{"embedding_device", 42}});
+    EXPECT_THROW(resolveGaiaEmbeddingModel(), std::runtime_error);
+}
+
+TEST_F(GaiaSetup, ServerEmbeddingModelMatchesWithOrWithoutUserPrefix) {
+    bench::MockLlmServer mock;
+    mock.setModelsList(R"({"data":[
+        {"id":"mock-model","downloaded":true},
+        {"id":"embeddinggemma-300m-GGUF","downloaded":true},
+        {"id":"embed-gemma-300m-FLM","downloaded":false}
+    ]})");
+    LemonadeClient client(mock.baseUrl());
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "user.embeddinggemma-300m-GGUF"), "embeddinggemma-300m-GGUF");
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "embed-gemma-300m-FLM"), "")
+        << "not-downloaded model must not be reported ready";
+    EXPECT_EQ(resolveServerEmbeddingModel(client, "missing-embedder"), "");
+}
+
 // ---- the download check, against a mock Lemonade --------------------------
 
 const char* kCatalog = R"({"data":[
