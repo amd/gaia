@@ -8,6 +8,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Running the program it just wrote counts as testing it.** An answer that
+  said "tested" was sent back unless a test runner had run, so on work with
+  no test suite the agent re-ran its program and the answer still ended with
+  "no test run is recorded". A successful run of a file written that turn,
+  after the write, now backs the claim — through wrappers like `timeout` or
+  `uv run`, and for a binary only when it was rebuilt after the last edit.
+  Syntax checks (`node --check`, `php -l`, `bash -n`) and a same-named file
+  elsewhere don't count.
 - **A turn that recovered from a cut-off reply is no longer reported as failed.**
   A reply that hit the output-token limit was asked to continue and the turn
   went on to answer, but the turn still ended with `status: failed`, and
