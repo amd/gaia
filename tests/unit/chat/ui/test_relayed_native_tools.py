@@ -399,3 +399,15 @@ def test_only_gaiacpps_search_code_is_read_as_the_code_index():
     )
     python_call = {"pattern": "TODO", "directory": "."}
     assert as_flagship_call("search_code", python_call) == ("search_code", python_call)
+
+
+def test_index_document_path_arg_is_mapped_to_file_path():
+    assert as_flagship_call("index_document", {"path": "/docs/report.pdf"}) == (
+        "index_document",
+        {"file_path": "/docs/report.pdf"},
+    )
+    python_call = {"file_path": "/docs/report.pdf"}
+    assert as_flagship_call("index_document", python_call) == (
+        "index_document",
+        python_call,
+    )
