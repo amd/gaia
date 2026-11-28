@@ -7636,11 +7636,11 @@
        "subject": "Holiday",
        "start": {
         "dateTime": "2030-01-12T00:00:00",
-        "timeZone": "EST5EDT"
+        "timeZone": "America/New_York"
        },
        "end": {
         "dateTime": "2030-01-13T00:00:00",
-        "timeZone": "EST5EDT"
+        "timeZone": "America/New_York"
        },
        "isAllDay": true
       },

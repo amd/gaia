@@ -6,7 +6,7 @@
 // Transport, and nothing reaches the network. The parity cases replay what
 // fixtures/calendar/make_calendar_tools_parity.py recorded from the Python skill:
 // each call's result, the approval prompt it raised, the card it showed and the
-// requests it sent. This computer's zone is EST5EDT throughout.
+// requests it sent. This computer's zone is America/New_York throughout.
 
 #include <gtest/gtest.h>
 
@@ -170,7 +170,7 @@ protected:
         setEnv("HOME", home.string());
 #endif
         savedZone = getEnvVar("TZ");
-        setZone("EST5EDT");
+        setZone("America/New_York");
         setEnv("GAIA_EVAL_MAILBOX", "");
         setEnv("GAIA_GOOGLE_CLIENT_ID", "");
         setEnv("GAIA_GOOGLE_CLIENT_SECRET", "");

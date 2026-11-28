@@ -11,7 +11,7 @@ test_calendar_tools.cpp replays the same answers through a fake Transport and
 expects the same. The tool schemas, and the time parsing the tools share, are
 recorded too.
 
-This computer's zone is EST5EDT for every case. Event dates are January 10 to
+This computer's zone is America/New_York for every case. Event dates are January 10 to
 15, 2030; nothing here reaches a real calendar.
 
 Run from the repo root:
@@ -31,7 +31,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[4]
 sys.path[:0] = [str(ROOT / "src")]
 
-os.environ["TZ"] = "EST5EDT"
+os.environ["TZ"] = "America/New_York"
 time.tzset()
 
 import httpx  # noqa: E402
@@ -47,7 +47,7 @@ from gaia.connectors import errors as connectors_errors  # noqa: E402
 from gaia.skills.manager import SkillManager  # noqa: E402
 from gaia.ui.sse_translation import render_calendar_summary  # noqa: E402
 
-tzlocal.get_localzone_name = lambda: "EST5EDT"
+tzlocal.get_localzone_name = lambda: "America/New_York"
 
 SKILL_DIR = ROOT / "hub" / "skills" / "calendar"
 TOOLS = [
