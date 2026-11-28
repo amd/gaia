@@ -81,7 +81,8 @@ jobs:
           cache-dependency-path: website/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+        run: npx -y npm@11 ci
 
       - name: Type-check (astro check)
         run: npx astro check

@@ -296,6 +296,9 @@ interface ChatState {
     /** Forget a failed download on the server, then clear it from the status. */
     dismissDownloadFailure: (modelName: string) => Promise<void>;
     setBackendConnected: (connected: boolean) => void;
+    /** A message got no start from GAIA in time; cleared once a status check answers. */
+    backendStalled: boolean;
+    setBackendStalled: (stalled: boolean) => void;
 
     // UI state
     /** What the user picked; `theme` is what is painted. */
@@ -682,6 +685,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         });
     },
     setBackendConnected: (connected) => set({ backendConnected: connected }),
+    backendStalled: false,
+    setBackendStalled: (stalled) => set({ backendStalled: stalled }),
 
     // UI
     themePreference: readThemePreference(),
