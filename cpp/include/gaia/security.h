@@ -93,6 +93,10 @@ GAIA_API std::string webFetchRefusal(const ToolInfo& tool, const json& args,
 /// Empty when neither is set. Every per-user default path starts here.
 GAIA_API std::string gaiaHome();
 
+/// Prompt on stderr / read stdin to confirm one tool call.
+/// When allowAlways is false, the "Always allow" option is omitted and never returned.
+GAIA_API ToolConfirmResult promptStdinConfirm(const std::string& toolName, bool allowAlways = true);
+
 /// Create a terminal-based confirm callback. Prompts on stderr, reads stdin.
 /// Auto-installed by Agent for interactive (non-silent) agents.
 GAIA_API ToolConfirmCallback makeStdinConfirmCallback();

@@ -196,9 +196,10 @@ Agent::Agent(const AgentConfig& config)
 
     // Auto-install terminal confirm callback for interactive agents
     if (!config_.silentMode) {
-        tools_.setConfirmCallback([this, ask = makeStdinConfirmCallback()](const std::string& tool, const json& args) {
+        tools_.setConfirmCallback([this](const std::string& tool, const json& /*args*/) {
             releaseNpu();
-            return ask(tool, args);
+            const ToolInfo* info = tools_.findTool(tool);
+            return promptStdinConfirm(tool, !info || info->allowAlways);
         });
     }
 

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <gaia/agent.h>
+#include <gaia/automation_store.h>
 #include <gaia/document_index.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
@@ -46,6 +47,8 @@ public:
         std::string embeddingModel;  // empty = keyword-only retrieval
         bool memory = true;          // remember / recall across sessions
         std::string memoryPath;      // empty = MemoryStore::defaultPath()
+        bool automations = true;     // scheduled reminders, summaries, alerts and triggers
+        std::string automationsPath; // empty = AutomationStore::defaultPath()
         bool vision = true;          // analyze_image
         std::string visionModel;     // empty = the agent's own model
         std::string transcribeModel; // empty = no transcribe_audio
@@ -276,6 +279,7 @@ private:
 
     void registerCodeTools(std::shared_ptr<const Workspace> ws);
     std::unique_ptr<MemoryStore> memory_;
+    std::unique_ptr<AutomationStore> automations_;
     std::unique_ptr<LemonadeClient> visionClient_;
 
     json delegateTasks(const json& args);

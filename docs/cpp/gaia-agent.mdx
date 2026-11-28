@@ -179,6 +179,10 @@ Before a headless or interactive run, `gaiacpp` checks Lemonade's catalog for th
 
 `remember`, `recall`, `update_memory` and `forget` keep facts, preferences and notes across sessions in `$GAIA_HOME/memory-cpp.db` (`~/.gaia/memory-cpp.db` by default). Stored preferences are added to the prompt; other facts are found with `recall`, which searches by keyword. A fact marked sensitive stays out of a plain listing, but a search for it finds it. Text that looks like a credential is refused: API keys and tokens, a password or PIN stated outright, card numbers and security codes, and US social security numbers. The refusal tells the model that a new chat won't know the secret and that it is still in this chat. The check is a backstop, not a guarantee. `forget` asks for confirmation. `--no-memory` turns memory off. The file is separate from the Python agent's memory database.
 
+### Automations
+
+`list_automations`, `create_automation`, `edit_automation`, `pause_automation`, `resume_automation` and `remove_automation` manage scheduled reminders, summaries, alerts and triggers in `$GAIA_HOME/automations/automations.json` (`~/.gaia/automations/automations.json` by default). This is the same store that the Python flagship, the GAIA daemon scheduler and **Settings > Automations** share, so an automation created from `gaiacpp` chat appears immediately in the app and runs on schedule. Listing runs without confirmation; every change asks for one-time approval and never offers a standing grant.
+
 ### Skills
 
 `gaiacpp` reads the same `SKILL.md` skills as the Python agent. It lists installed skills in its prompt by name and description, and loads a skill's instructions with `load_skill` when the request calls for it. It looks in these folders, and an earlier folder's skill wins over a same-named one later (`list_skills` reports the shadowed copy):

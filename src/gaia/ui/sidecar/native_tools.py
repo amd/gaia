@@ -46,7 +46,24 @@ NATIVE_TOOL_LABELS: Dict[str, str] = {
     "get_mcp_prompt": "Reading a connector's prompt",
     "list_mcp_resources": "Listing a connector's resources",
     "read_mcp_resource": "Reading a connector's resource",
+    "list_automations": "Listing automations",
+    "create_automation": "Creating an automation",
+    "edit_automation": "Editing an automation",
+    "pause_automation": "Pausing an automation",
+    "resume_automation": "Resuming an automation",
+    "remove_automation": "Removing an automation",
 }
+
+#: gaiacpp-only tools that write or modify durable state (no Python @tool twin).
+NATIVE_MUTATING_TOOLS = frozenset(
+    {
+        "create_automation",
+        "edit_automation",
+        "pause_automation",
+        "resume_automation",
+        "remove_automation",
+    }
+)
 
 #: Tools both agents name the same way, whose gaiacpp argument names differ.
 _SAME_NAME_ARG_RENAMES: Dict[str, Dict[str, str]] = {
@@ -166,6 +183,12 @@ def native_result_summary(tool: str, data: Any) -> Optional[str]:
         cut = ", shortened" if data.get("truncated") else ""
         read = _count(data["total_chars"], "character", "characters")
         return f"Read {read} from the page{cut}"
+    if tool == "list_automations" and isinstance(data.get("count"), int):
+        return _count(data["count"], "automation", "automations")
+    if tool in NATIVE_MUTATING_TOOLS and isinstance(data.get("message"), str):
+        msg = data["message"].strip()
+        if msg:
+            return msg
     return None
 
 

@@ -299,6 +299,10 @@ struct ToolInfo {
     /// becomes permission to run anything.
     std::function<std::string(const json& args)> grantScope;
 
+    /// False for tools that require fresh one-time approval on every call and
+    /// must never accept or save a standing "always allow" grant.
+    bool allowAlways = true;
+
     /// For a CONFIRM tool: false lets this one call run without asking (a
     /// read-only shell command). Unset = every call asks.
     std::function<bool(const json& args)> needsConfirm;

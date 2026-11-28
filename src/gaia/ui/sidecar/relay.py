@@ -57,6 +57,7 @@ from gaia.ui.event_narration import (
     sanitize_memory_result,
 )
 from gaia.ui.sidecar.native_tools import (
+    NATIVE_MUTATING_TOOLS,
     NATIVE_TOOL_LABELS,
     as_flagship_call,
     native_prompt_summary,
@@ -478,7 +479,7 @@ def _dispatch_one(
                 "narration": narration,
             }
         )
-        if tool in profile.mutating_tools:
+        if tool in profile.mutating_tools or sent_tool in NATIVE_MUTATING_TOOLS:
             handler._emit(
                 {
                     "type": "status",
