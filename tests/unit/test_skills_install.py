@@ -978,6 +978,35 @@ def test_remove_reports_the_os_error_when_no_single_file_is_to_blame(
     assert (marketplace.skills_root / "web-research" / "SKILL.md").is_file()
 
 
+def test_remove_says_how_to_recover_when_a_probe_rename_cannot_be_undone(
+    marketplace, tmp_path, monkeypatch
+):
+    import os
+
+    import gaia.skills.install as install_module
+
+    key = marketplace.keygen()
+    marketplace.trust(key)
+    marketplace.publish(_write_source(tmp_path))
+    marketplace.install("web-research")
+    real_replace = os.replace
+
+    def refuse_folder(src, dst):
+        raise PermissionError(13, "Access is denied", str(src))
+
+    def refuse_rename_back(src, dst):
+        if str(src).endswith(".gaia-remove-probe"):
+            raise PermissionError(13, "The file is in use", str(src))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(install_module, "replace_retrying", refuse_folder)
+    monkeypatch.setattr(install_module.os, "replace", refuse_rename_back)
+
+    with pytest.raises(SkillInstallError, match="gaia-remove-probe") as raised:
+        remove_skill("web-research", manager=marketplace.manager)
+    assert "back to" in str(raised.value)
+
+
 # ---------------------------------------------------------------------------
 # A hostile bundle: the client unpacks whatever the hub served
 # ---------------------------------------------------------------------------

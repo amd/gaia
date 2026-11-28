@@ -512,7 +512,14 @@ def _find_held_file(directory: Path) -> Optional[Path]:
             os.replace(path, probe)
         except OSError:
             return path
-        os.replace(probe, path)
+        try:
+            os.replace(probe, path)
+        except OSError as exc:
+            raise SkillInstallError(
+                f"Could not remove skill: checking {path} for a lock renamed it to "
+                f"{probe}, and renaming it back failed ({exc}). Rename {probe} "
+                f"back to {path.name}, close the program using it, and try again."
+            ) from exc
     return None
 
 
