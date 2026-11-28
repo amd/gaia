@@ -16,8 +16,8 @@ const getAgentPrograms = vi.mocked(api.getAgentPrograms);
 
 beforeEach(() => {
     vi.clearAllMocks();
-    useActiveAgentStore.setState({ current: null });
-    useChatStore.setState({ settingsSection: null });
+    useActiveAgentStore.setState({ current: null, running: null });
+    useChatStore.setState({ settingsSection: null, isStreaming: false });
 });
 
 describe('AgentChip', () => {
@@ -37,6 +37,30 @@ describe('AgentChip', () => {
         const { container } = render(<AgentChip />);
         await waitFor(() => expect(useActiveAgentStore.getState().current).toBe('gaiapy'));
         expect(container).toBeEmptyDOMElement();
+    });
+
+    it('says Full-featured answers, not the saved Fast and light, when a terminal switched the running agent', async () => {
+        getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp', running: 'gaiapy' });
+        const { container } = render(<AgentChip />);
+        await waitFor(() => expect(useActiveAgentStore.getState().running).toBe('gaiapy'));
+        expect(container).toBeEmptyDOMElement();
+    });
+
+    it('says Fast and light while it answers, though Full-featured is saved', async () => {
+        getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiapy', running: 'gaiacpp' });
+        render(<AgentChip />);
+        expect(await screen.findByRole('button', { name: 'Fast and light · Beta' })).toBeInTheDocument();
+    });
+
+    it('reads the agent again when an answer ends', async () => {
+        getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp' });
+        useChatStore.setState({ isStreaming: true });
+        render(<AgentChip />);
+        await screen.findByRole('button', { name: 'Fast and light · Beta' });
+
+        getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp', running: 'gaiapy' });
+        act(() => useChatStore.setState({ isStreaming: false }));
+        await waitFor(() => expect(screen.queryByRole('button')).not.toBeInTheDocument());
     });
 
     it('shows nothing while the agent is not known yet', () => {

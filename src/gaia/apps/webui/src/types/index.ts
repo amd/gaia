@@ -607,6 +607,8 @@ export interface AgentProgram {
 export interface AgentPrograms {
     /** The saved choice as written; may name a harness this version can't run (none of `programs`). */
     current: string;
+    /** The program the GAIA agent runs on right now; null when it isn't running. Can differ from `current`. */
+    running?: string | null;
     programs: AgentProgram[];
     download: AgentDownload;
 }
@@ -729,6 +731,8 @@ export interface SystemStatus {
     probe_warnings?: string[];
     /** The folder that holds the chat database. */
     data_dir?: string | null;
+    /** The system the backend runs on, which is where a command runs. */
+    host_os?: 'windows' | 'macos' | 'linux';
 }
 
 /**

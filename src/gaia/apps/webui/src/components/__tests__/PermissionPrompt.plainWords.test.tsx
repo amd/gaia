@@ -45,6 +45,35 @@ describe('plain permission wording', () => {
         const always = screen.getByRole('button', { name: 'Always allow changing files in uxa in this chat' });
         expect(always).toHaveAttribute('title', label);
     });
+
+    it('names a command grant by the whole command, paths and program included', () => {
+        const command = 'cd /Users/me/repo && python3 -m pytest tests/test_requirements.py::TestRequirementBehaviour::test_str_and_repr -x --tb=short 2>&1 | head -80';
+        show({
+            tool: 'run_shell_command', toolLabel: 'Running a shell command', toolArgs: { command },
+            alwaysScope: `bash_execute:exact:${command}`, alwaysLabel: `Run \`${command}\``,
+        });
+
+        expect(screen.getByRole('button', { name: `Always allow Run \`${command}\` in this chat` })).toBeInTheDocument();
+    });
+
+    it("keeps the path in the Python agent's command grant", () => {
+        show({ tool: 'run_shell_command', toolArgs: { command: 'cat /etc/hosts' }, alwaysScope: 'cat /etc/hosts' });
+
+        expect(screen.getByRole('button', { name: 'Always allow cat /etc/hosts in this chat' })).toBeInTheDocument();
+    });
+
+    it('names a multi-line command grant by its first line, with every line on hover', () => {
+        const command = 'python3 -c "\nimport csv\nprint(1)\n"';
+        show({
+            tool: 'run_shell_command', toolArgs: { command },
+            alwaysScope: `bash_execute:exact:${command}`, alwaysLabel: `Run \`${command}\``,
+        });
+
+        const always = screen.getByRole('button', { name: 'Always allow Run `python3 -c " … in this chat' });
+        expect(always).not.toHaveTextContent('U+000A');
+        expect(always.getAttribute('title')).toContain('import csv');
+        expect(always.getAttribute('title')).toContain('print(1)');
+    });
 });
 
 describe('shortScope', () => {

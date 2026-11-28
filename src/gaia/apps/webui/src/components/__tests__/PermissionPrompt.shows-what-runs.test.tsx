@@ -9,7 +9,9 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionPrompt } from '../PermissionPrompt';
 import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
+import { useChatStore } from '../../stores/chatStore';
 import type { GaiaNotification } from '../../types/agent';
+import type { SystemStatus } from '../../types';
 
 const originalRespond = useNotificationStore.getState().respondToPermission;
 
@@ -43,6 +45,8 @@ beforeEach(() => {
 });
 afterEach(() => {
     useNotificationStore.setState({ notifications: [], respondToPermission: originalRespond });
+    useChatStore.setState({ systemStatus: null });
+    vi.restoreAllMocks();
 });
 
 describe('a permission card shows what will run', () => {
@@ -83,7 +87,31 @@ describe('a permission card shows what will run', () => {
         expect(screen.queryByTestId('perm-decoded')).not.toBeInTheDocument();
     });
 
-    it("shows cmd's reading of a caret-escaped command", () => {
+    it("shows cmd's reading of a caret-escaped command when GAIA runs on Windows", () => {
+        useChatStore.setState({ systemStatus: { host_os: 'windows' } as SystemStatus });
+        show({ toolArgs: { command: 'de^l plain.txt' } });
+        expect(screen.getByTestId('perm-cmd-reading')).toHaveTextContent('del plain.txt');
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('Windows reads it as:');
+    });
+
+    it.each(['macos', 'linux'])('says nothing about Windows when GAIA runs on %s', (host_os) => {
+        useChatStore.setState({ systemStatus: { host_os } as SystemStatus });
+        const card = show({ toolArgs: { command: "pdftotext x.pdf - | grep -n '^Table 3'" } });
+        expect(screen.queryByTestId('perm-cmd-reading')).not.toBeInTheDocument();
+        expect(card).not.toHaveTextContent('Windows');
+        expect(card).toHaveTextContent("grep -n '^Table 3'");
+    });
+
+    it("goes by this device when the backend's system is not known yet", () => {
+        useChatStore.setState({ systemStatus: null });
+        vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+        show({ toolArgs: { command: "grep '^a' f" } });
+        expect(screen.queryByTestId('perm-cmd-reading')).not.toBeInTheDocument();
+    });
+
+    it("goes by this device, on Windows, when the backend's system is not known yet", () => {
+        useChatStore.setState({ systemStatus: null });
+        vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32');
         show({ toolArgs: { command: 'de^l plain.txt' } });
         expect(screen.getByTestId('perm-cmd-reading')).toHaveTextContent('del plain.txt');
     });

@@ -196,6 +196,9 @@ type CanonicalNeedsConfirmationEvent struct {
 	// Empty means this call has no scope narrow enough to grant, so the client
 	// must not offer the choice — the agent decides that, not the renderer.
 	AlwaysScope string `json:"always_scope,omitempty"`
+	// AlwaysLabel is the grant in words ("Run `gh issue list`"), from an agent
+	// whose AlwaysScope is its own key (bash_execute:exact:…). Empty otherwise.
+	AlwaysLabel string `json:"always_label,omitempty"`
 	// Risk is what the agent read the call as doing: read, write, execute or
 	// destructive. Empty from an older agent; the client then labels by tool.
 	Risk       string `json:"risk,omitempty"`
@@ -232,10 +235,29 @@ type CanonicalInputOption struct {
 
 // CanonicalFinalEvent — terminal success. Usage is an optional
 // {steps?, tools_used?, elapsed?, tokens?, ttft?} object.
+//
+// Context is the HTTP sidecar's context measurement: it sends no
+// context_usage event to a caller that pushes no turns. ContextError is why
+// it has none.
 type CanonicalFinalEvent struct {
-	Type   string          `json:"type"`
-	Answer string          `json:"answer"`
-	Usage  json.RawMessage `json:"usage,omitempty"`
+	Type         string          `json:"type"`
+	Answer       string          `json:"answer"`
+	Usage        json.RawMessage `json:"usage,omitempty"`
+	Context      json.RawMessage `json:"context,omitempty"`
+	ContextError string          `json:"context_error,omitempty"`
+}
+
+// ContextUsage is the measurement a final carries, when it has one.
+func (e CanonicalFinalEvent) ContextUsage() (CanonicalContextUsageEvent, bool) {
+	var usage CanonicalContextUsageEvent
+	if len(e.Context) == 0 {
+		return usage, false
+	}
+	if err := json.Unmarshal(e.Context, &usage); err != nil || usage.Window <= 0 {
+		return CanonicalContextUsageEvent{}, false
+	}
+	usage.Type = CanonicalTypeContextUsage
+	return usage, true
 }
 
 // CanonicalUsage is the shape the TUI reads out of CanonicalFinalEvent.Usage.

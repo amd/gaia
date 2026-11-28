@@ -1,4 +1,4 @@
- GAIA  │ agent gaia
+ GAIA  │ agent gaia · Full-featured (gaiapy)
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ▶ You: Compare this term sheet against current seed terms and write me a 2-page memo
 

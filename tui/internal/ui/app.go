@@ -114,7 +114,7 @@ func RunFlagship(dev bool, mockAgent string, agentChoice AgentChoice, ctrl *cont
 		WithCatalog(cat).
 		WithAgentPin(agentChoice.Pin).
 		WithFullAccess(fullAccess).
-		WithFullAccessNotice(joinNotices(notice, agentNotice)).
+		WithFullAccessNotice(joinNotices(notice, launchAgentNotice(agentChoice, agentNotice))).
 		WithClaude(useClaude, claudeModel).
 		WithTerminalVersion(update.Current)).
 		WithTrace(trace).
@@ -150,6 +150,15 @@ func loadCatalog(mockAgent, agentChoice, agentID string) (*catalog.Catalog, stri
 	return catalog.ForFlagship(agentChoice)
 }
 
+// launchAgentNotice is what the launch says about how the agent program was
+// chosen. The daemon notice answers a request; a saved choice made none.
+func launchAgentNotice(choice AgentChoice, notice string) string {
+	if choice.Pin == "" && notice == catalog.DaemonPythonNotice {
+		return ""
+	}
+	return notice
+}
+
 func joinNotices(notices ...string) string {
 	var out []string
 	for _, n := range notices {
@@ -167,9 +176,9 @@ func checkClaudeSupported(agent catalog.Agent, useClaude bool) error {
 	if !useClaude || !agent.Native {
 		return nil
 	}
-	return fmt.Errorf("--use-claude cannot be used here. %s Or run %s (the Python agent), which has a "+
+	return fmt.Errorf("--use-claude cannot be used here. %s Or run "+catalog.PythonAgentLabel+", which has a "+
 		"Claude provider, by setting %s=%s. See %s",
-		client.NativeClaudeUnavailable, catalog.HarnessLabel(catalog.PythonAgentChoice),
+		client.NativeClaudeUnavailable,
 		catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
 }
 
@@ -664,9 +673,8 @@ func resumeTarget(agent catalog.Agent, resume Resume) (*resumedSession, error) {
 			"this install runs %q over the %s transport, which keeps no sessions to reopen", agent.ID, agent.Transport)
 	}
 	if agent.Native {
-		return nil, fmt.Errorf("--resume needs %s (the Python agent): gaiacpp, the %s agent this launch would run, "+
-			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one",
-			catalog.HarnessLabel(catalog.PythonAgentChoice), catalog.HarnessLabel(catalog.NativeAgentBinary))
+		return nil, fmt.Errorf("--resume needs " + catalog.PythonAgentLabel + ": " + catalog.NativeAgentLabel + ", which this launch would run, " +
+			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one")
 	}
 	if pinned := os.Getenv(client.HistoryFileEnv); pinned != "" {
 		return nil, fmt.Errorf("--resume cannot be used while %s=%s pins every launch to that "+

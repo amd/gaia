@@ -74,6 +74,33 @@ async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) 
 const nextFrames = (page: Page) =>
     page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
 
+/**
+ * Labels translated twice: a translated label passed whole into another one, so the
+ * outer English half holds the inner label in both languages and it prints twice, nested.
+ * Checked by the screens that had it; not in `audit` while a few other screens still do it.
+ */
+const nestedGlosses = (page: Page): Promise<string[]> => page.evaluate(() => {
+    const nested = (text: string): boolean => {
+        for (let at = text.indexOf('\u2066('); at >= 0; at = text.indexOf('\u2066(', at + 1)) {
+            let depth = 0;
+            for (let i = at; i < text.length; i++) {
+                const c = text[i];
+                if (c === '\u2067' && depth > 0) return true;
+                if (c === '\u2066' || c === '\u2067' || c === '\u2068') depth++;
+                else if (c === '\u2069' && --depth === 0) break;
+            }
+        }
+        return false;
+    };
+    const found: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const el = node.parentElement;
+        if (el && el.checkVisibility() && nested(node.textContent ?? '')) found.push((el.textContent ?? '').trim().slice(0, 60));
+    }
+    return found;
+});
+
 const audit = async (page: Page): Promise<string[]> => {
     await nextFrames(page);
     // A state that just landed (a fetch resolving) is mid-transition, and an inherited
@@ -761,10 +788,37 @@ for (const locale of ['en', 'ar']) {
         const panel = turn.locator('.agent-recovery');
         await expect(panel).toBeVisible();
         await expect(panel.locator('.agent-recovery-actions button')).toHaveCount(2);
+        // One card: the turn's own generic error would only repeat it, in English.
+        await expect(turn.locator('.error-banner, .flow-error, .msg-try-again')).toHaveCount(0);
         await shot(page, `chat-gaiacpp-missing-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+
+    test(`an agent that couldn't start for another reason says so in the UI language (${locale})`, async ({ page }) => {
+        const failed = GAIACPP_MISSING_TURN.map((m) => (m.role === 'assistant'
+            ? { ...m, agent_steps: [{ ...m.agent_steps![0], detail: `${AGENT_START_FAILED} The details are in this log folder: /home/you/.gaia/agents/gaia/logs` }] }
+            : m));
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: { messages: failed, total: failed.length },
+            }));
+        });
+        const error = page.locator('[data-message-id="2"] .flow-error');
+        await expect(error).toContainText(locale === 'ar' ? 'تعذّر على GAIA تشغيل وكيله' : "GAIA couldn't start its agent.");
+        await expect(error).toContainText('/home/you/.gaia/agents/gaia/logs');
+        // One card, and the log that says why is the agent's own, not the model server's.
+        const turn = page.locator('[data-message-id="2"]');
+        await expect(turn.locator('.error-banner')).toHaveCount(0);
+        await expect(turn.getByRole('button', { name: locale === 'ar' ? /سجلّ الوكيل/ : 'Agent log' })).toBeVisible();
+        await expect(turn.getByRole('button', { name: /Model server log|سجلّ خادم النماذج/ })).toHaveCount(0);
+        await shot(page, `chat-agent-start-failed-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
+
+/** The relay's English for an agent that never started (`start_failed_message` in profiles.py). */
+const AGENT_START_FAILED = "GAIA couldn't start its agent. Send your message again. If this keeps happening, restart GAIA. "
+    + 'If it still fails, update GAIA to the latest version or reinstall it.';
 
 const uncut = (el: Element) => el.scrollWidth <= el.clientWidth + 1;
 
@@ -792,6 +846,15 @@ for (const locale of ['en', 'ar']) {
             await expect(page.locator('.settings-pane-title')).toHaveText(locale === 'ar' ? /الوكيل والنموذج/ : /^Agent & model$/);
         });
     }
+
+    test(`a chat on Fast and light that a terminal moved to Full-featured has no Fast and light chip (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            await withAgentPrograms(p, { current: 'gaiacpp', running: 'gaiapy' });
+        });
+        await expect(page.locator('main .composer-chip-wrap .composer-chip-label').last()).toBeVisible();
+        await expect(page.locator('main .composer-chip-agent')).toHaveCount(0);
+    });
 }
 
 const GAIACPP_MISSING_TURN = [
@@ -3408,6 +3471,22 @@ const groups = (page: Page) => page.locator('.settings-card .settings-disclosure
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings model page (${locale})`, () => {
+        // A terminal session put the GAIA agent on gaiacpp while gaiapy is saved: the card says which answers.
+        test('the agent choice while the other program answers', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { running: 'gaiacpp' } });
+            const agent = page.locator('.agent-choice');
+            const note = agent.locator('.agent-choice-why[role="status"]');
+            await expect(note).toBeVisible();
+            await expect(note).toContainText(locale === 'ar' ? 'سريع وخفيف' : 'Fast and light');
+            await expect(note).toContainText(locale === 'ar' ? 'كامل الميزات' : 'Full-featured');
+            const card = (await agent.boundingBox())!;
+            const box = (await note.boundingBox())!;
+            expect(box.x).toBeGreaterThanOrEqual(card.x - 1);
+            expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+            await shot(page, `model-${locale}-agent-running-other`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         for (const noGaiacpp of [false, true]) {
             for (const expanded of [false, true]) {
                 const state = `${noGaiacpp ? 'unavailable-' : ''}${expanded ? 'expanded' : 'collapsed'}`;
@@ -3422,6 +3501,7 @@ for (const locale of ['ar', 'en']) {
                     if (noGaiacpp) {
                         await expect(why).toBeVisible();
                         expect((await why.boundingBox())!.height, 'the reason takes no room on the screen').toBeGreaterThan(10);
+                        expect(await nestedGlosses(page), 'the reason is printed once').toEqual([]);
                     }
                     await expect(agent.locator('.agent-choice-size')).toHaveCount(noGaiacpp ? 1 : 2);
                     const more = agent.locator('.agent-choice-more');
@@ -6247,6 +6327,36 @@ for (const locale of ['ar', 'en'] as const) {
             await expect(card.locator('.perm-card-title')).toHaveText('Allow writing file?');
         }
         await shot(page, `permission-always-${locale}`);
+    });
+}
+
+// gaiacpp's grant for a chained command: the whole command, and a caret that is grep's, not cmd.exe's.
+const CHAINED = "cd /Users/you/repo && python3 -m pytest tests/test_requirements.py::TestRequirementBehaviour::test_str_and_repr -x --tb=short 2>&1 | grep -n '^FAILED' | head -80";
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a command prompt names its always button by the whole command and says nothing about Windows on a Mac (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [{
+            type: 'permission_request', tool: 'run_shell_command', tool_label: 'Running a shell command', confirm_id: 'c-chained',
+            args: { command: CHAINED },
+            always_scope: `bash_execute:exact:${CHAINED}`, always_label: `Run \`${CHAINED}\``,
+        }]);
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/system/status', (route) => route.fulfill({ json: { ...SYSTEM_STATUS, host_os: 'macos' } }));
+        });
+        await page.locator('textarea').first().fill('run the failing test');
+        await page.keyboard.press('Enter');
+        const card = page.locator('.perm-card');
+        await expect(card).toBeVisible();
+        const always = card.locator('.perm-btn').nth(1);
+        await expect(always).toContainText('cd /Users/you/repo && python3 -m pytest tests/test_requirements.py');
+        await expect(card.getByTestId('perm-cmd-reading')).toHaveCount(0);
+        await expect(card).not.toContainText('Windows');
+        // The long label wraps inside the card.
+        const [box, button] = await Promise.all([card.boundingBox(), always.boundingBox()]);
+        expect(button!.x).toBeGreaterThanOrEqual(box!.x);
+        expect(button!.x + button!.width).toBeLessThanOrEqual(box!.x + box!.width + 1);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-command-always-${locale}`);
     });
 }
 

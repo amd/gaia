@@ -89,7 +89,7 @@ const ClaudeModelFlag = "--claude-model"
 // NativeClaudeUnavailable is what a user is told when Claude is asked of the
 // native agent, which has no Claude provider. One text for the launch flag and
 // for /model, so the two cannot disagree.
-const NativeClaudeUnavailable = "Claude models are not available with the native GAIA agent (gaiacpp). " +
+const NativeClaudeUnavailable = "Claude models are not available with " + catalog.NativeAgentLabel + ". " +
 	"Choose a model your Lemonade server offers instead — one on this PC, or a cloud " +
 	"provider such as Fireworks AI or the AMD LLM Gateway — with /provider."
 

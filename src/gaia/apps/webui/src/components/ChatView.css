@@ -556,6 +556,17 @@
     margin-bottom: 0;
 }
 
+/* In a failed turn the bubble already draws the bar and tint. */
+.msg-body .chat-agent-recovery {
+    margin-block: 0;
+}
+
+.msg-body .chat-agent-recovery .new-chat-setup-failed {
+    padding: 0;
+    border-inline-start: 0;
+    background: none;
+}
+
 /* Under a turn the model server ended by taking no connection. */
 .server-down-notice {
     display: flex;

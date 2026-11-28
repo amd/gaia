@@ -96,6 +96,22 @@ describe('the model server log on a failed turn', () => {
         expect(screen.getByRole('button', { name: 'Agent log' })).toBeInTheDocument();
     });
 
+    it("shows one card with the agent's log when the agent couldn't start", () => {
+        place.mockReturnValue({ remote: false, label: 'Local', description: null });
+        // The server saves an empty failed answer; the start error is the turn's only step.
+        const startFailed = "GAIA couldn't start its agent. Send your message again. If this keeps happening, restart GAIA. If it still fails, update GAIA to the latest version or reinstall it. The details are in this log folder: /Users/me/.gaia/agents/gaia/logs";
+        render(
+            <MessageBubble
+                message={{ ...failed, content: '' }}
+                agentSteps={[{ id: 1, type: 'error', label: 'Error', detail: startFailed, active: false, timestamp: 0 }]}
+            />,
+        );
+        expect(screen.queryByText('Something went wrong')).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Model server log' })).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Agent log' }));
+        expect(useLogsStore.getState()).toMatchObject({ open: true, source: 'agent' });
+    });
+
     it('is not offered on an answer', () => {
         place.mockReturnValue({ remote: false, label: 'Local', description: null });
         render(<MessageBubble message={{ ...failed, failed: false, content: 'Ulaanbaatar.' }} />);

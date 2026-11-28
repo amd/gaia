@@ -268,7 +268,7 @@ the header.
 
 | Method | Path                             | Purpose                                        |
 | ------ | -------------------------------- | ---------------------------------------------- |
-| `GET`  | `/health`                        | Liveness. `{ "status": "ok", "service": "gaia-agent-gaia" }` |
+| `GET`  | `/health`                        | Liveness. `{ "status": "ok", "service": "gaia-agent-gaia", "active_runs": 0 }`; `active_runs` counts turns running or waiting on an answer |
 | `GET`  | `/version`                       | Contract probe. `{ "apiVersion", "agentVersion" }` |
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
@@ -628,8 +628,9 @@ answer (§8). Its `answer` says what was and wasn't done. When the cause is one 
 names it. `"model_server_down"` means the local model server took no
 connection. Cloud models go through that server too, so the provider was never
 reached; the turn fails at once instead of retrying, and its `answer` names the
-server, not the provider. Offer to start the server. Older binaries never send
-`failure`, so read it only when present.
+server, not the provider. Offer to start the server. Only the model server's
+causes are named; the agent's own errors and refusals leave `failure` unset.
+Older binaries never send `failure`, so read it only when present.
 
 A one-shot run's `final` carries `time_limit_reached: true` when its
 `time_limit` stopped the turn (treat the answer as incomplete), and

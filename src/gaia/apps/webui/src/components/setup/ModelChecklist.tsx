@@ -11,7 +11,7 @@ import { useDebounced, useTweened } from './motion';
 import { Reveal } from './Reveal';
 import {
     catalogOf, chatCandidates, installedOnlyRows, isEmbedding, isNpu, isVision, mainRows, moreRows,
-    shortfall, totals, type Selection,
+    roundTotal, shortfall, totals, type Selection,
 } from './selection';
 
 const SEARCH_ABOVE = 6;
@@ -38,10 +38,11 @@ function purposeLine(e: SetupCatalogEntry, t: Say): string {
     return t('setup.models.line.chat');
 }
 
-/** "On this PC", "Download 5.1 GB", "Partly downloaded, 1.2 GB left". */
+/** "On this PC", "On this PC, checked during setup", "Download 5.1 GB", "Partly downloaded, 1.2 GB left". */
 export function statusText(e: SetupCatalogEntry, t: Translate): string {
     if (e.downloaded) return t('setup.models.status.onPc');
     if (e.size_gb == null) return t('setup.models.status.sizeUnknown');
+    if (e.size_gb === 0) return t('setup.models.status.found');
     if (e.partial) return t('setup.models.status.partial', { size: formatSize(e.size_gb) });
     return t('setup.models.status.download', { size: formatSize(e.size_gb) });
 }
@@ -150,12 +151,16 @@ function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions, pla
 interface SummaryProps {
     plan: SetupPlan;
     selection: Selection;
+    /** GB of an agent setup downloads first, added to the total. */
+    agentGb?: number;
+    /** GB of Full-featured counted in the total while Fast and light is picked; 0 says nothing. */
+    fallbackGb?: number;
 }
 
 /** Download total against the free space on the model drive, live as the user ticks. */
-export function SelectionSummary({ plan, selection }: SummaryProps) {
+export function SelectionSummary({ plan, selection, agentGb = 0, fallbackGb = 0 }: SummaryProps) {
     const t = useT();
-    const { downloadGb, freeGb, afterGb } = totals(plan, selection);
+    const { downloadGb, freeGb, afterGb } = totals(plan, selection, agentGb);
     const short = shortfall(plan, selection);
     const shownDownload = useTweened(downloadGb ?? 0);
     const shownAfter = useTweened(afterGb ?? 0);
@@ -172,7 +177,7 @@ export function SelectionSummary({ plan, selection }: SummaryProps) {
             <div className="mc-summary-stats">
                 <span className="mc-stat">
                     <span className="mc-stat-label">{t('setup.summary.download')}</span>
-                    <bdi className="mc-stat-value">{downloadGb == null ? t('setup.summary.sizeUnknown') : formatSize(round1(shownDownload))}</bdi>
+                    <bdi className="mc-stat-value">{downloadGb == null ? t('setup.summary.sizeUnknown') : formatSize(roundTotal(shownDownload))}</bdi>
                 </span>
                 <span className="mc-stat">
                     <span className="mc-stat-label"><HardDrive size={12} aria-hidden="true" /> {drive ? <>{t('setup.summary.freeOn')} <bdi dir="ltr" className="mc-stat-path">{drive}</bdi></> : t('setup.summary.free')}</span>
@@ -185,6 +190,7 @@ export function SelectionSummary({ plan, selection }: SummaryProps) {
                     </span>
                 )}
             </div>
+            {fallbackGb > 0 && <p className="mc-summary-note">{t('setup.summary.fallback', { size: formatSize(fallbackGb) })}</p>}
             {freeGb != null && (
                 <div className="mc-disk" aria-hidden="true">
                     <span className="mc-disk-fill" style={{ inlineSize: `${(fill * 100).toFixed(1)}%` }} />

@@ -639,6 +639,17 @@ class TestFailedTurnProgram:
         assert _failed_turn_program("gaia", MODEL_SERVER_DOWN) is None
         assert _failed_turn_program("gaia", failure) == "gaiacpp"
 
+    def test_gaiacpps_own_failure_still_offers_the_python_agent(self, monkeypatch):
+        """gaiacpp names no cause for its own errors, so the note stays."""
+        from gaia.daemon.sidecars import fetch
+        from gaia.ui._chat_helpers import _failed_turn_program, _turn_failure_kind
+
+        monkeypatch.setattr(fetch, "saved_flagship", lambda: "gaiacpp")
+        final = {"type": "final", "failed": True, "answer": "The turn failed"}
+        assert (
+            _failed_turn_program("gaia", _turn_failure_kind(final, None)) == "gaiacpp"
+        )
+
 
 class TestRelayOnePromptFailures:
     """A relayed run's failure keeps its cause, so setup can tell a server outage apart."""

@@ -1013,6 +1013,27 @@ describe('SetupScreen: agent', () => {
         expect(await plan.findByText(/^Agent: Full-featured/)).toBeInTheDocument();
     });
 
+    it('says why the total holds Full-featured when Fast and light is picked', async () => {
+        const pythonMissing = {
+            ...AGENT_PROGRAMS,
+            programs: AGENT_PROGRAMS.programs.map((p) => (p.id === 'gaiapy' ? { ...p, installed: false, can_download: true } : p)),
+        };
+        mockedApi.getAgentPrograms.mockResolvedValue(pythonMissing);
+        await pick(/Fast and light/);
+        expect(await screen.findByText(/^Includes Full-featured \(.*412 MB.*\), which is always installed as the fallback\.$/)).toBeInTheDocument();
+        fireEvent.click(within(screen.getByRole('region', { name: 'Agent' })).getByRole('radio', { name: /Full-featured/ }));
+        expect(screen.queryByText(/always installed as the fallback/)).toBeNull();
+    });
+
+    it('names the agent on Test and Ready', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp' });
+        mockedApi.startSetup.mockResolvedValue(READY);
+        mockedApi.getSetupStatus.mockReset().mockResolvedValue({ state: 'idle' });
+        await startLocal();
+        expect(await startChatting()).toBeInTheDocument();
+        expect(await within(screen.getByRole('status')).findByText(/^Agent: Fast and light$/)).toBeInTheDocument();
+    });
+
     it("leaves the agent out where gaiacpp can't be had, so there is nothing to change", async () => {
         mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp('this GAIA release has no gaiacpp to download.'));
         const plan = within(await open().then(planScreen));
@@ -1063,9 +1084,46 @@ describe('SetupScreen: agent', () => {
         expect(mockedApi.updateSettings).toHaveBeenCalledTimes(1);
     });
 
+    // Only the 300 MB document model is left to download.
+    const MODELS_HERE = () => plan([{ ...QWEN, downloaded: true, size_gb: 0 }, { ...GEMMA, downloaded: true, size_gb: 0 }, EMBED]);
+    const downloadTotal = () => screen.getByRole('group', { name: 'Download total' }).querySelector('.mc-stat-value')?.textContent;
+
+    it('gaiacpp already here: the download total is the models alone', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(MODELS_HERE());
+        await pick(/gaiacpp/);
+        await waitFor(() => expect(downloadTotal()).toBe('300 MB'));
+    });
+
+    // A fresh PC: setup's run installs the Python agent, so it counts whichever agent is picked.
+    it('gaiapy not on this PC: the download total counts it, and gaiacpp on top when picked', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(MODELS_HERE());
+        mockedApi.getAgentPrograms.mockResolvedValue({
+            ...withoutGaiacpp(),
+            programs: withoutGaiacpp().programs.map((p) => (p.id === 'gaiapy' ? { ...p, installed: false, size_bytes: 153_000_000 } : p)),
+        });
+        await open();
+        await toModels();
+        const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+        await waitFor(() => expect(downloadTotal()).toBe('453 MB'));
+        fireEvent.click(await agent.findByRole('radio', { name: /gaiacpp/ }));
+        await waitFor(() => expect(downloadTotal()).toBe('460 MB'));
+    });
+
     describe('gaiacpp not on this PC', () => {
         beforeEach(() => {
             mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());
+        });
+
+        it('counts the agent in the download total, and drops it when gaiapy is picked back', async () => {
+            mockedApi.getSetupPlan.mockResolvedValue(MODELS_HERE());
+            await open();
+            await toModels();
+            const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+            await waitFor(() => expect(downloadTotal()).toBe('300 MB'));
+            fireEvent.click(await agent.findByRole('radio', { name: /gaiacpp/ }));
+            await waitFor(() => expect(downloadTotal()).toBe('307 MB'));
+            fireEvent.click(agent.getByRole('radio', { name: /gaiapy/ }));
+            await waitFor(() => expect(downloadTotal()).toBe('300 MB'));
         });
 
         it('downloads first with the rest waiting, then saves it, then starts the run', async () => {
@@ -1497,6 +1555,15 @@ describe('SetupScreen: testing', () => {
         expect(screen.getByText('A real chat with GAIA').closest('li')).toHaveTextContent('Waiting');
         expect(railStep('Test')).toHaveClass('is-active');
         expect(railStep('Download')).toHaveClass('is-done');
+    });
+
+    it('names the agent the test chat runs on', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp' });
+        mockedApi.startSetup.mockResolvedValue(verifying);
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(verifying);
+        await startLocal();
+        await screen.findByRole('heading', { name: 'Testing everything' });
+        expect(await screen.findByText(/^Agent: Fast and light$/)).toBeInTheDocument();
     });
 
     it('is not ready until the tests pass', async () => {

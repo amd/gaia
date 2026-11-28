@@ -17,6 +17,19 @@ import (
 var missingNative = &catalog.MissingProgramError{Binary: catalog.NativeAgentBinary,
 	Lookup: catalog.Lookup{Looked: []string{"/h/bin"}}}
 
+// The saved choice is not a request: relaunching on Full-featured after /agent
+// must not open with "[!] Full-featured (gaiapy) was asked for".
+func TestASavedPythonChoiceOpensWithoutTheDaemonNotice(t *testing.T) {
+	saved := AgentChoice{Program: catalog.PythonAgentChoice}
+	if got := launchAgentNotice(saved, catalog.DaemonPythonNotice); got != "" {
+		t.Errorf("a saved choice got the notice: %q", got)
+	}
+	pinned := AgentChoice{Program: catalog.PythonAgentChoice, Pin: "--agent-program"}
+	if got := launchAgentNotice(pinned, catalog.DaemonPythonNotice); got != catalog.DaemonPythonNotice {
+		t.Errorf("an --agent-program request lost its notice: %q", got)
+	}
+}
+
 func TestOnlyASavedGaiacppIsRecovered(t *testing.T) {
 	saved := AgentChoice{Program: catalog.NativeAgentBinary}
 	if why, detail, ok := savedNativeBroken(saved, missingNative); !ok || !strings.Contains(why, "is not on this PC") || detail != "Looked in: /h/bin" {
@@ -73,7 +86,7 @@ func TestThePythonAgentRunsOnlyWhenPickedAndIsThenSaved(t *testing.T) {
 	if len(*saved) != 1 || (*saved)[0] != preflight.FlagshipAgentPython || (*asked)[0] != catalog.PythonAgentBinary {
 		t.Fatalf("saved %v, launched %v", *saved, *asked)
 	}
-	for _, want := range []string{"You chose Full-featured", "/h/config.json", "/agent gaiacpp switches back"} {
+	for _, want := range []string{"You chose Full-featured (gaiapy) because Fast and light (gaiacpp) could not start", "/h/config.json", "/agent gaiacpp switches back"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the notice does not say %q: %s", want, notice)
 		}

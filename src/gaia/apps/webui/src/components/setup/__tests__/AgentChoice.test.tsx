@@ -83,6 +83,27 @@ describe('AgentChoice', () => {
         await waitFor(() => expect(py).toHaveAttribute('aria-checked', 'true'));
     });
 
+    it('says when the other agent is answering, and choosing the saved one again switches back', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiapy', running: 'gaiacpp' });
+        render(<AgentChoice inSettings />);
+        const py = await radio(/gaiapy/);
+        expect(py).toHaveAttribute('aria-checked', 'true');
+        expect(screen.getByRole('status')).toHaveTextContent(
+            'Fast and light is answering right now: a terminal session started it. Choose Full-featured again to switch back to it.');
+
+        fireEvent.click(py);
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiapy' }));
+        await waitFor(() => expect(screen.queryByText(/is answering right now/)).not.toBeInTheDocument());
+    });
+
+    it('says nothing about what runs when it is the saved agent, and re-picking it saves nothing', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiapy', running: 'gaiapy' });
+        render(<AgentChoice inSettings />);
+        fireEvent.click(await radio(/gaiapy/));
+        expect(screen.queryByText(/is answering right now/)).not.toBeInTheDocument();
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+    });
+
     it('shows no size it could not read', async () => {
         mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, programs: AGENT_PROGRAMS.programs.map((p) => ({ ...p, size_bytes: null })) });
         render(<AgentChoice />);
@@ -318,7 +339,7 @@ describe('AgentChoice in setup: a pick is held for Continue', () => {
         expect(cpp).not.toHaveAttribute('aria-disabled');
         expect(screen.queryByRole('button', { name: /Download/ })).toBeNull();
         fireEvent.click(cpp);
-        expect(onPending).toHaveBeenCalledWith({ id: 'gaiacpp', download: true, current: 'gaiapy' });
+        expect(onPending).toHaveBeenCalledWith({ id: 'gaiacpp', download: true, current: 'gaiapy', sizeBytes: 6_800_000 });
         expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();
         rerender(<AgentChoice pending="gaiacpp" onPending={onPending} />);
@@ -331,7 +352,7 @@ describe('AgentChoice in setup: a pick is held for Continue', () => {
         const onPending = vi.fn();
         render(<AgentChoice onPending={onPending} />);
         fireEvent.click(await radio(/gaiacpp/));
-        expect(onPending).toHaveBeenLastCalledWith({ id: 'gaiacpp', download: false, current: 'gaiapy' });
+        expect(onPending).toHaveBeenLastCalledWith({ id: 'gaiacpp', download: false, current: 'gaiapy', sizeBytes: 6_800_000 });
         fireEvent.click(screen.getByRole('radio', { name: /gaiapy/ }));
         expect(onPending).toHaveBeenLastCalledWith(null);
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();

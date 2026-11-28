@@ -80,11 +80,11 @@ func TestLiveProbeBeatsThePingButABlankProbeDoesNot(t *testing.T) {
 	c := &versionedClient{version: "0.9.0"}
 	m := NewChatModelForFlagship(c, "gaia", "GAIA", true)
 	m = feed(t, m, versionedPing("0.3.0", ""))
-	if got := m.agentIdentity(); got != "agent gaia v0.9.0" {
+	if got := m.bareIdentity(); got != "agent gaia v0.9.0" {
 		t.Errorf("identity = %q, want the probe's 0.9.0", got)
 	}
 	c.version = ""
-	if got := m.agentIdentity(); got != "agent gaia v0.3.0" {
+	if got := m.bareIdentity(); got != "agent gaia v0.3.0" {
 		t.Errorf("identity = %q, want the ping's 0.3.0 once the probe is blank", got)
 	}
 }

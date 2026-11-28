@@ -59,6 +59,7 @@ from gaia.ui.event_narration import (
 from gaia.ui.sidecar.native_tools import (
     NATIVE_TOOL_LABELS,
     as_flagship_call,
+    native_command_output,
     native_prompt_summary,
     native_result_summary,
 )
@@ -420,6 +421,7 @@ def _dispatch_one(
         tool, args = as_flagship_call(sent_tool, event.get("args") or {})
         # The result carries no arguments, so it is named as its call was.
         handler.relay_shown_tool = (sent_tool, tool)
+        handler.relay_command = args.get("command") if isinstance(args, dict) else None
         label = _tool_label(tool, profile)
         # The turn summary and the heartbeat read this state, not the events.
         handler.record_tool_started(tool)
@@ -502,6 +504,12 @@ def _dispatch_one(
         }
         if isinstance(data, dict) and isinstance(data.get("mcp_output"), dict):
             out["mcp_output"] = data["mcp_output"]
+        # The step's detail and summary are cut short; this is the whole command and output.
+        command_output = native_command_output(
+            sent_tool, getattr(handler, "relay_command", None), data
+        )
+        if command_output is not None:
+            out["command_output"] = command_output
         render = event.get("render")
         # "media" is the terminal's card; the Agent UI draws generated media
         # itself (``media_card``) from the path the payload carries.

@@ -743,7 +743,13 @@ private:
     void routes() {
         server_.Get("/health", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
-            sendJson(res, 200, {{"status", "ok"}, {"service", kService}});
+            size_t active = 0;
+            {
+                std::lock_guard<std::mutex> lock(runsMu_);
+                active = runs_.size();
+            }
+            // active_runs lets the daemon refuse to restart this agent mid-answer.
+            sendJson(res, 200, {{"status", "ok"}, {"service", kService}, {"active_runs", active}});
         });
         server_.Get("/version", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
@@ -969,7 +975,8 @@ private:
                      "named no session, or said it can't answer questions. Send it with a session_id from a "
                      "caller that answers needs_confirmation, or perform the action directly.";
         }
-        return {{"type", "final"}, {"failed", true}, {"answer", answer}, {"failure", answer}};
+        // No "failure": that field names a model-server cause, and the Python agent would refuse this too.
+        return {{"type", "final"}, {"failed", true}, {"answer", answer}};
     }
 
     // The final of a turn its time limit stopped: not a failure, but not the whole answer either.
@@ -1413,7 +1420,6 @@ private:
                                 {"context_error", kNoContextMeasure}};
                     if (r.value("status", "success") == "error") {
                         terminal["failed"] = true;
-                        terminal["failure"] = r.value("error", r.value("result", "The turn failed"));
                         // The server may have gone mid-turn: say so, not the transport's generic advice.
                         LemonadeClient probe(server.baseUrl);
                         probe.setApiKey(server.apiKey);

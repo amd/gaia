@@ -1587,6 +1587,7 @@ export interface SystemStatus {
   expected_model_loaded?: boolean;
   gpu_name?: string | null;
   gpu_vram_gb?: number | null;
+  host_os?: "windows" | "macos" | "linux";
   init_state?: string;
   init_tasks?: InitTaskInfo[];
   initialized?: boolean;

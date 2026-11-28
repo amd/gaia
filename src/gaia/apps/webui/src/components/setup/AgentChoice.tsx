@@ -5,7 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown, Download, Loader2 } from 'lucide-react';
 import { RadioGroup } from '../RadioGroup';
 import { useT } from '../../i18n/useT';
-import type { MessageKey } from '../../i18n/registry';
+import { ref, type MessageKey, type Param } from '../../i18n/registry';
 import * as api from '../../services/api';
 import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import type { AgentProgram, AgentPrograms, FlagshipAgent } from '../../types';
@@ -34,6 +34,12 @@ const DIFFERENCES: MessageKey[] = [
     'setup.agent.diff.context',
 ];
 
+/** An agent program by the name the app gives it; a name a newer GAIA wrote stays as is. */
+function agentName(id: string): Param {
+    const known = OPTIONS.find((o) => o.id === id);
+    return known ? ref(known.label) : id;
+}
+
 /** Why gaiacpp can't be downloaded, in the UI's words rather than the server's English. */
 export const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
     no_release: 'setup.agent.why.noRelease',
@@ -49,6 +55,8 @@ export interface AgentPick {
     download: boolean;
     /** The agent saved now (possibly one this version can't run), which setup carries on with if the pick can't be had. */
     current: string;
+    /** The pick's size, for setup's download total; null when it couldn't be read. */
+    sizeBytes?: number | null;
 }
 
 interface Props {
@@ -84,7 +92,8 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
         try {
             const updated = await api.updateSettings({ flagship_agent: id });
             useActiveAgentStore.getState().setCurrent(updated.flagship_agent);
-            if (mounted.current) setListing((l) => (l ? { ...l, current: updated.flagship_agent } : l));
+            // The switch stopped the running agent; the next message starts the saved one.
+            if (mounted.current) setListing((l) => (l ? { ...l, current: updated.flagship_agent, running: null } : l));
         } catch (err) {
             if (!mounted.current) return;
             setSaveError(messageOf(err));
@@ -134,24 +143,26 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     const outdated = (p: AgentProgram | undefined) => !!p && p.id === 'gaiacpp' && p.installed && p.update_available === true && p.can_download;
     const downloading = job?.state === 'downloading';
     const selected = pending ?? listing?.current;
+    // A terminal session can start the other program than the one saved here.
+    const otherRuns = !!listing?.running && listing.running !== listing.current;
 
     const choose = (id: FlagshipAgent) => {
         const p = program(id);
         if (!listing || !p || disabled || off(p)) return;
         // Setup saves nothing here: Continue gets the agent and saves it before setup's own test runs.
         if (!inSettings) {
-            onPending?.(id === listing.current ? null : { id, download: !installed(p), current: listing.current });
+            onPending?.(id === listing.current ? null : { id, download: !installed(p), current: listing.current, sizeBytes: p.size_bytes });
             return;
         }
         if (saving || downloading || needsDownload(p)) return;
-        if (id !== listing.current) void save(id, listing.current);
+        if (id !== listing.current || otherRuns) void save(id, listing.current);
     };
 
     const cpp = program('gaiacpp');
     const oldNote = !outdated(cpp) ? null
         : cpp?.version && cpp.release_version ? t('setup.agent.outdated', { name: 'gaiacpp', found: cpp.version, expected: cpp.release_version })
             : t('setup.agent.outdatedNoVersion', { name: 'gaiacpp' });
-    const why = cpp?.unavailable_code ? t(WHY[cpp.unavailable_code]) : cpp?.unavailable_reason;
+    const why: Param | null | undefined = cpp?.unavailable_code ? ref(WHY[cpp.unavailable_code]) : cpp?.unavailable_reason;
     const cppNote: string | null = !cpp || installed(cpp) ? null
         : cpp.can_download ? t(inSettings ? 'setup.agent.downloadsOnButton' : 'setup.agent.downloadsLater')
             : why ? t('setup.agent.cantDownload', { reason: why })
@@ -249,6 +260,11 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                             );
                         })}
                     </RadioGroup>
+                    {inSettings && otherRuns && !saving && (
+                        <p className="agent-choice-why" role="status">
+                            {t('settings.agent.runningOther', { running: agentName(listing.running ?? ''), current: agentName(listing.current) })}
+                        </p>
+                    )}
                     {job && (job.state === 'downloading' || job.state === 'failed') && (
                         <AgentDownloadRow
                             job={job}

@@ -54,7 +54,7 @@ func TestMissingGaiacppIsOfferedAsADownload(t *testing.T) {
 		t.Fatalf("no offer is pending: %+v", m.programFetch)
 	}
 	got := transcript(m)
-	for _, want := range []string{"gaiacpp (Beta) is not on this PC yet", "gaiacpp 0.27.0 (Beta)", "12.0 MB",
+	for _, want := range []string{"Fast and light (gaiacpp) · Beta is not on this PC yet", "Fast and light (gaiacpp) 0.27.0 · Beta", "12.0 MB",
 		"checksums", "Press Enter to download it and switch, or Esc to cancel"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the offer does not say %q:\n%s", want, got)
@@ -138,7 +138,7 @@ func TestEnterDownloadsWithProgressThenSwitchesToGaiacpp(t *testing.T) {
 	if !m.agent.Native || f.saved(t) != preflight.FlagshipAgentNative {
 		t.Fatalf("the session did not move to gaiacpp: native=%v saved=%q", m.agent.Native, f.saved(t))
 	}
-	if !strings.Contains(header(t, m), "(Fast and light · Beta)") {
+	if !strings.Contains(header(t, m), "Fast and light (gaiacpp) · Beta") {
 		t.Fatalf("the header does not mark gaiacpp as Beta:\n%s", header(t, m))
 	}
 }

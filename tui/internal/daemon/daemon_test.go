@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +40,7 @@ type fakeDaemon struct {
 	statusCode   int
 	ensureStatus int
 	ensureDetail string
+	ensureKind   string
 	ensureBody   []byte
 	authSeen     []string
 	paths        []string
@@ -110,10 +112,13 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 			f.t.Fatalf("read ensure request body: %v", err)
 		}
 		f.mu.Lock()
-		code, detail := f.ensureStatus, f.ensureDetail
+		code, detail, kind := f.ensureStatus, f.ensureDetail, f.ensureKind
 		f.ensureBody = append([]byte(nil), body...)
 		f.mu.Unlock()
 		if code != http.StatusOK {
+			if kind != "" {
+				w.Header().Set(ErrorKindHeader, kind)
+			}
 			w.WriteHeader(code)
 			writeJSON(w, map[string]any{"detail": detail})
 			return
@@ -526,8 +531,53 @@ func TestEnsureAgentOmitsModeWithoutAPreference(t *testing.T) {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
+	if got := strings.TrimSpace(string(f.lastEnsureBody())); got != `{"program":"gaiapy"}` {
+		t.Fatalf("ensure request body = %s, want only the program", got)
+	}
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "word-count"); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
 	if got := strings.TrimSpace(string(f.lastEnsureBody())); got != "{}" {
-		t.Fatalf("ensure request body = %s, want {}", got)
+		t.Fatalf("ensure request body for another agent = %s, want {}", got)
+	}
+}
+
+// The GAIA agent behind the daemon may be gaiacpp, started by the Agent UI.
+// A session that talks to the Python agent must say so: a turn's ensure only
+// expects it, and the launch's ensure asks for it.
+func TestEnsureAgentExpectsThePythonProgramAndLaunchAsksForIt(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "")
+
+	if _, err := testClient(t, nil).LaunchAgent(context.Background(), "gaia"); err != nil {
+		t.Fatalf("LaunchAgent: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
+		t.Fatalf("decode ensure request body: %v", err)
+	}
+	if body["program"] != "gaiapy" || body["replace_program"] != true {
+		t.Fatalf("launch ensure body = %v, want program gaiapy with replace_program", body)
+	}
+}
+
+func TestAProgramConflictSaysWhatRunsAndHowToSwitch(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	f.ensureStatus = http.StatusConflict
+	f.ensureKind = KindProgramConflict
+	f.ensureDetail = "The GAIA agent is running on gaiacpp, not gaiapy"
+
+	_, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia")
+	var conflict *ProgramConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("EnsureAgent error = %v (%T), want *ProgramConflictError", err, err)
+	}
+	for _, want := range []string{"running on gaiacpp", "Full-featured (gaiapy)", "/agent gaiacpp", "Nothing was sent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("conflict error %q does not say %q", err.Error(), want)
+		}
 	}
 }
 

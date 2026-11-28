@@ -807,6 +807,11 @@ class _RunRegistry:
         with self._lock:
             return self._runs.get(run_id)
 
+    def count(self) -> int:
+        """Runs in flight, a turn waiting on an approval included."""
+        with self._lock:
+            return len(self._runs)
+
     def cancel(self, run_id: str) -> bool:
         """Stop a live run, or remember the cancel for one about to register.
 
@@ -2972,8 +2977,13 @@ def build_app() -> FastAPI:
     app.add_middleware(caller_auth.HostOriginMiddleware)
 
     @app.get("/health", include_in_schema=True)
-    async def health() -> Dict[str, str]:
-        return {"status": "ok", "service": f"gaia-agent-{AGENT_ID}"}
+    async def health() -> Dict[str, Any]:
+        # active_runs lets the daemon refuse to restart this agent mid-answer.
+        return {
+            "status": "ok",
+            "service": f"gaia-agent-{AGENT_ID}",
+            "active_runs": _registry.count(),
+        }
 
     @app.get("/version", include_in_schema=True)
     async def version() -> Dict[str, str]:

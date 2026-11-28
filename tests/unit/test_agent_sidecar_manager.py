@@ -1076,3 +1076,27 @@ def test_a_python_dev_sidecar_still_refuses_another_mode_or_checkout(
     elsewhere = tmp_path / "other" / "hub" / "agents" / "gaia" / "python"
     with pytest.raises(ModeConflictError, match="not the caller's checkout"):
         reg.ensure("gaia", mode="dev", dev_src_dir=str(elsewhere))
+
+
+@pytest.mark.parametrize(
+    "requested, program",
+    [(None, "gaiacpp"), ("gaiapy", "gaiapy"), ("gaiacpp", "gaiacpp")],
+)
+def test_the_flagship_starts_on_the_requested_program_and_records_it(
+    monkeypatch, tmp_path, requested, program
+):
+    from gaia.daemon.sidecars import fetch
+
+    binary = tmp_path / fetch.native_flagship_executable_name()
+    binary.write_bytes(b"not a real program")
+    monkeypatch.setattr(fetch, "saved_flagship", lambda: fetch.NATIVE_FLAGSHIP)
+    monkeypatch.setattr(fetch, "verified_native_flagship", lambda: binary)
+    monkeypatch.setattr(fetch, "native_flagship_version", lambda b: "0.1.0")
+    m, _ = _install_fake_spawn(monkeypatch, tmp_path)
+    m.resolved_mode = m.mode
+    m.requested_program = requested
+
+    argv, _ = m.build_spawn_command(port=40123)
+
+    assert m.program == program
+    assert (argv[0] == str(binary)) is (program == "gaiacpp")

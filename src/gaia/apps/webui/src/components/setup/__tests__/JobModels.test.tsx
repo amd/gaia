@@ -25,6 +25,22 @@ const get = () => within(screen.getByRole('region', { name: "What you'll get" })
 const fact = (term: string) => get().getByText(term).closest('div') as HTMLElement;
 const pending = (p: SetupPlan) => pendingDownloads(p.catalog!, current).map((e) => e.id);
 
+describe('models by job: the document model row', () => {
+    const docs = () => screen.getByRole('checkbox', { name: /Search your documents|embeddinggemma/i }).closest('li') as HTMLElement;
+
+    it('says On this PC once the model is downloaded', () => {
+        render(<Harness plan={plan([QWEN_READS, { ...EMBED, downloaded: true, size_gb: 0 }])} />);
+        expect(docs()).toHaveTextContent('On this PC');
+        expect(docs()).not.toHaveTextContent('checked during setup');
+    });
+
+    it('says its file is on this PC when nothing is left to download, not "0.0 GB"', () => {
+        render(<Harness plan={plan([QWEN_READS, { ...EMBED, downloaded: false, size_gb: 0, partial: false }])} />);
+        expect(docs()).toHaveTextContent('On this PC, checked during setup');
+        expect(docs()).not.toHaveTextContent('0.0 GB');
+    });
+});
+
 describe('models by job: support labels', () => {
     it('marks verified models and explains the label', () => {
         render(<Harness plan={REAL()} />);

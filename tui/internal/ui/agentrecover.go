@@ -77,12 +77,11 @@ func recoverSavedAgent(why, detail string, loadErr error, dev bool, ctrl *contro
 		}
 		path, err := saveFlagshipAgent(preflight.FlagshipAgentPython)
 		if err != nil {
-			return nil, "", fmt.Errorf("could not save %s as your agent program: %w",
-				catalog.HarnessLabel(catalog.PythonAgentChoice), err)
+			return nil, "", fmt.Errorf("could not save "+catalog.PythonAgentLabel+" as your agent program: %w", err)
 		}
 		return cat, joinNotices(fmt.Sprintf(
 			"You chose %s because %s could not start. It is saved as your agent program (%s); /agent %s switches back.",
-			catalog.HarnessLabel(catalog.PythonAgentChoice), catalog.NativeAgentBinary, path, preflight.FlagshipAgentNative), notice), nil
+			catalog.PythonAgentLabel, catalog.NativeAgentLabel, path, preflight.FlagshipAgentNative), notice), nil
 	}
 	return nil, "", errLeftRecovery
 }

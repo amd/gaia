@@ -75,8 +75,8 @@ func (m ChatModel) nativeUnavailable(query string) string {
 	if m.agentProgramHost {
 		how = "Type /agent gaiapy to switch."
 	}
-	return fmt.Sprintf("%s needs %s (the Python agent): gaiacpp, the %s agent this session runs, doesn't %s yet. %s",
-		word, catalog.HarnessLabel(catalog.PythonAgentChoice), catalog.HarnessLabel(catalog.NativeAgentBinary), lack, how)
+	return fmt.Sprintf("%s needs %s: %s, which this session runs, doesn't %s yet. %s",
+		word, catalog.PythonAgentLabel, catalog.NativeAgentLabel, lack, how)
 }
 
 // builtinCommandWord reports whether word is one of the TUI's own commands.

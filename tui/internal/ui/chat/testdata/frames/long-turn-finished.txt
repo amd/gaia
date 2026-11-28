@@ -1,4 +1,4 @@
- GAIA  │ agent gaia
+ GAIA  │ agent gaia · Full-featured (gaiapy)
 ────────────────────────────────────────────────────────────────────────────────────────────────────
   ● Reconcile batch 1 against its invoices · 10s
     └ python reconcile.py --batch 1

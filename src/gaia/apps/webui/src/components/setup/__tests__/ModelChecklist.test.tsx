@@ -34,6 +34,14 @@ describe('image-reading caveat in Settings', () => {
     });
 });
 
+describe('a model whose files are on this PC but not yet registered', () => {
+    it('says it is here and will be checked, not that it downloads', () => {
+        renderSettings([{ ...GEMMA, downloaded: false, size_gb: 0, partial: false }]);
+        expect(screen.getByText('On this PC, checked during setup')).toBeInTheDocument();
+        expect(screen.queryByText(/Download 0/)).not.toBeInTheDocument();
+    });
+});
+
 describe('fit unknown in Settings', () => {
     it("blames the model's unknown need, not the PC's memory, when the PC's memory is known", () => {
         renderSettings([{ ...QWEN_VL, fits: null, need_gb: null, capacity_gb: 40.2 }]);

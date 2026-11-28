@@ -118,7 +118,7 @@ func TestPaletteAgentPickerListsBothProgramsAndMarksBeta(t *testing.T) {
 	}
 	wantDesc := map[string]string{
 		"/agent gaiapy":  "Full-featured",
-		"/agent gaiacpp": "Fast and light (Beta)",
+		"/agent gaiacpp": "Fast and light · Beta",
 	}
 	for _, row := range rows {
 		beta := strings.Contains(row.Desc, "Beta")

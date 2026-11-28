@@ -536,3 +536,72 @@ def test_a_switch_is_refused_while_setup_is_running_its_tests(
         client.put("/api/settings", json={"flagship_agent": "gaiacpp"}).status_code
         == 200
     )
+
+
+# ---------------------------------------------------------------- what runs vs what is saved
+
+
+@pytest.fixture
+def runs(monkeypatch):
+    """The program the daemon reports the GAIA agent running on; None when stopped."""
+    from gaia.ui.sidecar import daemon_client
+
+    state = {"program": None}
+    monkeypatch.setattr(
+        daemon_client, "running_program", lambda agent_id: state["program"]
+    )
+    return state
+
+
+def test_agent_programs_report_what_runs_beside_what_is_saved(
+    client, fake_gaiacpp, runs
+):
+    _choose("gaiapy")
+    runs["program"] = "gaiacpp"
+    body = client.get("/api/agent-programs").json()
+    assert (body["current"], body["running"]) == ("gaiapy", "gaiacpp")
+
+
+def test_agent_programs_report_nothing_running_as_null(client, fake_gaiacpp, runs):
+    assert client.get("/api/agent-programs").json()["running"] is None
+
+
+def test_choosing_the_saved_agent_while_the_other_runs_restarts_it(
+    client, fake_gaiacpp, stops, runs
+):
+    # A terminal session started gaiacpp while gaiapy is the saved choice.
+    _choose("gaiapy")
+    runs["program"] = "gaiacpp"
+    r = client.put("/api/settings", json={"flagship_agent": "gaiapy"})
+    assert r.status_code == 200, r.text
+    assert stops == ["gaia"]
+
+
+def test_choosing_gaiapy_unsaved_while_gaiacpp_runs_restarts_it(
+    client, fake_gaiacpp, stops, runs
+):
+    runs["program"] = "gaiacpp"
+    client.put("/api/settings", json={"flagship_agent": "gaiapy"})
+    assert GaiaConfig.load().flagship_agent == "gaiapy"
+    assert stops == ["gaia"]
+
+
+def test_the_running_program_is_read_from_the_daemons_agent_list(monkeypatch):
+    from gaia.ui.sidecar import daemon_client
+
+    class _Inst:
+        base_url, token, api_version = "http://127.0.0.1:1", "t", "1.9"
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            running = {"agent_id": "gaia", "state": "running", "program": "gaiacpp"}
+            return {"agents": [running]}
+
+    monkeypatch.setattr(daemon_client, "attach", lambda: _Inst())
+    monkeypatch.setattr(daemon_client, "_check_agents_floor", lambda inst: None)
+    monkeypatch.setattr(daemon_client.requests, "get", lambda *a, **k: _Resp())
+    assert daemon_client.running_program("gaia") == "gaiacpp"
+    monkeypatch.setattr(daemon_client, "attach", lambda: None)
+    assert daemon_client.running_program("gaia") is None

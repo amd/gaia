@@ -19,6 +19,11 @@ mismatch is a 409 naming both checkouts; a non-absolute value is a 400.
 Its user-mode mirror, ``binary_lock_sha256`` (with ``binary_lock_path`` for the
 message, issue #2596), compares the caller's ``binaries.lock.json`` digest
 against the daemon's own; a mismatch is a 409 naming both lock files.
+``program`` (the GAIA agent only, ``gaiapy`` or ``gaiacpp``) names the program
+the caller talks to. With ``replace_program: true`` the agent is started on it,
+restarting one on the other program unless it is answering (a 409 of kind
+``program_busy``); without it, an agent running on, or saved
+to start on, the other program is a 409 (kind ``program_conflict``).
 
 The daemon serves no OpenAPI schema, so this table IS the contract:
 
@@ -57,12 +62,15 @@ from gaia.daemon.sidecars.errors import (
     InstallBusyError,
     InstallFailedError,
     ModeConflictError,
+    ProgramBusyError,
+    ProgramConflictError,
     SidecarError,
     SidecarSpawnError,
     StopFailedError,
     UnknownAgentError,
     VersionMismatchError,
 )
+from gaia.daemon.sidecars.registry import check_program
 
 
 def _ensure_failed(status_code: int, e: SidecarError) -> HTTPException:
@@ -118,6 +126,24 @@ def build_agents_router(token: str, registry):
                 raise HTTPException(status_code=400, detail=f"{name} must be a string")
         return sha256, path
 
+    async def _body_program(request: Request) -> "tuple[Optional[str], bool]":
+        """``(program, replace_program)`` from an optional JSON body."""
+        try:
+            body = await request.json()
+        except ValueError:
+            return None, False
+        if not isinstance(body, dict):
+            return None, False
+        program = body.get("program")
+        replace = body.get("replace_program", False)
+        if program is not None and not isinstance(program, str):
+            raise HTTPException(status_code=400, detail="program must be a string")
+        if not isinstance(replace, bool):
+            raise HTTPException(
+                status_code=400, detail="replace_program must be true or false"
+            )
+        return program, replace
+
     async def _install_body(request: Request) -> "tuple[Optional[str], bool]":
         """``(version, trusted)`` from an optional JSON install body.
 
@@ -146,6 +172,14 @@ def build_agents_router(token: str, registry):
         mode = await _body_mode(request)
         dev_src_dir = await _body_dev_src_dir(request)
         lock_sha256, lock_path = await _body_binary_lock(request)
+        program, replace_program = await _body_program(request)
+        try:
+            check_program(agent_id, program)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        program_kwargs = {}
+        if program is not None:
+            program_kwargs = {"program": program, "replace_program": replace_program}
         lock_kwargs = {}
         if lock_sha256 is not None:
             lock_kwargs = {
@@ -161,10 +195,16 @@ def build_agents_router(token: str, registry):
                 mode=mode,
                 dev_src_dir=dev_src_dir,
                 **lock_kwargs,
+                **program_kwargs,
             )
         except UnknownAgentError as e:
             raise _ensure_failed(404, e) from e
-        except (ModeConflictError, CapacityError) as e:
+        except (
+            ModeConflictError,
+            ProgramConflictError,
+            ProgramBusyError,
+            CapacityError,
+        ) as e:
             raise _ensure_failed(409, e) from e
         except DevSrcDirResolutionError as e:
             raise _ensure_failed(400, e) from e

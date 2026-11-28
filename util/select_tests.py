@@ -198,6 +198,7 @@ OS_MODULE_PREFIXES = PLATFORM_MODULE_PREFIXES + (
     "gaia.llm.gpu_memory",
     "gaia.llm.cloud_keys",
     "gaia.hub.native_launcher",
+    "gaia.ui.models",
     "gaia.hub.compatibility",
     "gaia.agents.registry",
     "gaia.agents.base.console",

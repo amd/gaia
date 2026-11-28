@@ -1,7 +1,7 @@
  GAIA  │ agent gaia
 ────────────────────────────────────────
 Welcome to GAIA
-Connected to: agent gaia
+Connected to: agent gaia · Full-featured
 
 Try one: Tab to select, Enter to run
   1  Today's tech news in brief

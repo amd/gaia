@@ -377,10 +377,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&mockAgent, "mock", "",
 		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
 	rootCmd.PersistentFlags().StringVar(&agentProgram, "agent-program", "",
-		"which agent program GAIA runs on: "+catalog.NativeAgentBinary+" ("+
-			catalog.HarnessLabel(catalog.NativeAgentBinary)+", the native agent), "+
-			catalog.PythonAgentBinary+" or "+catalog.PythonAgentChoice+" ("+
-			catalog.HarnessLabel(catalog.PythonAgentChoice)+", the Python agent), or a path to either. Unset runs "+
+		"which agent program GAIA runs on: "+catalog.NativeAgentBinary+" ("+catalog.NativeAgentName+", Beta), "+
+			catalog.PythonAgentChoice+" or "+catalog.PythonAgentBinary+" ("+catalog.PythonAgentName+"), or a path to either. Unset runs "+
 			"the one saved with /agent ("+preflight.FlagshipAgentKey+" in config.json), else "+
 			catalog.PythonAgentBinary+" ("+catalog.HarnessLabel(catalog.PythonAgentChoice)+"); "+
 			"a named one that is missing is an error. Overrides "+catalog.AgentEnv)

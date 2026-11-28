@@ -48,6 +48,29 @@ func FlagshipAgentProgram(choice string) string {
 	return ""
 }
 
+// FlagshipAgentLabel names a saved choice for the user: "Full-featured
+// (gaiapy)" or "Fast and light (gaiacpp)". Anything else is returned as is.
+func FlagshipAgentLabel(choice string) string {
+	switch choice {
+	case FlagshipAgentPython:
+		return catalog.PythonAgentLabel
+	case FlagshipAgentNative:
+		return catalog.NativeAgentLabel
+	}
+	return choice
+}
+
+// flagshipAgentName is a program's name alone, for a line that has no room for its id.
+func flagshipAgentName(choice string) string {
+	switch choice {
+	case FlagshipAgentPython:
+		return catalog.PythonAgentName
+	case FlagshipAgentNative:
+		return catalog.NativeAgentName
+	}
+	return choice
+}
+
 // CheckFlagshipAgent refuses anything but the two saved values.
 func CheckFlagshipAgent(choice string) error {
 	if FlagshipAgentProgram(choice) == "" {

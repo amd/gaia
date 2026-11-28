@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,6 +34,9 @@ type fakeHost struct {
 	rotated  bool
 	unauthed int
 	seen     []string
+	ensured  []byte
+	agents   string // the agents listing; agentsRunning when empty
+	busy     string // when set, ensure answers 409 program_busy with this detail
 }
 
 func newFakeHost(t *testing.T) *fakeHost {
@@ -126,10 +130,27 @@ func (h *fakeHost) handle(w http.ResponseWriter, r *http.Request) {
 	case "/daemon/v1/status":
 		fmt.Fprintf(w, `{"service":"gaia-daemon","pid":%d}`, pid)
 	case "/daemon/v1/agents":
-		_, _ = w.Write([]byte(agentsRunning))
+		h.mu.Lock()
+		agents := h.agents
+		h.mu.Unlock()
+		if agents == "" {
+			agents = agentsRunning
+		}
+		_, _ = w.Write([]byte(agents))
 	case "/v1/gaia/init":
 		_, _ = w.Write([]byte(initReady))
 	case "/daemon/v1/agents/gaia/ensure":
+		raw, _ := io.ReadAll(r.Body)
+		h.mu.Lock()
+		h.ensured = raw
+		busy := h.busy
+		h.mu.Unlock()
+		if busy != "" {
+			w.Header().Set(daemon.ErrorKindHeader, daemon.KindProgramBusy)
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"detail": busy})
+			return
+		}
 		// A restarted daemon starts its sidecars again when a relayed call needs one.
 		_, _ = w.Write([]byte(`{"agent_id":"gaia","state":"running"}`))
 	default:
@@ -276,5 +297,63 @@ func TestATransportFailureIsNotSticky(t *testing.T) {
 	if !second.OK {
 		t.Fatalf("the gate never recovered from a daemon that moved: final=%q diag=%s",
 			second.Final, second.Diagnosis)
+	}
+}
+
+// The Agent UI may have the shared GAIA agent on gaiacpp. A session that talks
+// to the Python agent must not attach to it: the gate asks the daemon to put
+// the GAIA agent back on gaiapy.
+func TestTheGatePutsAGaiacppAgentBackOnThePythonAgent(t *testing.T) {
+	h := newFakeHost(t)
+	h.agents = strings.Replace(agentsRunning, `"dev_src_dir":null`, `"dev_src_dir":null,"program":"gaiacpp"`, 1)
+	if rep := Check(context.Background(), h.transport(), testConfig()); !rep.Ready() {
+		t.Fatalf("the gate did not pass:\n%s", rep)
+	}
+	h.mu.Lock()
+	raw := h.ensured
+	h.mu.Unlock()
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode ensure body %q: %v", raw, err)
+	}
+	if body["program"] != "gaiapy" || body["replace_program"] != true {
+		t.Fatalf("gate ensure body = %v, want program gaiapy with replace_program", body)
+	}
+}
+
+func TestTheGateLeavesAPythonAgentAlone(t *testing.T) {
+	h := newFakeHost(t)
+	h.agents = strings.Replace(agentsRunning, `"dev_src_dir":null`, `"dev_src_dir":null,"program":"gaiapy"`, 1)
+	if rep := Check(context.Background(), h.transport(), testConfig()); !rep.Ready() {
+		t.Fatalf("the gate did not pass:\n%s", rep)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ensured != nil {
+		t.Fatalf("the gate restarted a GAIA agent already on gaiapy: %s", h.ensured)
+	}
+}
+
+// Another window is mid-answer on gaiacpp: the launch must not restart it, and
+// says so plainly instead of claiming the Python agent answers.
+func TestTheGateDoesNotCutOffAnotherWindowsAnswer(t *testing.T) {
+	h := newFakeHost(t)
+	h.agents = strings.Replace(agentsRunning, `"dev_src_dir":null`, `"dev_src_dir":null,"program":"gaiacpp"`, 1)
+	h.busy = "The GAIA agent is running on Fast and light (gaiacpp) and another window is answering with it, " +
+		"so it was not restarted on Full-featured (gaiapy). Try again when that answer finishes, or switch from that window."
+
+	rep := Check(context.Background(), h.transport(), testConfig())
+	if rep.Ready() {
+		t.Fatalf("the gate passed while gaiacpp was answering elsewhere:\n%s", rep)
+	}
+	row, _ := rep.Find(KeySidecar)
+	if row.Line != "Fast and light is answering in another window" {
+		t.Errorf("sidecar row line = %q", row.Line)
+	}
+	if row.Detail != h.busy {
+		t.Errorf("sidecar row detail = %q, want the service's own sentence", row.Detail)
+	}
+	if !strings.Contains(row.Remedy.Action, "finishes") || strings.Contains(row.Line+row.Detail, "HTTP 409") {
+		t.Errorf("the refusal is not plain: %+v", row)
 	}
 }

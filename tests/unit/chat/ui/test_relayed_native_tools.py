@@ -214,6 +214,48 @@ class TestActivityLines:
         assert handler.events[0]["narration"] == "Running command: pytest -q"
         assert handler.events[-1]["summary"] == "3 passed"
 
+    def test_a_command_step_keeps_the_whole_command_and_all_its_output(self):
+        """The step's one-line detail and five-line summary are not the record."""
+        command = "cd /work/repo && " + " && ".join(
+            f"python3 -m pytest tests/test_{i}.py -x" for i in range(12)
+        )
+        stdout = "\n".join(f"line {i}" for i in range(40)) + "\n"
+        handler = _relay(
+            {"type": "tool_call", "tool": "bash_execute", "args": {"command": command}},
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": {
+                    "stdout": stdout,
+                    "stderr": "warning: slow\n",
+                    "exit_code": 3,
+                    "timed_out": False,
+                    "cwd": "/work/repo",
+                },
+            },
+        )
+
+        assert len(command) > 150
+        assert handler.events[-1]["command_output"] == {
+            "command": command,
+            "stdout": stdout,
+            "stderr": "warning: slow\n",
+            "return_code": 3,
+            "cwd": "/work/repo",
+        }
+
+    def test_another_tools_result_carries_no_command_output(self):
+        handler = _relay(
+            {"type": "tool_call", "tool": "file_read", "args": {"path": "a.py"}},
+            {
+                "type": "tool_result",
+                "tool": "file_read",
+                "data": {"path": "a.py", "lines": 3, "content": "x"},
+            },
+        )
+
+        assert "command_output" not in handler.events[-1]
+
     def test_a_search_result_is_named_as_its_call_was(self):
         handler = _relay(
             {

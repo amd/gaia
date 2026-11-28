@@ -14,6 +14,7 @@ import {
     alwaysScopeText,
     type PermissionDecision,
 } from '../stores/notificationStore';
+import { useChatStore } from '../stores/chatStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
 import {
@@ -231,6 +232,12 @@ export function shortScope(scope: string): string {
     });
 }
 
+/** A multi-line command by its first line, for a button; every line stays in its tooltip. */
+function firstLine(command: string): string {
+    const [first, ...rest] = command.split('\n');
+    return rest.length ? `${first} …` : first;
+}
+
 /** Lines of code a prompt shows before "Show all". */
 export const CODE_PREVIEW_LINES = 12;
 
@@ -289,6 +296,10 @@ export function formatCountdown(seconds: number): string {
 function PromptCard({ notification }: { notification: GaiaNotification }) {
     const t = useT();
     const respond = useNotificationStore((s) => s.respondToPermission);
+    // Where the command runs; until the backend has said, this device, which the desktop app shares with it.
+    const onWindows = useChatStore((s) => (s.systemStatus?.host_os
+        ? s.systemStatus.host_os === 'windows'
+        : /Win/i.test(navigator.platform)));
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showArgs, setShowArgs] = useState(false);
@@ -306,8 +317,11 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
     // It names a file or skill the model chose, so its hidden characters show as codes.
     const markedScope = notification.alwaysScope && visibleStrict(notification.alwaysScope);
+    // A command grant is the command: its line breaks are kept, and no path in it is shortened.
+    const commandGrant = COMMAND_SUMMARY_TOOLS.has(notification.tool ?? '');
     const scopeText = alwaysScopeText({ ...notification, alwaysScope: markedScope }, t)
-        ?? visibleStrict(notification.alwaysLabel ?? scope ?? '');
+        ?? (commandGrant ? visibleCommand : visibleStrict)(notification.alwaysLabel ?? scope ?? '');
+    const buttonScope = commandGrant ? firstLine(scopeText) : shortScope(scopeText);
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const field = summarize(notification);
@@ -342,7 +356,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const command = typeof args.command === 'string' ? args.command : relayed?.command ?? '';
     // What the command runs when its own text hides it: base64 PowerShell, cmd's ^ escapes.
     const decoded = command ? decodedPowerShell(command) : '';
-    const reading = command.includes('^') ? cmdReading(command) : '';
+    const reading = onWindows && command.includes('^') ? cmdReading(command) : '';
     const hidden = detailCoded || [code, relayed?.extras].some(unseen) || [command, decoded].some(unseenCommand)
         || [args.path, folder, relayed?.folder].some(unseenStrict);
 
@@ -459,7 +473,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
             )}
             {suggestAlways && !expired && (
                 <p className="perm-card-hint">
-                    {t.compose((say) => `${say(pluralKey('prompt.repeated', repeats), { n: repeats })} ${say('prompt.alwaysHint', { scope: scopeText })}`)}
+                    {t.compose((say) => `${say(pluralKey('prompt.repeated', repeats), { n: repeats })} ${say('prompt.alwaysHint', { scope: commandGrant ? buttonScope : scopeText })}`)}
                 </p>
             )}
             {expired ? (
@@ -478,7 +492,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             disabled={busy}
                             title={scopeText}
                         >
-                            {t('prompt.alwaysAllow', { scope: shortScope(scopeText) })}
+                            {t('prompt.alwaysAllow', { scope: buttonScope })}
                         </button>
                     )}
                     <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>

@@ -66,8 +66,8 @@ def build_app():
     )
 
     @app.get("/health", include_in_schema=True)
-    async def health() -> Dict[str, str]:
-        return {"status": "ok", "service": f"gaia-agent-{AGENT_ID}"}
+    async def health() -> Dict[str, Any]:
+        return {"status": "ok", "service": f"gaia-agent-{AGENT_ID}", "active_runs": 0}
 
     @app.get("/version", include_in_schema=True)
     async def version() -> Dict[str, str]:

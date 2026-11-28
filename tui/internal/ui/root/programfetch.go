@@ -57,7 +57,7 @@ const nothingChanged = "Nothing was changed: this session is still on %s and you
 func downloadable(err error) (why string, ok bool) {
 	var missing *catalog.MissingProgramError
 	if errors.As(err, &missing) && missing.Binary == catalog.NativeAgentBinary && missing.Lookup.Unverified == "" {
-		return catalog.NativeAgentBinary + " (Beta) is not on this PC yet.", true
+		return catalog.NativeAgentLabel + " · Beta is not on this PC yet.", true
 	}
 	var broken *catalog.NativeIntegrityError
 	if errors.As(err, &broken) {
@@ -131,9 +131,9 @@ func programOfferText(st gaiaprogram.Status) string {
 		where = " in " + filepath.Dir(st.Target)
 	}
 	return fmt.Sprintf(
-		"This GAIA release has %s %s (Beta): %s, checked against the release's checksums before it is installed%s.\n"+
+		"This GAIA release has %s %s · Beta: %s, checked against the release's checksums before it is installed%s.\n"+
 			"Press Enter to download it and switch, or Esc to cancel.",
-		catalog.NativeAgentBinary, st.Version, size, where)
+		catalog.NativeAgentLabel, st.Version, size, where)
 }
 
 // programFetchKey answers the offer or cancels the download. It reports

@@ -3,6 +3,7 @@
 
 """Pydantic models for GAIA Agent UI API."""
 
+import sys
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -22,6 +23,13 @@ def _lemonade_web_origin() -> str:
 
     parsed = urlparse(resolve_lemonade_base_url())
     return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _host_os() -> str:
+    """The system this backend runs on, as ``SystemStatus.host_os`` names it."""
+    if sys.platform == "win32":
+        return "windows"
+    return "macos" if sys.platform == "darwin" else "linux"
 
 
 class DownloadProgress(BaseModel):
@@ -136,6 +144,9 @@ class SystemStatus(BaseModel):
     probe_warnings: List[str] = Field(default_factory=list)
     # The folder that holds the chat database; None for an in-memory one.
     data_dir: Optional[str] = None
+    # The system this backend, and so every command it runs, is on. A factory
+    # keeps the exported schema the same on every platform.
+    host_os: Literal["windows", "macos", "linux"] = Field(default_factory=_host_os)
 
 
 class LoadedModelInfo(BaseModel):

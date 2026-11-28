@@ -173,20 +173,28 @@ export function pendingDownloads(catalog: SetupCatalogEntry[], sel: Selection): 
         .sort((a, b) => (b.size_gb ?? 0) - (a.size_gb ?? 0));
 }
 
+/** A download total: megabytes under 1 GB, where a small agent would otherwise round away. */
+export const roundTotal = (gb: number): number => (gb < 1 ? Math.round(gb * 1000) / 1000 : round1(gb));
+
 export interface Totals {
-    /** GB to download; null when a ticked model's size is unknown. */
+    /** GB to download, the agent's included; null when a ticked model's size is unknown. */
     downloadGb: number | null;
     freeGb: number | null;
     /** Free space after the download; null when either side is unknown. */
     afterGb: number | null;
 }
 
-export function totals(plan: SetupPlan, sel: Selection): Totals {
+/** *agentGb* is an agent still to download: in the total, but not on the model drive. */
+export function totals(plan: SetupPlan, sel: Selection, agentGb = 0): Totals {
     const pending = pendingDownloads(catalogOf(plan), sel);
     const sizes = pending.map((e) => e.size_gb);
-    const downloadGb = sizes.every((s): s is number => s != null) ? round1(sizes.reduce((a, b) => a + b, 0)) : null;
+    const modelsGb = sizes.every((s): s is number => s != null) ? round1(sizes.reduce((a, b) => a + b, 0)) : null;
     const freeGb = plan.disk?.free_gb ?? null;
-    return { downloadGb, freeGb, afterGb: downloadGb != null && freeGb != null ? round1(freeGb - downloadGb) : null };
+    return {
+        downloadGb: modelsGb != null ? roundTotal(modelsGb + agentGb) : null,
+        freeGb,
+        afterGb: modelsGb != null && freeGb != null ? round1(freeGb - modelsGb) : null,
+    };
 }
 
 export interface Shortfall {
@@ -200,6 +208,7 @@ export interface Shortfall {
 
 /** The disk shortfall of the selection, as the backend's `disk_shortfall` words it; null when it fits or is unknown. */
 export function shortfall(plan: SetupPlan, sel: Selection): Shortfall | null {
+    // The model drive only: an agent goes to GAIA's own folder.
     const { downloadGb, freeGb } = totals(plan, sel);
     if (downloadGb == null || freeGb == null || downloadGb <= freeGb) return null;
     const freeUpGb = round1(downloadGb - freeGb);

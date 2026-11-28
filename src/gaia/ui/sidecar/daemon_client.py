@@ -120,14 +120,10 @@ def acquire_handle(agent_id: str) -> SidecarHandle:
     return _ensure(inst, agent_id)
 
 
-def running_handle(agent_id: str) -> Optional[SidecarHandle]:
-    """A handle routed through the daemon's relay if it lists *agent_id* running.
+def running_program(agent_id: str) -> Optional[str]:
+    """The program *agent_id*'s running sidecar is (``gaiapy``/``gaiacpp``); ``None`` when none runs.
 
-    For work that only matters to a sidecar already up (ending one of its
-    sessions). It never starts, stops or restarts anything: no ``ensure``, which
-    would start a stopped agent or restart one on the wrong Lemonade under
-    other chats' turns. The relay answers 503 if the agent exits meanwhile.
-    Blocking.
+    Attach-only and blocking, like :func:`running_handle`.
     """
     try:
         inst = attach()
@@ -136,6 +132,11 @@ def running_handle(agent_id: str) -> Optional[SidecarHandle]:
     if inst is None:
         return None
     _check_agents_floor(inst)
+    entry = _running_entry(_list_agents(inst), agent_id, inst.base_url)
+    return entry.get("program") if entry is not None else None
+
+
+def _list_agents(inst: DaemonInstance):
     try:
         r = requests.get(
             f"{inst.base_url}/daemon/v1/agents",
@@ -153,7 +154,26 @@ def running_handle(agent_id: str) -> Optional[SidecarHandle]:
             f"the daemon could not list its agents: {error_detail(r)}",
             kind=r.headers.get(ERROR_KIND_HEADER, ""),
         )
-    entry = _running_entry(r, agent_id, inst.base_url)
+    return r
+
+
+def running_handle(agent_id: str) -> Optional[SidecarHandle]:
+    """A handle routed through the daemon's relay if it lists *agent_id* running.
+
+    For work that only matters to a sidecar already up (ending one of its
+    sessions). It never starts, stops or restarts anything: no ``ensure``, which
+    would start a stopped agent or restart one on the wrong Lemonade under
+    other chats' turns. The relay answers 503 if the agent exits meanwhile.
+    Blocking.
+    """
+    try:
+        inst = attach()
+    except DaemonError as e:
+        raise _wrap_daemon_error(e) from e
+    if inst is None:
+        return None
+    _check_agents_floor(inst)
+    entry = _running_entry(_list_agents(inst), agent_id, inst.base_url)
     if entry is None:
         return None
     # The daemon token, not the sidecar's: the relay swaps in the sidecar bearer.

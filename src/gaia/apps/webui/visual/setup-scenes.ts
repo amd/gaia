@@ -73,6 +73,13 @@ const PLAN_PRESENT = {
     catalog: CATALOG.map((e) => (e.planned ? { ...e, downloaded: true, size_gb: 0 } : e)),
 };
 const PLAN_SHORT = { ...PLAN, disk: { ...PLAN.disk, free_gb: 2.1 } };
+// The chat model is here; the document model's file is too, but the model server hasn't registered it.
+const PLAN_FILE_FOUND = {
+    ...PLAN,
+    catalog: CATALOG.map((e) => (e.id === EMBED_ID
+        ? { ...e, downloaded: false, size_gb: 0, partial: false }
+        : e.planned ? { ...e, downloaded: true, size_gb: 0 } : e)),
+};
 // A 16 GB laptop: GAIA keeps 10.7 GB for other apps, so Qwen3.5 2B is the pick (13.1 GB left) and reads
 // images itself; the 4B and Gemma would load but are tight.
 const QWEN_2B = entry({ id: 'Qwen3.5-2B-GGUF', name: 'Qwen3.5 2B (Multimodal)', roles: ['chat'], size_gb: 2.01, full_size_gb: 2.01, recommended: true, planned: true, selected: true, need_gb: 4.1, capacity_gb: 10.7, reads_images: true, feature_tier: 'compact' });
@@ -656,6 +663,48 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        // A model file already on disk is not a download; a picked agent that isn't here is, in megabytes.
+        name: 'models-file-found',
+        answers: { plan: PLAN_FILE_FOUND, agent: { gaiacpp: 'downloadable' } },
+        reach: async (page) => {
+            await toModels(page);
+            const total = page.locator('.mc-summary .mc-stat-value').first();
+            await expect(total).toHaveText('0.0 GB');
+            await page.locator('.agent-choice [role="radio"]').nth(1).click();
+            await expect(total).toHaveText(/^[0-9]+ MB$/);
+            const found = page.locator('.mc-status').filter({ hasText: /checked during setup|يُفحص أثناء الإعداد/ });
+            await expect(found.first()).toBeVisible();
+            await found.first().scrollIntoViewIfNeeded();
+        },
+    },
+    {
+        // A fresh PC: setup's run installs gaiapy, so both download totals count it.
+        name: 'models-gaiapy-missing',
+        answers: { plan: PLAN_FILE_FOUND, agent: { gaiacpp: 'installed', gaiapy: 'missing' } },
+        reach: async (page) => {
+            await toPlan(page);
+            await expect(page.locator('.setup-facts dd').first()).toHaveText('153 MB');
+            await page.locator('.setup-footer .btn-secondary').click();
+            await expect(page.locator('.mc-list').first()).toBeVisible();
+            const total = page.locator('.mc-summary .mc-stat-value').first();
+            await expect(total).toHaveText('153 MB');
+            await total.scrollIntoViewIfNeeded();
+        },
+    },
+    {
+        // Fast and light picked on a fresh PC: the total still holds Full-featured, and says so.
+        name: 'models-gaiapy-missing-fastlight',
+        answers: { plan: PLAN_FILE_FOUND, agent: { gaiacpp: 'installed', gaiapy: 'missing' } },
+        reach: async (page) => {
+            await toModels(page);
+            await page.locator('.agent-choice [role="radio"]').nth(1).click();
+            const note = page.locator('.mc-summary-note');
+            await expect(note).toBeVisible();
+            await expect(page.locator('.mc-summary .mc-stat-value').first()).toHaveText('153 MB');
+            await note.scrollIntoViewIfNeeded();
+        },
+    },
+    {
         // An older installer's gaiacpp under a newer app: flagged on Customize, with Update, and still pickable.
         name: 'models-agent-outdated',
         answers: { agent: { gaiacpp: 'outdated' } },
@@ -905,6 +954,22 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.setup-done')).toBeVisible();
             // A first run has nothing to pick up: the other tasks show, Check in waits.
             await expect(page.locator('.start-card')).toHaveCount(1);
+        },
+    },
+    {
+        name: 'test-running-gaiacpp',
+        answers: { status: RUN_TESTING, agent: { current: 'gaiacpp' } },
+        reach: async (page) => {
+            await expect(page.locator('.setup-result.is-running')).toBeVisible();
+            await expect(page.locator('.setup-agent-line')).toBeVisible();
+        },
+    },
+    {
+        name: 'ready-gaiacpp',
+        answers: { status: RUN_READY, plan: PLAN_DONE, agent: { current: 'gaiacpp' } },
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            await expect(page.locator('.setup-done .setup-agent-line')).toBeVisible();
         },
     },
     {

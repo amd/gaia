@@ -16,7 +16,7 @@ Both must therefore resolve a module-level ``app``. Because the frozen binary
 and a source ``uvicorn gaiapy.server:app`` share that one app object,
 they serve a byte-for-byte identical ``/v1/gaia/*`` contract.
 
-    GET /health   -> {"status": "ok", "service": "gaia-agent-gaia"}
+    GET /health   -> {"status": "ok", "service": "gaia-agent-gaia", "active_runs": 0}
     GET /version  -> {"apiVersion": <wire contract>, "agentVersion": <package>}
 
 A frozen build has no Python interpreter, so ``run_python`` re-launches this

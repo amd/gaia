@@ -63,7 +63,7 @@ from gaia.daemon.sidecars.errors import (
     VersionMismatchError,
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
-from gaia.harnesses import HarnessUnavailableError
+from gaia.harnesses import HarnessUnavailableError, require_runnable
 from gaia.logger import get_logger
 from gaia.utils.terminal import (
     background_popen_kwargs,
@@ -225,6 +225,10 @@ class AgentSidecarManager:
         # True while the spawned program has no dev/user variant (gaiacpp), so a
         # re-ensure's mode cannot conflict with it.
         self.mode_agnostic = False
+        # The flagship program to start instead of the saved choice; set per ensure.
+        self.requested_program: Optional[str] = None
+        # The flagship program the running process is ("gaiapy"/"gaiacpp"); None for other agents.
+        self.program: Optional[str] = None
         # Per-session caller-auth token handed to the sidecar on spawn (#1706).
         # Generated once per manager instance; the proxy replays it as a bearer
         # token on every request. Delivered via a 0600 file (#2149).
@@ -386,12 +390,17 @@ class AgentSidecarManager:
             raise ValueError(f"port {RESERVED_PORT} is reserved and must never be used")
         if self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID:
             try:
-                harness = fetch.chosen_flagship()
+                harness = (
+                    require_runnable(self.requested_program)
+                    if self.requested_program
+                    else fetch.chosen_flagship()
+                )
             except HarnessUnavailableError as e:
                 raise SidecarSpawnError(
                     f"Cannot start the GAIA agent: {e} Sidecar logs: {self.log_dir}.",
                     kind=KIND_HARNESS_UNAVAILABLE,
                 ) from e
+            self.program = harness
             if harness == fetch.NATIVE_FLAGSHIP:
                 return self._native_flagship_command(port)
             if harness != fetch.PYTHON_FLAGSHIP:
@@ -518,6 +527,20 @@ class AgentSidecarManager:
                 f"`gaia daemon start-agent {self.spec.agent_id}` and check the "
                 f"sidecar log at {self._log_path or self.log_dir}."
             )
+
+    def active_runs(self, timeout: float = _READINESS_TIMEOUT) -> Optional[int]:
+        """Turns the sidecar is running or holding for an answer; ``None`` when it doesn't say.
+
+        Read from ``/health``, so it counts every caller's turns, the Agent
+        UI's direct ones too. Raises as :meth:`check_responsive` does.
+        """
+        self.check_responsive(timeout)
+        r = self._http_get(f"{self.base_url}/health", timeout=timeout)
+        try:
+            count = r.json().get("active_runs")
+        except ValueError:
+            return None
+        return count if isinstance(count, int) else None
 
     def _open_log(self, port: int):
         # Redirect the sidecar's stdout+stderr to a per-port file. A plain PIPE

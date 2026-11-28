@@ -282,7 +282,7 @@ func remaining(keep []bool) int {
 // accounted for.
 func (m ChatModel) hintBudget() int {
 	return components.StatusHintBudget(components.StatusBarState{
-		AgentName:        m.agentIdentity(),
+		AgentName:        m.barIdentity(),
 		Connected:        m.connected,
 		Streaming:        m.streaming,
 		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),

@@ -30,4 +30,26 @@ describe('fromApiMessages', () => {
         expect(screen.getByRole('button', { name: 'Stopped after 8 s' })).toBeInTheDocument();
         expect(document.body).not.toHaveTextContent('Answered in');
     });
+
+    it("reads a saved command's whole text, output and exit code back under the view's names", () => {
+        const command = `cd /work && ${'python3 -m pytest tests/test_x.py -x && '.repeat(8)}echo done`;
+        const [message] = fromApiMessages([row({ agent_steps: [{
+            id: 1, type: 'tool', label: 'Using run_shell_command', tool: 'run_shell_command',
+            detail: `command: ${command.slice(0, 150)}...`, result: 'line 0', success: true,
+            commandOutput: {
+                command, stdout: 'line 0\nline 1\n', stderr: '', return_code: 0, cwd: '/work',
+                duration_seconds: 1.5, truncated: false,
+            },
+        }] })]);
+        expect(message.agentSteps?.[0].commandOutput).toEqual({
+            command, stdout: 'line 0\nline 1\n', stderr: '', returnCode: 0, cwd: '/work',
+            durationSeconds: 1.5, truncated: false, expectedExit: undefined,
+        });
+    });
+
+    it('leaves a command step that is already under those names alone', () => {
+        const commandOutput = { command: 'ls', stdout: 'a\n', stderr: '', returnCode: 2 };
+        const [message] = fromApiMessages([row({ agentSteps: [{ id: 1, type: 'tool', label: 'x', commandOutput }] })]);
+        expect(message.agentSteps?.[0].commandOutput).toEqual(commandOutput);
+    });
 });

@@ -209,6 +209,37 @@ func (e *RequestError) Error() string {
 
 func (e *RequestError) Unwrap() error { return e.Err }
 
+// ErrorKindHeader carries the daemon's KIND_* name for a refusal.
+const ErrorKindHeader = "X-GAIA-Error-Kind"
+
+// KindProgramConflict: the GAIA agent runs on, or is set to start on, another program.
+const KindProgramConflict = "program_conflict"
+
+// KindProgramBusy: the GAIA agent is answering, so it was not restarted on another program.
+const KindProgramBusy = "program_busy"
+
+// ProgramBusyError is the daemon refusing to restart the GAIA agent on the
+// Python agent while another window's answer is still running on it.
+type ProgramBusyError struct {
+	Detail string
+}
+
+func (e *ProgramBusyError) Error() string { return e.Detail }
+
+// ProgramConflictError is the daemon refusing to hand this session gaiacpp
+// when it talks to the Python agent: someone switched the GAIA agent elsewhere.
+type ProgramConflictError struct {
+	Detail string
+}
+
+func (e *ProgramConflictError) Error() string {
+	return fmt.Sprintf(
+		"this session talks to Full-featured (%s), but the GAIA background service refused it (%s). "+
+			"Nothing was sent. Start the terminal UI again to put the GAIA agent back on %s, "+
+			"or switch this session with /agent gaiacpp",
+		PythonProgram, e.Detail, PythonProgram)
+}
+
 // DaemonRestartedError is a call about a run or session that a daemon restart
 // ended: the new daemon starts fresh sidecars, so there is nothing to send it to.
 type DaemonRestartedError struct {

@@ -59,7 +59,7 @@ func TestEachPingReplacesTheReportedVersion(t *testing.T) {
 	m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", true)
 	m.width, m.height = 100, 30
 	m = feed(t, m, versionedPing("0.3.0", "0.25.0"))
-	if got := m.agentIdentity(); got != "agent gaia v0.3.0" {
+	if got := m.bareIdentity(); got != "agent gaia v0.3.0" {
 		t.Fatalf("identity = %q, want the reported 0.3.0", got)
 	}
 	if !strings.Contains(ansi.Strip(m.renderWelcome()), "GAIA core 0.25.0") {
@@ -67,7 +67,7 @@ func TestEachPingReplacesTheReportedVersion(t *testing.T) {
 	}
 
 	m = feed(t, m, canonicalModelPing("Gemma-4-E4B-it-GGUF", "Gemma-4-E4B-it-GGUF", false))
-	if got := m.agentIdentity(); got != "agent gaia" {
+	if got := m.bareIdentity(); got != "agent gaia" {
 		t.Errorf("identity = %q, want no version once the agent stops reporting one", got)
 	}
 }

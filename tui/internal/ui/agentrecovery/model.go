@@ -127,7 +127,7 @@ func (m Model) options() []option {
 	}
 	return []option{
 		download,
-		{choice: UsePython, label: "Use " + catalog.HarnessLabel(catalog.PythonAgentChoice),
+		{choice: UsePython, label: "Use " + catalog.PythonAgentLabel,
 			note: "saved as your agent program; /agent " + catalog.NativeAgentBinary + " switches back"},
 		{choice: Quit, label: "Quit"},
 	}
@@ -256,9 +256,7 @@ func (m Model) View() string {
 	b.WriteString(titleStyle.Render("GAIA's agent didn't start") + "\n\n")
 	b.WriteString(wrap.Inherit(textStyle).Render(m.why) + "\n")
 	b.WriteString(wrap.Inherit(dimStyle).Render(
-		"Your saved agent program is "+catalog.HarnessLabel(catalog.NativeAgentBinary)+
-			" ("+catalog.NativeAgentBinary+", Beta).") + "\n")
-	b.WriteString(wrap.Inherit(dimStyle).Render("Nothing has been switched; pick what to do.") + "\n\n")
+		"Your saved agent program is "+catalog.NativeAgentLabel+" · Beta. Nothing has been switched; pick what to do.") + "\n\n")
 
 	if m.stage == stageDownloading {
 		b.WriteString(textStyle.Render(m.progressLine()) + "\n\n")

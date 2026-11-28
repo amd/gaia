@@ -732,9 +732,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
+                  "additionalProperties": true,
                   "title": "Response Health Health Get",
                   "type": "object"
                 }

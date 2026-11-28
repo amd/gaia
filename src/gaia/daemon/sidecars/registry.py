@@ -22,6 +22,8 @@ from gaia.daemon.sidecars.errors import (
     CapacityError,
     DevSrcDirResolutionError,
     ModeConflictError,
+    ProgramBusyError,
+    ProgramConflictError,
     SidecarInhibitedError,
     SidecarNotRunningError,
     StopFailedError,
@@ -175,8 +177,17 @@ class SidecarRegistry:
         dev_src_dir: Optional[str] = None,
         binary_lock_sha256: Optional[str] = None,
         binary_lock_path: Optional[str] = None,
+        program: Optional[str] = None,
+        replace_program: bool = False,
     ) -> dict:
         """Spawn-or-attach *agent_id*'s sidecar; return its fields + token.
+
+        *program* (the GAIA agent only, ``gaiapy`` or ``gaiacpp``) is the
+        program the caller talks to. With *replace_program* the agent is
+        started on it, restarting one running on the other. Without it, an
+        agent running on, or saved to start on, another program is a
+        ``ProgramConflictError`` and nothing changes: a client never talks
+        to a program it doesn't expect.
 
         *dev_src_dir* is the caller's own belief about which checkout it is
         asking for (issue #2588) — it is COMPARED against ``spec.dev_src_dir``,
@@ -192,6 +203,7 @@ class SidecarRegistry:
         daemon's digest as ``binary_lock_sha256``.
         """
         spec = self._spec(agent_id)
+        check_program(agent_id, program)
         with self._lock:
             holder = self._managers.get(agent_id)
             if holder is None:
@@ -210,6 +222,20 @@ class SidecarRegistry:
                 # GAIA's own was chosen over the LEMONADE_BASE_URL it got.
                 logger.info(
                     "daemon: restarting agent '%s' on GAIA's own Lemonade", agent_id
+                )
+                self._stop_locked(agent_id, manager)
+            running = getattr(manager, "program", None)
+            if not manager.is_running:
+                running = None
+            if program and not replace_program:
+                _check_expected_program(program, running)
+            if program and running and running != program:
+                _check_idle(manager, running, program)
+                logger.info(
+                    "daemon: restarting agent '%s' on %s (was %s)",
+                    agent_id,
+                    program,
+                    running,
                 )
                 self._stop_locked(agent_id, manager)
             if manager.is_running:
@@ -249,6 +275,7 @@ class SidecarRegistry:
                     manager = self._new_manager(agent_id, spec, mode)
                     with self._lock:
                         self._managers[agent_id] = (manager, agent_lock)
+                manager.requested_program = program if replace_program else None
                 manager.start()
                 self._fire_started(agent_id, manager)
                 return self._ensured(agent_id, manager, lock_digest)
@@ -492,6 +519,7 @@ class SidecarRegistry:
                         "api_version": None,
                         "agent_version": None,
                         "started_at": None,
+                        "program": None,
                         # No manager is running, so nothing IS being served in
                         # dev mode -- unconditionally None (see _entry() for
                         # the running case), never the spec's default (issue
@@ -649,6 +677,7 @@ class SidecarRegistry:
             "api_version": manager.api_version,
             "agent_version": manager.agent_version,
             "started_at": manager.started_at,
+            "program": getattr(manager, "program", None),
             # Only a dev-mode manager is actually serving from this path
             # (issue #2588 AC-3) -- a user-mode entry reporting it would
             # advertise a source it isn't running.
@@ -659,6 +688,65 @@ class SidecarRegistry:
         if include_token:
             entry["token"] = manager.auth_token
         return entry
+
+
+def check_program(agent_id: str, program: Optional[str]) -> None:
+    """Raise ``ValueError`` unless *program* is ``None`` or a flagship program for the flagship."""
+    from gaia.daemon.sidecars import fetch
+
+    if program is None:
+        return
+    if agent_id != fetch.FLAGSHIP_AGENT_ID:
+        raise ValueError(
+            f"program is only for the '{fetch.FLAGSHIP_AGENT_ID}' agent, not '{agent_id}'"
+        )
+    if program not in (fetch.PYTHON_FLAGSHIP, fetch.NATIVE_FLAGSHIP):
+        raise ValueError(
+            f"program must be {fetch.PYTHON_FLAGSHIP} or {fetch.NATIVE_FLAGSHIP}, "
+            f"not {program!r}"
+        )
+
+
+def _program_label(program: str) -> str:
+    """ "Fast and light (gaiacpp)" for a program the apps name; else the program."""
+    from gaia.harnesses import harness
+
+    known = harness(program)
+    return f"{known.label} ({program})" if known else program
+
+
+def _check_idle(manager, running: str, program: str) -> None:
+    """Raise unless the agent on *running* has no turn to cut off."""
+    busy = manager.active_runs()
+    if busy == 0:
+        return
+    running, program = _program_label(running), _program_label(program)
+    if busy is None:
+        raise ProgramBusyError(
+            f"The GAIA agent is running on {running}, which doesn't say whether "
+            f"it is answering, so it was not restarted on {program}. Switch from "
+            "the window using it (Settings in the Agent UI), or stop it with "
+            "`gaia daemon stop-agent gaia` once nothing is answering."
+        )
+    raise ProgramBusyError(
+        f"The GAIA agent is running on {running} and another window is "
+        f"answering with it, so it was not restarted on {program}. Try again "
+        "when that answer finishes, or switch from that window."
+    )
+
+
+def _check_expected_program(program: str, running: Optional[str]) -> None:
+    """Raise unless the GAIA agent runs, or would start, on *program*."""
+    from gaia.daemon.sidecars import fetch
+
+    actual = running or fetch.saved_flagship()
+    if actual == program:
+        return
+    state = f"running on {actual}" if running else f"set to start on {actual}"
+    raise ProgramConflictError(
+        f"The GAIA agent is {state}, not {program}: it was switched elsewhere "
+        "(Settings in the Agent UI, or another terminal). Nothing was changed."
+    )
 
 
 def _now() -> float:  # pragma: no cover - trivial seam

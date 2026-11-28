@@ -561,10 +561,10 @@ the same work.
 Once the gate clears, GAIA starts the agent and drops you into the conversation:
 
 ```
-GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
+GAIA │ agent gaia v0.2.0 · Full-featured (gaiapy) │ Gemma-4-E4B-it-GGUF
 ────────────────────────────────────────────────────────────────────────────────
 Welcome to GAIA
-Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
+Connected to: agent gaia v0.2.0 · Full-featured (gaiapy) (GAIA core 0.25.0)
 
 Try one: Tab to select, Enter to run
   1  Today's tech news in brief
@@ -838,9 +838,9 @@ their own — `/model`, `/skills`, `/research`, `/setup`, `/models`, `/gpu`, `/p
 needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
 
-On `gaiacpp`, the native agent, `/sessions`, `/context`, `/skills`, `/research`
+On Fast and light (`gaiacpp`), `/sessions`, `/context`, `/skills`, `/research`
 and `/image` are not available yet. They drop out of `/help` and the palette
-too, and typing one answers with a line that names the Python agent
+too, and typing one answers with a line that names Full-featured (`gaiapy`)
 (`/agent gaiapy` switches to it). Every other command works on both programs.
 
 With the GAIA agent, a line that starts with `/` and one word is read as a command and is
@@ -973,9 +973,11 @@ With the box empty, a `y` or `n` that starts a word is typed too; pressed on its
 own it answers a moment later, or at once with `Enter`. Send the message once
 you have answered.
 
-An email prompt too long for the screen scrolls with `↑`/`↓`/`PgUp`/`PgDn`, and
-`y` only works once its last line has been on screen, because you are approving
-exactly what goes out. `n` and `Esc` work throughout.
+A prompt too long for the screen, such as a multi-line script, scrolls with
+`↑`/`↓`/`PgUp`/`PgDn`: it shows which lines are on screen and keeps the answer
+keys in view. For an email, `y` only works once its last line has been on
+screen, because you are approving exactly what goes out. `n` and `Esc` work
+throughout.
 
 A prompt nobody answers expires after 10 minutes. The agent is told it **timed
 out**, not that you refused, so it asks whether you still want it rather than
@@ -1160,25 +1162,25 @@ The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
 scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
 under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
 through the background service instead, it doesn't keep them yet: `/sessions`
-and `--resume` say so rather than showing an empty list. `gaiacpp`, the Fast and light agent, doesn't keep sessions yet either: `--resume` with it stops and names Full-featured to use instead, and so does `/sessions`.
+and `--resume` say so rather than showing an empty list. Fast and light (`gaiacpp`) doesn't keep sessions yet either: `--resume` with it stops and names Full-featured (`gaiapy`) to use instead, and so does `/sessions`.
 
 ## Which agent program answers
 
-GAIA's agent comes as two programs: `gaiacpp`, which is Fast and light, and
-`gaia-agent`, which is Full-featured. The terminal installers and the one-line installers put `gaiacpp` next
+GAIA's agent comes as two programs, named as in the Agent UI: Full-featured
+(`gaiapy`, the Python program `gaia-agent`) and Fast and light (`gaiacpp`, the
+native one, in Beta). The terminal installers and the one-line installers put `gaiacpp` next
 to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. The
 terminal UI runs `gaia-agent` until you choose `gaiacpp`, the same default as the Agent UI,
 so `--use-claude` and `--resume` keep working. Once chosen, `gaiacpp` is looked for in `~/.gaia/bin`
 (where GAIA downloads it), next to `gaia-cli`, on your PATH, then in
 `~/.gaia/agents/gaia`. With `GAIA_HOME` set, both `~/.gaia` folders are looked for
-under it instead. The header says which program is answering, and that `gaiacpp`
-is a Beta:
+under it instead. The header says when Fast and light is answering, and that it is a Beta:
 
 ```
- GAIA  │ agent gaia v0.25.4 (gaiacpp · Beta) │ Gemma-4-E4B-it-GGUF
+ GAIA  │ agent gaia v0.25.4 · Fast and light (gaiacpp) · Beta │ Gemma-4-E4B-it-GGUF
 ```
 
-Without `(gaiacpp · Beta)` Full-featured is answering, as it does on an Intel Mac,
+Without it, Full-featured is answering, as it does on an Intel Mac,
 Windows on Arm or Linux on Arm, where no `gaiacpp` is built.
 
 ### Choosing one
@@ -1188,8 +1190,8 @@ which one you saved:
 
 | Choice | Good at | Trade-off |
 |---|---|---|
-| `gaiapy`, **Full-featured** (the Python agent, `gaia-agent`) | Every tool and feature, and well tested | Heavier: slower to start and uses more memory |
-| `gaiacpp`, **Fast and light** (the native C++ agent, **Beta**) | Starts quickly and uses little memory | Fewer tools and features so far, and less tested |
+| Full-featured (`gaiapy`) | Mature and well tested, with every tool and feature | Heavier: slower to start and uses more memory |
+| Fast and light (`gaiacpp`) · **Beta** | Starts quickly and uses little memory | Fewer tools and features so far, and less tested |
 
 `/agent gaiapy` and `/agent gaiacpp` switch. The agent restarts on the other
 program right away: the readiness check runs for it, the transcript stays on
@@ -1227,7 +1229,7 @@ opens on a short screen instead of stopping with an error. It says why and
 waits for you to pick:
 
 - **Download gaiacpp again**, with a progress bar, then GAIA starts on it
-- **Use Full-featured**, which saves `gaiapy` as your choice (`/agent gaiacpp` switches back)
+- **Use Full-featured (gaiapy)**, which saves `gaiapy` as your choice (`/agent gaiacpp` switches back)
 - **Quit**
 
 GAIA never moves you to Full-featured by itself. `?` shows the full error,
@@ -1244,6 +1246,17 @@ GAIA_TUI_AGENT=gaia-agent gaia-cli
 
 That session is then pinned: `/agent gaiacpp` in it saves the choice for later
 launches and says the session keeps running what the flag or variable named.
+
+Full-featured runs in the GAIA background service, which the Agent UI shares.
+When the Agent UI has it on `gaiacpp`, a launch on `gaiapy` (by `/agent`, the
+flag, the variable or the saved choice) restarts it on `gaiapy`, and the Agent
+UI's chats use Full-featured too until you choose Fast and light again in its
+Settings › Agent & model. It is never
+restarted in the middle of an answer: while another window is answering with
+`gaiacpp`, the readiness check says so and stops, and the session stays as it
+was. Press `r` once that answer finishes, or switch from that window. If someone
+switches it to `gaiacpp` while your session is open, your next message is
+refused with what runs now, rather than answered by the other program.
 
 Which program a launch runs is decided in this order:
 
@@ -1266,7 +1279,7 @@ does not run another copy or the other program instead. A `flagship_agent`
 value other than `gaiapy` or `gaiacpp` also stops the launch, naming the file
 and the key.
 
-The Fast and light agent (`gaiacpp`) has no Claude provider. `--use-claude` is refused at launch
+Fast and light has no Claude provider. `--use-claude` is refused at launch
 with it, and `/model` with a Claude model is refused in the chat, leaving the
 session on its current model. Use `/provider` to pick a model on this PC or a
 cloud provider that Lemonade offers, or run Full-featured for Claude. The

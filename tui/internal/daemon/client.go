@@ -691,7 +691,7 @@ func (c *Client) afterRestart(ctx context.Context, fresh *Instance, r Request) (
 	if agentID == "" {
 		return fresh, nil
 	}
-	ensured, err := c.ensureOn(ctx, fresh, agentID)
+	ensured, err := c.ensureOn(ctx, fresh, agentID, false)
 	if err != nil {
 		return fresh, err
 	}
@@ -802,7 +802,20 @@ func (c *Client) newRequest(
 //
 // Blocking — daemon start, sidecar spawn, and a possible first-run binary fetch
 // all happen here. Call it off the UI event loop.
+//
+// For the GAIA agent it also says the session talks to the Python agent, so a
+// sidecar running gaiacpp is a *ProgramConflictError, never quietly attached.
 func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, error) {
+	return c.ensureAgent(ctx, agentID, false)
+}
+
+// LaunchAgent is EnsureAgent for a session's launch: a GAIA agent running on
+// gaiacpp is restarted on the Python agent, which this session talks to.
+func (c *Client) LaunchAgent(ctx context.Context, agentID string) (*Instance, error) {
+	return c.ensureAgent(ctx, agentID, true)
+}
+
+func (c *Client) ensureAgent(ctx context.Context, agentID string, replace bool) (*Instance, error) {
 	if agentID == "" {
 		return nil, &RequestError{Op: "ensure an agent sidecar", Detail: "no agent id was given"}
 	}
@@ -810,15 +823,15 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	if err != nil {
 		return nil, err
 	}
-	return c.ensureOn(ctx, inst, agentID)
+	return c.ensureOn(ctx, inst, agentID, replace)
 }
 
 // ensureOn asks the daemon at inst to start-or-attach agentID's sidecar.
-func (c *Client) ensureOn(ctx context.Context, inst *Instance, agentID string) (*Instance, error) {
+func (c *Client) ensureOn(ctx context.Context, inst *Instance, agentID string, replace bool) (*Instance, error) {
 	if err := inst.CheckAgentsFloor(); err != nil {
 		return nil, err
 	}
-	body, err := ensureRequestBody(agentID)
+	body, err := ensureRequestBody(agentID, replace)
 	if err != nil {
 		return nil, &RequestError{
 			Op:     fmt.Sprintf("resolve the caller settings for the '%s' sidecar", agentID),
@@ -838,6 +851,14 @@ func (c *Client) ensureOn(ctx context.Context, inst *Instance, agentID string) (
 	}
 	defer drainAndClose(resp)
 
+	if resp.StatusCode == http.StatusConflict {
+		switch resp.Header.Get(ErrorKindHeader) {
+		case KindProgramConflict:
+			return nil, &ProgramConflictError{Detail: ErrorDetail(resp)}
+		case KindProgramBusy:
+			return nil, &ProgramBusyError{Detail: busyDetail(resp)}
+		}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &RequestError{
 			Op:     fmt.Sprintf("ensure the '%s' sidecar via the daemon", agentID),
@@ -904,8 +925,18 @@ func callerDevSrcDir(agentID string) (string, error) {
 	return filepath.Join(root, "hub", "agents", agentID, "python"), nil
 }
 
-func ensureRequestBody(agentID string) ([]byte, error) {
-	body := map[string]string{}
+// PythonProgram is the GAIA agent program a daemon sidecar session talks to;
+// the terminal UI runs gaiacpp only as its own child.
+const PythonProgram = "gaiapy"
+
+func ensureRequestBody(agentID string, replace bool) ([]byte, error) {
+	body := map[string]any{}
+	if agentID == "gaia" {
+		body["program"] = PythonProgram
+		if replace {
+			body["replace_program"] = true
+		}
+	}
 	mode, explicit := CallerMode(agentID)
 	if !explicit {
 		// No key at all — the daemon reads a present "mode" as a REQUEST and
@@ -928,6 +959,11 @@ func ensureRequestBody(agentID string) ([]byte, error) {
 // through the same channel. Never pass a raw token.
 func (c *Client) Logf(format string, args ...any) {
 	c.opts.Logf(format, args...)
+}
+
+// busyDetail is the daemon's own sentence for a busy agent, without the status code.
+func busyDetail(resp *http.Response) string {
+	return strings.TrimPrefix(ErrorDetail(resp), fmt.Sprintf("HTTP %d: ", resp.StatusCode))
 }
 
 // ErrorDetail extracts the actionable `detail` from a daemon error response,

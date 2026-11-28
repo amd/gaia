@@ -49,6 +49,15 @@ describe('totals against the model drive', () => {
         expect(totals(p, toggle(sel, p.catalog!, GPT_OSS.id, true)).downloadGb).toBe(18.4);
     });
 
+    it('counts an agent that still has to download, in megabytes, without touching the model drive', () => {
+        const p = plan([EMBED]);
+        const models = totals(p, initialSelection(p));
+        const withAgent = totals(p, initialSelection(p), 0.012);
+        expect(models.downloadGb).toBe(0.3);
+        expect(withAgent.downloadGb).toBe(0.312);
+        expect(withAgent.afterGb).toBe(models.afterGb);
+    });
+
     it('never invents a size or a free-space number', () => {
         const unknownSize = { ...GPT_OSS, size_gb: null, selected: true, planned: true };
         const p = plan([EMBED, unknownSize], { disk: { path: null, free_gb: null, source: null } });

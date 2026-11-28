@@ -28,6 +28,8 @@ type contextMeter struct {
 	atRisk int
 	// warning waits for the turn to settle, so it lands under the answer.
 	warning string
+	// failure is why the agent's last answer came without a measurement.
+	failure string
 }
 
 // capacity is what the model sees before history drops: the fixed prompt plus
@@ -55,11 +57,23 @@ func (c contextMeter) percent() int {
 func (m *ChatModel) takeContextUsage(r event.CanonicalContextUsageEvent) {
 	m.ctxMeter.report = r
 	m.ctxMeter.known = true
+	m.ctxMeter.failure = ""
 	m.ctxMeter.warning = ""
 	if n := len(r.AtRisk); n > m.ctxMeter.atRisk {
 		m.ctxMeter.warning = atRiskWarning(r.AtRisk)
 	}
 	m.ctxMeter.atRisk = len(r.AtRisk)
+}
+
+// takeFinalContext reads the measurement an HTTP agent sends on its final.
+func (m *ChatModel) takeFinalContext(e event.CanonicalFinalEvent) {
+	if usage, ok := e.ContextUsage(); ok {
+		m.takeContextUsage(usage)
+		return
+	}
+	if e.ContextError != "" {
+		m.ctxMeter.failure = clean(e.ContextError)
+	}
 }
 
 func atRiskWarning(atRisk []string) string {
@@ -100,6 +114,9 @@ func (m ChatModel) contextHint() (hint, bool) {
 func (m ChatModel) contextBreakdown() string {
 	c := m.ctxMeter
 	if c.percent() < 0 {
+		if c.failure != "" {
+			return "No context report: " + c.failure
+		}
 		return "No context report yet. It arrives with the agent's first answer."
 	}
 	r := c.report

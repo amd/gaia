@@ -518,7 +518,8 @@ def _catalog(
                 "size_gb": remaining,
                 # Shown only: Settings' decimal GB, not the server's GiB figure.
                 "full_size_gb": model_choice.download_size_gb(model_id, full),
-                "partial": partial_gb > 0,
+                # Nothing left to fetch is not an interrupted download to resume.
+                "partial": partial_gb > 0 and bool(remaining),
                 "partial_gb": partial_gb,
                 "downloaded": downloaded if client is not None else None,
                 "in_lemonade": entry is not None,

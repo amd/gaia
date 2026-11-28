@@ -728,6 +728,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         await download(held.acknowledgeLowDisk, latest);
     }, [download, setAgentPick, setHeldRun]);
 
+    // Setup's run installs the Python agent when it isn't here, whichever agent is picked.
+    const [pythonAgentGb, setPythonAgentGb] = useState(0);
+    // A picked agent that isn't here downloads first, so it counts in the total too.
+    const agentGb = pythonAgentGb + (agentPick?.download && agentPick.sizeBytes ? agentPick.sizeBytes / 1e9 : 0);
     const pickRef = useRef(agentPick);
     pickRef.current = agentPick;
     const heldRef = useRef(heldRun);
@@ -790,6 +794,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         resumed.current = true;
         api.getAgentPrograms()
             .then((l) => {
+                const py = l.programs.find((p) => p.id === 'gaiapy');
+                setPythonAgentGb(py && !py.installed && py.size_bytes ? py.size_bytes / 1e9 : 0);
                 const running = l.download.state === 'downloading';
                 followAgentDownload(l.download);
                 if (!heldRef.current) return;
@@ -1154,10 +1160,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         document.getElementById('setup-title')?.focus({ preventScroll: true });
     }, [stage]);
 
-    // The plan names the agent only where Customize offers a second one to pick.
+    // The plan, Test and Ready name the agent only where Customize offers a second one to pick.
     const [agents, setAgents] = useState<AgentPrograms | null>(null);
     useEffect(() => {
-        if (stage !== 'plan') return;
+        if (stage !== 'plan' && stage !== 'test' && stage !== 'ready') return;
         let live = true;
         api.getAgentPrograms()
             .then((l) => { if (live) setAgents(l); })
@@ -1170,6 +1176,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         : agentShown === 'gaiapy' ? 'setup.agent.gaiapy'
             : agentShown === 'gaiacpp' ? 'setup.agent.gaiacpp'
                 : null;
+    // Full-featured installs whichever agent is picked, so the total says why it holds more than Fast and light's size.
+    const fallbackGb = agentShown === 'gaiacpp' ? pythonAgentGb : 0;
     // One flat line of steps; Customize, the cloud key and GPU memory are screens of the step they open from.
     const trail: Array<{ id: Stage; label: string; key: MessageKey }> = [
         { id: 'check', label: t('setup.check.title'), key: 'setup.check.title' },
@@ -1419,7 +1427,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         <bdi id="setup-where-local">{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi>
                                     </p>
                                     <dl className="setup-facts">
-                                        <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
+                                        <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection, agentGb).downloadGb ?? 0)}</bdi></dd></div>
                                         <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{chatEntry && isNpu(chatEntry) ? t('setup.checks.npu') : hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
                                         <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
                                     </dl>
@@ -1439,6 +1447,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                             <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
                                         )}
                                     </ul>
+                                    {fallbackGb > 0 && <p className="setup-hint">{t('setup.summary.fallback', { size: formatSize(fallbackGb) })}</p>}
                                     {agentLabel && (
                                         <p className="setup-agent-line">
                                             {t.compose((say) => say('setup.plan.agent', { name: say(agentLabel) }))}
@@ -1544,6 +1553,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 onBack={backOne}
                                 onContinue={(ack) => void commit(ack)}
                                 busy={busy || runGoing}
+                                agentGb={agentGb}
+                                fallbackGb={fallbackGb}
                                 error={actionError ?? startError}
                             />
                         </>
@@ -1753,6 +1764,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.test.title')}</h1>
                             <p className="setup-lede">{t('setup.test.lede')}</p>
+                            {agentLabel && <p className="setup-agent-line">{t.compose((say) => say('setup.plan.agent', { name: say(agentLabel) }))}</p>}
                             <TestStep
                                 run={fullRun}
                                 expected={expectedTests}
@@ -1788,6 +1800,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         </p>
                                     )}
                                 </div>
+                                {agentLabel && <p className="setup-agent-line">{t.compose((say) => say('setup.plan.agent', { name: say(agentLabel) }))}</p>}
                                 <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>
                                         {t('setup.ready.start')}
