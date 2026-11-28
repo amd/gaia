@@ -397,6 +397,24 @@ def test_another_builds_file_does_not_count_without_a_manifest(tmp_path):
     assert found == {"Qwen3.6-35B-A3B-GGUF": 0}
 
 
+@pytest.mark.parametrize(
+    "name", ["Qwen3.6-35B-A3B-Q4_K_M_XL.gguf", "mmproj-Q4_K_Mx.gguf", "Q4_K_M2.gguf"]
+)
+def test_a_longer_tag_that_starts_with_the_variant_does_not_count(tmp_path, name):
+    _copied_in(tmp_path, name, 30_000)
+    client = _qwen_only(_client(store=tmp_path))
+    found = bytes_already_on_disk(client, ["Qwen3.6-35B-A3B-GGUF"], str(tmp_path))
+    assert found == {"Qwen3.6-35B-A3B-GGUF": 0}
+
+
+def test_a_split_model_counts_every_part_without_a_manifest(tmp_path):
+    _copied_in(tmp_path, "Qwen3.6-35B-A3B-Q4_K_M-00001-of-00002.gguf", 1_000)
+    _copied_in(tmp_path, "Qwen3.6-35B-A3B-Q4_K_M-00002-of-00002.gguf", 2_000)
+    client = _qwen_only(_client(store=tmp_path))
+    found = bytes_already_on_disk(client, ["Qwen3.6-35B-A3B-GGUF"], str(tmp_path))
+    assert found == {"Qwen3.6-35B-A3B-GGUF": 3_000}
+
+
 @pytest.mark.parametrize("store", ["/not/on/this/pc", "corrupt-manifest"])
 def test_unreadable_partials_warn_instead_of_refusing(capsys, tmp_path, store):
     if store == "corrupt-manifest":
