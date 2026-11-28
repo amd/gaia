@@ -17,6 +17,11 @@ Anatomy of a GAIA agent
 4. Implement :meth:`_get_system_prompt` to give the agent its personality.
 5. Implement :meth:`_register_tools` — empty for a no-tool agent.
 
+Running it: ``start_session_history()`` keeps a conversation across
+``process_query`` calls, ``close()`` (or ``with``) releases it, and
+``provider="fireworks"`` with a ``model_id`` runs a hosted model. A tool that
+sends or deletes something belongs in ``CONFIRMATION_REQUIRED_TOOLS``.
+
 To start your own agent, run ``gaia agent init <name>`` — it scaffolds this
 same package layout under your own id.
 """
