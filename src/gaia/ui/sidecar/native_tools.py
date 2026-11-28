@@ -112,9 +112,10 @@ def normalize_native_result(tool: str, data: Any) -> Any:
 def native_result_summary(tool: str, data: Any) -> Optional[str]:
     """A gaiacpp tool's result in plain words, or None to summarize it generically.
 
-    *tool* is gaiacpp's own name. Failures return None: their ``error`` text is
-    already a sentence and the generic path shows it, except declined gaiacpp
-    calls whose raw error exposes the C++ tool name.
+    *tool* is gaiacpp's own name. Failures generally return None so the generic
+    path shows them, except declined gaiacpp calls (whose raw error exposes the
+    C++ tool name) and ``web_fetch`` (which returns its plain error text
+    directly so the UI does not prepend ``error: `` or clip it mid-word).
     """
     if not isinstance(data, dict):
         return None
@@ -122,6 +123,16 @@ def native_result_summary(tool: str, data: Any) -> Optional[str]:
         if data.get("already_declined") is True:
             return "Not run (declined earlier)"
         return "Declined by user"
+    if tool == "web_fetch" and data.get("error"):
+        err = str(data["error"]).strip()
+        http_status = data.get("http_status")
+        if (
+            isinstance(http_status, int)
+            and http_status > 0
+            and str(http_status) not in err
+        ):
+            return f"HTTP {http_status}: {err}"
+        return err
     if data.get("error"):
         return None
     path = data.get("path")

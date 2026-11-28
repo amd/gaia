@@ -410,3 +410,25 @@ def test_start_endpoint_says_why_when_the_agent_cannot_list_skills(client, monke
     assert body["cards"] == []
     assert body["skills_error"] == "The GAIA agent could not be started"
     assert body["working_folder"]["name"]
+
+
+def test_research_card_skipped_when_web_search_is_unavailable():
+    ctx = ss.Context(STARTER, 0, False, "my-project", web_search=False)
+    assert _skills(ss.pick_cards(ctx)) == ["coding", "summarize", "check-in"]
+
+
+def test_start_screen_skips_research_card_on_gaiacpp(monkeypatch, tmp_path):
+    import gaia.config as config_mod
+    from gaia.daemon.sidecars import fetch
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ss, "_mail_connected", lambda: False)
+    config_mod.GaiaConfig.save_key("flagship_agent", fetch.NATIVE_FLAGSHIP)
+
+    result = ss.start_screen(_Db([]), [{"name": n} for n in STARTER], choosable=True)
+    assert "research-report" not in _skills(result["cards"])
+    assert "summarize" in _skills(result["cards"])
+
+    config_mod.GaiaConfig.save_key("flagship_agent", fetch.PYTHON_FLAGSHIP)
+    py_result = ss.start_screen(_Db([]), [{"name": n} for n in STARTER], choosable=True)
+    assert "research-report" in _skills(py_result["cards"])

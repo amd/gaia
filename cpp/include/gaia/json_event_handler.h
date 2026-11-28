@@ -60,6 +60,7 @@ public:
     // === Streaming ===
     void printStreamToken(const std::string& token) override;
     void printStreamEnd() override;
+    void printAnswerRetracted(const std::string& detail) override;
 
 private:
     /// Write a JSON object as a single line to stdout.

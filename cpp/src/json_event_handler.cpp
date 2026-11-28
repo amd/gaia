@@ -201,4 +201,12 @@ void JsonEventOutputHandler::printStreamEnd() {
     // No event — stream end is signaled by the answer event.
 }
 
+void JsonEventOutputHandler::printAnswerRetracted(const std::string&) {
+    emit({{"type", "status"},
+          {"status", "working"},
+          {"phase", "answer_check"},
+          {"message", "Checking the answer"},
+          {"retracts_answer", true}});
+}
+
 } // namespace gaia

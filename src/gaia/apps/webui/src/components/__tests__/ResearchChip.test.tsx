@@ -4,7 +4,8 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { readSkillsForResearch, ResearchChip, withResearch } from '../ResearchChip';
+import { readSkillsForResearch, researchNeedsSkills, ResearchChip, withResearch } from '../ResearchChip';
+import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import { NEW_CHAT_RESEARCH, researchOn, useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import { forgetInstalledSkills } from '../../utils/research';
@@ -13,6 +14,7 @@ vi.mock('../../services/api', () => ({ listSkills: vi.fn() }));
 const listSkills = vi.mocked(api.listSkills);
 
 beforeEach(() => {
+    useActiveAgentStore.setState({ current: null });
     useChatStore.setState({ research: {} });
     forgetInstalledSkills();
     listSkills.mockReset();
@@ -118,5 +120,24 @@ describe('a new chat takes the Research choice', () => {
         useChatStore.getState().adoptDraftResearch('s2', 'Summarise this file');
         const state = useChatStore.getState();
         expect([researchOn(state, 's2'), researchOn(state, null)]).toEqual([false, true]);
+    });
+});
+
+describe('ResearchChip on gaiacpp', () => {
+    it('hides the chip and does not prepend /research when gaiacpp is active', () => {
+        useChatStore.setState({ research: { [NEW_CHAT_RESEARCH]: true } });
+        useActiveAgentStore.setState({ current: 'gaiacpp' });
+
+        render(<ResearchChip sessionId={null} />);
+        expect(screen.queryByRole('button', { name: 'Research' })).toBeNull();
+        expect(listSkills).not.toHaveBeenCalled();
+        expect(withResearch('best coffee roasters', null)).toBe('best coffee roasters');
+        expect(researchNeedsSkills('/docx draft a memo', null)).toBe(false);
+    });
+
+    it('renders the chip again when Full-featured is active', () => {
+        useActiveAgentStore.setState({ current: 'gaiapy' });
+        render(<ResearchChip sessionId={null} />);
+        expect(screen.getByRole('button', { name: 'Research' })).toBeInTheDocument();
     });
 });
