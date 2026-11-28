@@ -1760,6 +1760,7 @@ const messages: Messages = {
     'settings.section.advanced': 'متقدم',
     'settings.section.images': "إنشاء الصور",
     'images.settings.lede': "عندما تطلب من GAIA صورة، ينشئها على هذا الجهاز بنموذج من Lemonade. هذه هي الإعدادات الافتراضية؛ ويظل بإمكانك طلب حجم أو نموذج في المحادثة.",
+    'images.settings.fastAgentCannot': "لا يستطيع «سريع وخفيف» إنشاء الصور، لذا تنطبق هذه الإعدادات على «كامل الميزات» فقط.",
     'images.settings.chatModelCannot': "نموذج المحادثة {model} أصغر من أن يُتاح له إنشاء الصور، لذا لن تُستخدم هذه الإعدادات حتى تغيّره.",
     'images.settings.chooseChatModel': "اختر نموذج المحادثة",
     'images.settings.modelGone': "لم يعد {model} موجودًا في Lemonade على هذا الجهاز. اختر نموذجًا آخر.",
@@ -2622,6 +2623,7 @@ const messages: Messages = {
 
     // Settings: the other panes
     'settings.memory.lede': 'يتذكر GAIA الحقائق والتفضيلات والمحادثات السابقة عبر المحادثات، على هذا الجهاز فقط. لا تُحفظ المحادثات الخاصة (أيقونة العين في المحادثة) أبدًا.',
+    'settings.memory.fastAgentNotice': 'يحتفظ «سريع وخفيف» بذاكرة منفصلة عن «كامل الميزات» ويبحث بالكلمات لا بالمتجهات، لذا تنطبق إعدادات نموذج التضمين على «كامل الميزات» فقط.',
     'settings.memory.remember': 'التذكر عبر المحادثات',
     'settings.memory.dashboard': 'فتح لوحة الذاكرة',
     'settings.memory.dashboardHint': 'ابحث فيما يتذكره GAIA وعدّله وانسه.',
