@@ -417,3 +417,32 @@ class TestStreamChatFailedTurn:
             ]
         )
         assert result["detail"] == why
+
+
+class TestScreenshotWindowTitles:
+    def test_default_backend_includes_default_port(self):
+        from gaia.mcp.servers.agent_ui_mcp import (
+            DEFAULT_BACKEND,
+            _screenshot_window_titles,
+        )
+
+        titles = _screenshot_window_titles(DEFAULT_BACKEND)
+        assert titles == [
+            "GAIA",
+            DEFAULT_BACKEND.removeprefix("http://"),
+            "Chrome",
+            "Edge",
+            "Firefox",
+        ]
+
+    def test_custom_port_replaces_default_port(self):
+        from gaia.mcp.servers.agent_ui_mcp import _screenshot_window_titles
+
+        titles = _screenshot_window_titles("http://localhost:8080")
+        assert "localhost:8080" in titles
+        assert "localhost:4200" not in titles
+
+        loopback_titles = _screenshot_window_titles("http://127.0.0.1:8080")
+        assert "127.0.0.1:8080" in loopback_titles
+        assert "localhost:8080" in loopback_titles
+        assert "localhost:4200" not in loopback_titles

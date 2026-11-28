@@ -19,7 +19,7 @@ except ImportError:
 
 from gaia.env import load_env
 from gaia.eval.claude_credential import announce, api_key_credential
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
+from gaia.eval.config import DEFAULT_EVAL_MODEL, claude_pricing
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
@@ -52,7 +52,7 @@ def first_text_block(blocks, model):
         f"No text block in the response from model '{model}' "
         f"(block types received: {block_types}).\n"
         "A text reply is required to score with. Pass a model that returns one "
-        "to ClaudeClient(model=...), or check DEFAULT_CLAUDE_MODEL in "
+        "to ClaudeClient(model=...), or check DEFAULT_EVAL_MODEL in "
         "src/gaia/eval/config.py."
     )
 
@@ -65,7 +65,7 @@ class ClaudeClient:
         Initialize Claude client with retry support.
 
         Args:
-            model: Claude model to use (defaults to DEFAULT_CLAUDE_MODEL)
+            model: Claude model to use (defaults to DEFAULT_EVAL_MODEL)
             max_tokens: Maximum tokens in response (default: 1024)
             max_retries: Maximum number of retry attempts for API calls with exponential backoff (default: 3)
             temperature: Sampling temperature forwarded to every completion call.
@@ -96,7 +96,7 @@ class ClaudeClient:
             raise ImportError(error_msg)
 
         if model is None:
-            model = DEFAULT_CLAUDE_MODEL
+            model = DEFAULT_EVAL_MODEL
         self.log = self.__class__.log  # Use the class-level logger for instances
         found = api_key_credential()
         if found is None:

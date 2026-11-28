@@ -41,7 +41,7 @@ from gaia.eval.claude_credential import (  # noqa: F401  # pylint: disable=unuse
     resolve_claude_credential,
 )
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
+from gaia.eval.config import DEFAULT_EVAL_MODEL, claude_pricing
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
@@ -103,7 +103,7 @@ class ClaudeCliClient:
                 "See src/gaia/eval/judge_client.py for how the transport is "
                 "selected."
             )
-        self.model = model or DEFAULT_CLAUDE_MODEL
+        self.model = model or DEFAULT_EVAL_MODEL
         claude_pricing(self.model)
         self.timeout = timeout
         # An empty cwd is what keeps the repo's CLAUDE.md out of the judge's
@@ -318,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--model",
         default=None,
-        help=f"Judge model id (default: {DEFAULT_CLAUDE_MODEL}).",
+        help=f"Judge model id (default: {DEFAULT_EVAL_MODEL}).",
     )
     args = parser.parse_args(argv)
 

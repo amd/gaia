@@ -88,7 +88,13 @@ func readDeviceConfig(p hostProbe) deviceConfig {
 }
 
 func configPath(p hostProbe) string {
-	return lemonade.ConfigPathFrom(p.getenv, p.homeDir)
+	if p.getenv != nil {
+		return lemonade.ConfigPathFrom(p.getenv, p.homeDir)
+	}
+	if p.lookupEnv != nil {
+		return lemonade.ConfigPathFromLookup(p.lookupEnv, p.homeDir)
+	}
+	return ""
 }
 
 // osReadFile is the real file reader for hostProbe.

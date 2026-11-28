@@ -327,7 +327,7 @@ func GaiaChatModel() string {
 		Last    string `json:"last_model"`
 		Default string `json:"default_model"`
 	}
-	if path := ConfigPathFrom(os.Getenv, os.UserHomeDir); path != "" {
+	if path := ConfigPath(); path != "" {
 		raw, err := filelock.ReadFile(path)
 		if err != nil && !os.IsNotExist(err) {
 			return ""

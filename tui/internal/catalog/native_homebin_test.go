@@ -74,3 +74,23 @@ func TestMissingGaiacppErrorNamesGaiaHomeBin(t *testing.T) {
 		t.Errorf("the error does not list %s:\n%v", want, err)
 	}
 }
+
+func TestGaiaHomeExpandsTildeBeforeEnvAndPreservesUnset(t *testing.T) {
+	f := isolateNative(t)
+	t.Setenv("GAIA_CATALOG_SUB", "custom")
+	t.Setenv("GAIA_HOME", "~/$GAIA_CATALOG_SUB")
+	if got, want := gaiaHomeBin(), filepath.Join(f.home, "custom", "bin"); got != want {
+		t.Errorf("defined var: got %q, want %q", got, want)
+	}
+
+	t.Setenv("GAIA_HOME", "~/$GAIA_UNSET_9099")
+	if got, want := gaiaHomeBin(), filepath.Join(f.home, "$GAIA_UNSET_9099", "bin"); got != want {
+		t.Errorf("undefined var: got %q, want %q", got, want)
+	}
+
+	t.Setenv("GAIA_TILDE_VAR", "~/nested")
+	t.Setenv("GAIA_HOME", "$GAIA_TILDE_VAR")
+	if got, want := gaiaHomeBin(), filepath.Join("~", "nested", "bin"); got != want {
+		t.Errorf("tilde in var: got %q, want %q", got, want)
+	}
+}

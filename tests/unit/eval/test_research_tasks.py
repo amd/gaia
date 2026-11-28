@@ -393,7 +393,7 @@ def test_the_live_judge_passes_every_reference_report_and_fails_every_wrong_one(
     monkeypatch,
 ):
     """Judged from the text alone: the sources gate is the harness's, not the judge's."""
-    from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+    from gaia.eval.config import DEFAULT_EVAL_MODEL
 
     monkeypatch.setattr(claude_credential, "_claude_bin", _REAL_CLAUDE_BIN)
     monkeypatch.setattr(claude_credential, "_auth_status", _REAL_AUTH_STATUS)
@@ -406,7 +406,7 @@ def test_the_live_judge_passes_every_reference_report_and_fails_every_wrong_one(
             key = f"{task.id}:{label}"
             attempts.append(ft.Attempt(key, task.prompt, answer, "(none)", task))
             want[key] = expected
-    grades = ft.judge_batch(attempts, DEFAULT_CLAUDE_MODEL, dict(os.environ))
+    grades = ft.judge_batch(attempts, DEFAULT_EVAL_MODEL, dict(os.environ))
     got = {
         k: grades[k].get("answers_correctly") and grades[k].get("factually_accurate")
         for k in want

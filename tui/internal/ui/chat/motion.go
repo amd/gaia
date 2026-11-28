@@ -94,7 +94,7 @@ var realMotionProbe = motionProbe{
 	isTTY:   func() bool { return xterm.IsTerminal(int(os.Stdout.Fd())) },
 	profile: lipgloss.ColorProfile,
 	config: func() []byte {
-		path := lemonade.ConfigPathFrom(os.Getenv, os.UserHomeDir)
+		path := lemonade.ConfigPath()
 		if path == "" {
 			return nil
 		}

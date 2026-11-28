@@ -14,11 +14,12 @@ import (
 
 func probeWith(path string) hostProbe {
 	p := realHostProbe()
-	p.getenv = func(k string) string {
+	p.getenv = nil
+	p.lookupEnv = func(k string) (string, bool) {
 		if k == configFileEnv {
-			return path
+			return path, true
 		}
-		return ""
+		return "", false
 	}
 	return p
 }
@@ -152,5 +153,65 @@ func TestWriteFullAccessCreatesAMissingConfig(t *testing.T) {
 	}
 	if got := readFullAccess(probeWith(path)); !got.Enabled {
 		t.Error("a fresh install must be able to save the preference")
+	}
+}
+
+func TestProbeWithIgnoresProcessEnv(t *testing.T) {
+	other := filepath.Join(t.TempDir(), "other.json")
+	if err := os.WriteFile(other, []byte(`{"full_access":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(configFileEnv, other)
+
+	path := filepath.Join(t.TempDir(), "target.json")
+	if err := os.WriteFile(path, []byte(`{"full_access":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := probeWith(path)
+	if got := configPath(p); got != path {
+		t.Fatalf("configPath(probeWith) = %q, want %q", got, path)
+	}
+	if got := readFullAccess(p); !got.Enabled {
+		t.Error("probeWith must stay isolated from process env")
+	}
+
+	copied := realHostProbe()
+	copied.getenv = func(k string) string {
+		if k == configFileEnv {
+			return path
+		}
+		return ""
+	}
+	if got := configPath(copied); got != path {
+		t.Fatalf("configPath(copied probe with getenv) = %q, want %q", got, path)
+	}
+}
+
+func TestConfigPathUsesPresenceAwareLookup(t *testing.T) {
+	home := filepath.Join("fake", "home")
+	p := hostProbe{
+		homeDir: func() (string, error) { return home, nil },
+		lookupEnv: func(k string) (string, bool) {
+			switch k {
+			case "GAIA_HOME":
+				return "~/$EMPTY/g", true
+			case "EMPTY":
+				return "", true
+			default:
+				return "", false
+			}
+		},
+	}
+	if got, want := filepath.Clean(configPath(p)), filepath.Join(home, "g", "config.json"); got != want {
+		t.Fatalf("empty-defined var: configPath = %q, want %q", got, want)
+	}
+	p.lookupEnv = func(k string) (string, bool) {
+		if k == "GAIA_HOME" {
+			return "~/$UNSET_9099/g", true
+		}
+		return "", false
+	}
+	if got, want := filepath.Clean(configPath(p)), filepath.Join(home, "$UNSET_9099", "g", "config.json"); got != want {
+		t.Fatalf("unset var: configPath = %q, want %q", got, want)
 	}
 }

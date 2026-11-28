@@ -106,12 +106,13 @@ type launcher struct {
 // the Windows and Linux answers on a macOS box, and the not-installed answer on
 // a developer box that has Lemonade.
 type hostProbe struct {
-	goos     string
-	lookPath func(string) (string, error)
-	exists   func(string) bool
-	getenv   func(string) string
-	homeDir  func() (string, error)
-	readFile func(string) ([]byte, error)
+	goos      string
+	lookPath  func(string) (string, error)
+	exists    func(string) bool
+	getenv    func(string) string
+	lookupEnv func(string) (string, bool)
+	homeDir   func() (string, error)
+	readFile  func(string) ([]byte, error)
 	// readConfig is the locked reader for the shared config.json. Other probes
 	// keep readFile so their host tests can model ordinary file reads.
 	readConfig func(string) ([]byte, error)
@@ -127,11 +128,22 @@ var realHostProbe = func() hostProbe {
 			_, err := os.Stat(path)
 			return err == nil
 		},
-		getenv:     os.Getenv,
+		lookupEnv:  os.LookupEnv,
 		homeDir:    os.UserHomeDir,
 		readFile:   osReadFile,
 		readConfig: filelock.ReadFile,
 	}
+}
+
+func (p hostProbe) env(k string) string {
+	if p.getenv != nil {
+		return p.getenv(k)
+	}
+	if p.lookupEnv != nil {
+		v, _ := p.lookupEnv(k)
+		return v
+	}
+	return ""
 }
 
 // macAppBundles are the bundle names to look for on macOS. `lemonade-app.app`
@@ -191,7 +203,7 @@ func resolveLauncherWith(p hostProbe) launcher {
 	// line for a file that does not exist is the bug this file exists to remove.
 	// A stale override also has to stop suppressing the install advice, so it
 	// reports itself rather than silently falling through to a different answer.
-	if override := strings.TrimSpace(p.getenv(serverPathEnv)); override != "" {
+	if override := strings.TrimSpace(p.env(serverPathEnv)); override != "" {
 		if !p.exists(override) {
 			return launcher{BadOverride: override, Windows: p.goos == "windows"}
 		}
@@ -249,7 +261,7 @@ func resolveWindows(p hostProbe) (launcher, bool) {
 	// Canonical modern location, per lemonade_launcher.resolve_lemonade. The
 	// non-empty guard matters: LOCALAPPDATA unset would otherwise build a
 	// RELATIVE path that could accidentally exist.
-	if local := p.getenv("LOCALAPPDATA"); local != "" {
+	if local := p.env("LOCALAPPDATA"); local != "" {
 		exe := filepath.Join(local, "lemonade_server", "bin", "LemonadeServer.exe")
 		if p.exists(exe) {
 			cmd := windowsStart(exe)

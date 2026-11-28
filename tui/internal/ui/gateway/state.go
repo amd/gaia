@@ -62,12 +62,12 @@ var ownedKeys = []string{"base_url", "enabled_models", "active_model"}
 
 // StatePath is where the selection is stored, the same file gaia.llm.gateway
 // uses: GAIA_GATEWAY_FILE, else gateway.json in GAIA's config folder
-// (lemonade.ConfigDirFrom, so GAIA_HOME moves it too).
+// (lemonade.ConfigDir, so GAIA_HOME moves it too).
 func StatePath() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("GAIA_GATEWAY_FILE")); override != "" {
 		return override, nil
 	}
-	dir := lemonade.ConfigDirFrom(os.Getenv, os.UserHomeDir)
+	dir := lemonade.ConfigDir()
 	if dir == "" {
 		return "", fmt.Errorf("could not find GAIA's config folder for the gateway settings: " +
 			"no home directory, and neither GAIA_CONFIG_DIR nor GAIA_HOME is set. Set GAIA_HOME and try again")

@@ -94,3 +94,52 @@ def test_gaia_home_carries_config_json(tmp_path, monkeypatch, reload_module):
     monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "cfg"))
     config_mod = reload_module(config_mod)
     assert config_mod.GAIA_CONFIG_FILE == tmp_path / "cfg" / "config.json"
+
+
+def test_gaia_home_expansion_matches_shared_table(monkeypatch):
+    """Python and TUI (tui/internal/gaiahome) share tests/fixtures/gaia_home_expand_cases.json."""
+    import json
+    import ntpath
+    import posixpath
+    import sys
+
+    from gaia.daemon.paths import host_dir
+    from gaia.home import gaia_home
+
+    fixture_path = (
+        Path(__file__).resolve().parents[1] / "fixtures" / "gaia_home_expand_cases.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("UNDEF", raising=False)
+    monkeypatch.delenv("UNCLOSED", raising=False)
+    for k, v in fixture["env"].items():
+        monkeypatch.setenv(k, v)
+
+    os_key = "windows" if sys.platform == "win32" else "posix"
+    native_home = (
+        fixture["windows_home"] if sys.platform == "win32" else fixture["posix_home"]
+    )
+    monkeypatch.setenv("HOME", fixture["posix_home"])
+    monkeypatch.setenv("USERPROFILE", fixture["windows_home"])
+
+    for case in fixture["cases"]:
+        raw = case["raw"]
+        assert posixpath.expandvars(posixpath.expanduser(raw)) == case["posix"], case[
+            "name"
+        ]
+        assert ntpath.expandvars(ntpath.expanduser(raw)) == case["windows"], case[
+            "name"
+        ]
+        if not raw:
+            continue
+        monkeypatch.setenv("GAIA_HOME", raw)
+        expected = Path(case[os_key])
+        assert gaia_home() == expected, case["name"]
+        assert host_dir() == expected / "host", case["name"]
+
+    # Confirm HOME/USERPROFILE weren't confused: bare ~ reaches native_home.
+    monkeypatch.setenv("GAIA_HOME", "~")
+    assert gaia_home() == Path(native_home)

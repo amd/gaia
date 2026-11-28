@@ -62,9 +62,9 @@ func setDefaultModel(modelID string) error {
 	return nil
 }
 
-// gaiaConfigPath is the config.json Python reads (lemonade.ConfigPathFrom).
+// gaiaConfigPath is the config.json Python reads (lemonade.ConfigPath).
 func gaiaConfigPath() (string, error) {
-	path := lemonade.ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	path := lemonade.ConfigPath()
 	if path == "" {
 		return "", fmt.Errorf("could not find GAIA's config folder: no home directory, " +
 			"and none of GAIA_CONFIG_FILE, GAIA_CONFIG_DIR or GAIA_HOME is set. Set GAIA_HOME and try again")

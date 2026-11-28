@@ -1,0 +1,134 @@
+{
+  "_comment": "GAIA_HOME and config path expansion cases shared between Python (os.path.expandvars(os.path.expanduser(raw))) and Go (tui/internal/gaiahome). tests/unit/test_gaia_home.py and tui/internal/gaiahome/gaiahome_test.go both run this table.",
+  "posix_home": "/home/alice",
+  "windows_home": "C:\\Users\\alice",
+  "env": {
+    "SUB": "work",
+    "EMPTY": "",
+    "TILDE_VAL": "~/nested",
+    "WIN_SUB": "winwork",
+    "FOO": "bar"
+  },
+  "cases": [
+    {
+      "name": "empty",
+      "raw": "",
+      "posix": "",
+      "windows": ""
+    },
+    {
+      "name": "bare_tilde",
+      "raw": "~",
+      "posix": "/home/alice",
+      "windows": "C:\\Users\\alice"
+    },
+    {
+      "name": "tilde_sub",
+      "raw": "~/gaia-home",
+      "posix": "/home/alice/gaia-home",
+      "windows": "C:\\Users\\alice/gaia-home"
+    },
+    {
+      "name": "tilde_backslash_sub",
+      "raw": "~\\gaia-home",
+      "posix": "~\\gaia-home",
+      "windows": "C:\\Users\\alice\\gaia-home"
+    },
+    {
+      "name": "tilde_then_defined_var",
+      "raw": "~/$SUB/gaia",
+      "posix": "/home/alice/work/gaia",
+      "windows": "C:\\Users\\alice/work/gaia"
+    },
+    {
+      "name": "tilde_then_undefined_var_kept",
+      "raw": "~/$UNDEF/gaia",
+      "posix": "/home/alice/$UNDEF/gaia",
+      "windows": "C:\\Users\\alice/$UNDEF/gaia"
+    },
+    {
+      "name": "tilde_then_braced_defined_var",
+      "raw": "~/${SUB}/gaia",
+      "posix": "/home/alice/work/gaia",
+      "windows": "C:\\Users\\alice/work/gaia"
+    },
+    {
+      "name": "tilde_then_braced_undefined_var_kept",
+      "raw": "~/${UNDEF}/gaia",
+      "posix": "/home/alice/${UNDEF}/gaia",
+      "windows": "C:\\Users\\alice/${UNDEF}/gaia"
+    },
+    {
+      "name": "unclosed_brace_kept",
+      "raw": "~/${UNCLOSED/gaia",
+      "posix": "/home/alice/${UNCLOSED/gaia",
+      "windows": "C:\\Users\\alice/${UNCLOSED/gaia"
+    },
+    {
+      "name": "tilde_then_empty_defined_var",
+      "raw": "~/$EMPTY/gaia",
+      "posix": "/home/alice//gaia",
+      "windows": "C:\\Users\\alice//gaia"
+    },
+    {
+      "name": "var_expanding_to_tilde_does_not_reexpand",
+      "raw": "$TILDE_VAL/gaia",
+      "posix": "~/nested/gaia",
+      "windows": "~/nested/gaia"
+    },
+    {
+      "name": "windows_percent_var",
+      "raw": "~/%WIN_SUB%/gaia",
+      "posix": "/home/alice/%WIN_SUB%/gaia",
+      "windows": "C:\\Users\\alice/winwork/gaia"
+    },
+    {
+      "name": "windows_percent_backslash",
+      "raw": "~\\%WIN_SUB%\\gaia",
+      "posix": "~\\%WIN_SUB%\\gaia",
+      "windows": "C:\\Users\\alice\\winwork\\gaia"
+    },
+    {
+      "name": "windows_percent_undefined_kept",
+      "raw": "%UNDEF%\\gaia",
+      "posix": "%UNDEF%\\gaia",
+      "windows": "%UNDEF%\\gaia"
+    },
+    {
+      "name": "windows_percent_adjacent",
+      "raw": "%SUB%%WIN_SUB%",
+      "posix": "%SUB%%WIN_SUB%",
+      "windows": "workwinwork"
+    },
+    {
+      "name": "windows_double_percent",
+      "raw": "%%SUB%%",
+      "posix": "%%SUB%%",
+      "windows": "%SUB%"
+    },
+    {
+      "name": "windows_single_quoted_untouched",
+      "raw": "'%SUB%'/$SUB",
+      "posix": "'%SUB%'/work",
+      "windows": "'%SUB%'/work"
+    },
+    {
+      "name": "double_dollar",
+      "raw": "$$/$SUB",
+      "posix": "$$/work",
+      "windows": "$/work"
+    },
+    {
+      "name": "hyphen_var_boundary",
+      "raw": "$FOO-baz",
+      "posix": "bar-baz",
+      "windows": "$FOO-baz"
+    },
+    {
+      "name": "bare_dollar_kept",
+      "raw": "$/gaia",
+      "posix": "$/gaia",
+      "windows": "$/gaia"
+    }
+  ]
+}

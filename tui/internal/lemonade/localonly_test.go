@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -185,5 +186,73 @@ func TestPolicyPathExpandsTheHomeDirectory(t *testing.T) {
 	got = PolicyPathFrom(func(k string) string { return env[k] }, home)
 	if want := filepath.Join("/home/u", "gaia-home", "policy.json"); got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+	env = map[string]string{"GAIA_HOME": "~/$UNSET_DIR"}
+	got = PolicyPathFrom(func(k string) string { return env[k] }, home)
+	if want := filepath.Join("/home/u", "$UNSET_DIR", "policy.json"); got != want {
+		t.Errorf("undefined var: got %q, want %q", got, want)
+	}
+	env = map[string]string{"GAIA_CONFIG_DIR": "~/$SUB", "SUB": "cfg"}
+	got = PolicyPathFrom(func(k string) string { return env[k] }, home)
+	if want := filepath.Join("/home/u", "cfg", "policy.json"); got != want {
+		t.Errorf("GAIA_CONFIG_DIR var: got %q, want %q", got, want)
+	}
+	env = map[string]string{"GAIA_HOME": "$TILDE_VAL", "TILDE_VAL": "~/sub"}
+	got = PolicyPathFrom(func(k string) string { return env[k] }, home)
+	if want := filepath.Join("~", "sub", "policy.json"); got != want {
+		t.Errorf("tilde in var: got %q, want %q", got, want)
+	}
+}
+
+func TestPolicyFileTildeIsCleanedAndUnresolvedHomeKeptVerbatim(t *testing.T) {
+	home := func() (string, error) { return "/home/u", nil }
+	env := map[string]string{"GAIA_POLICY_FILE": "~"}
+	if got, want := PolicyPathFrom(func(k string) string { return env[k] }, home), filepath.Clean("/home/u"); got != want {
+		t.Errorf("bare ~: got %q, want %q", got, want)
+	}
+	env = map[string]string{"GAIA_POLICY_FILE": "~//nested/./policy.json"}
+	if got, want := PolicyPathFrom(func(k string) string { return env[k] }, home), filepath.Join("/home/u", "nested", "policy.json"); got != want {
+		t.Errorf("unclean tilde path: got %q, want %q", got, want)
+	}
+	noHome := func() (string, error) { return "", errors.New("no home") }
+	env = map[string]string{"GAIA_POLICY_FILE": "~/custom/policy.json"}
+	if got := PolicyPathFrom(func(k string) string { return env[k] }, noHome); got != "~/custom/policy.json" {
+		t.Errorf("unresolved home must leave the value as written, got %q", got)
+	}
+	env = map[string]string{"GAIA_POLICY_FILE": "./rel/../policy.json"}
+	if got := PolicyPathFrom(func(k string) string { return env[k] }, home); got != "./rel/../policy.json" {
+		t.Errorf("a path without ~ must pass through untouched, got %q", got)
+	}
+}
+
+func TestPolicyPathFromLookupDistinguishesEmptyFromUnset(t *testing.T) {
+	home := func() (string, error) { return "/home/u", nil }
+	env := map[string]string{
+		"GAIA_HOME": "~/$EMPTY/g",
+		"EMPTY":     "",
+	}
+	lookup := func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	}
+	if got, want := PolicyPathFromLookup(lookup, home), filepath.Join("/home/u", "g", "policy.json"); filepath.Clean(got) != want {
+		t.Errorf("empty-defined var: got %q, want %q", got, want)
+	}
+
+	env["GAIA_HOME"] = "~/$UNSET_VAR/g"
+	if got, want := PolicyPathFromLookup(lookup, home), filepath.Join("/home/u", "$UNSET_VAR", "g", "policy.json"); filepath.Clean(got) != want {
+		t.Errorf("unset var: got %q, want %q", got, want)
+	}
+
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	t.Setenv("GAIA_POLICY_FILE", "")
+	t.Setenv("GAIA_CONFIG_DIR", "")
+	t.Setenv("GAIA_EMPTY_POLICY_9099", "")
+	t.Setenv("GAIA_HOME", "~/$GAIA_EMPTY_POLICY_9099/pol")
+	if got, want := PolicyPath(), filepath.Join(userHome, "pol", "policy.json"); filepath.Clean(got) != want {
+		t.Errorf("PolicyPath() with empty var: got %q, want %q", got, want)
 	}
 }

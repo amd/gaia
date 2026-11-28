@@ -1512,7 +1512,7 @@ def test_a_question_without_a_verdict_stays_undecided(tmp_path, monkeypatch):
 def test_the_live_judge_passes_every_reference_and_fails_every_wrong_answer(
     tmp_path,
 ):
-    from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+    from gaia.eval.config import DEFAULT_EVAL_MODEL
 
     attempts, want = [], {}
     for task in STATED:
@@ -1528,7 +1528,7 @@ def test_the_live_judge_passes_every_reference_and_fails_every_wrong_answer(
                 ft.Attempt(key, task.prompt, answer, "(none)", task, setup_diff)
             )
             want[key] = expected
-    grades = ft.judge_batch(attempts, DEFAULT_CLAUDE_MODEL, dict(os.environ))
+    grades = ft.judge_batch(attempts, DEFAULT_EVAL_MODEL, dict(os.environ))
     assert {k: grades[k].get("answers_correctly") for k in want} == want
 
 

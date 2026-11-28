@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 import psutil
 
+from gaia.ports import AGENT_UI_PORT
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 logger = logging.getLogger(__name__)
@@ -324,7 +325,7 @@ def _known_ngrok_error(text: str) -> Optional[str]:
     return None
 
 
-def _parse_ngrok_error(stderr_text: str) -> str:
+def _parse_ngrok_error(stderr_text: str, port: int = AGENT_UI_PORT) -> str:
     """Translate ngrok stderr/stdout into a user-friendly error message.
 
     Detects the most common failure modes (missing authtoken, session
@@ -336,7 +337,7 @@ def _parse_ngrok_error(stderr_text: str) -> str:
     if not text:
         return (
             "ngrok exited without output. Try running the command manually to "
-            "see the error: ngrok http 4200"
+            f"see the error: ngrok http {port}"
         )
     known = _known_ngrok_error(text)
     if known:
@@ -725,7 +726,7 @@ class TunnelManager:
     def _explain_exit(self, output: str) -> str:
         """The user-facing reason GAIA's agent failed, naming any ngrok it
         couldn't inspect when that one may be holding the session or port."""
-        message = _parse_ngrok_error(output)
+        message = _parse_ngrok_error(output, port=self.port)
         return self._name_uninspectable(message)
 
     def _name_uninspectable(self, message: str) -> str:
