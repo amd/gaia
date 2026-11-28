@@ -937,6 +937,58 @@ def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
     assert cloud["id"] not in ids
 
 
+def _image_entry(model_id, downloaded, size):
+    return {
+        "id": model_id,
+        "downloaded": downloaded,
+        "size": size,
+        "recipe": "sd-cpp",
+        "labels": ["image"],
+        "image_defaults": {"width": 512, "height": 512, "steps": 4},
+    }
+
+
+@pytest.fixture
+def image_box(flm_box, monkeypatch):
+    """A Lemonade with two image models on disk, one only offered, one an upscaler."""
+    fake = flm_box()
+    listed = fake.list_models
+    images = [
+        _image_entry("SD-Turbo", True, 4.86),
+        _image_entry("SDXL-Base-1.0", True, 6.46),
+        _image_entry("SD-1.5", False, 7.7),
+        {**_image_entry("RealESRGAN", True, 0.1), "labels": ["image", "upscaling"]},
+    ]
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + images}
+    )
+    return fake
+
+
+def test_catalog_lists_every_downloaded_image_model_for_settings(image_box):
+    """Settings > Image creation offers them, so Manage downloads must list them."""
+    catalog = sp.build_plan()["catalog"]
+    for model_id in ("SD-Turbo", "SDXL-Base-1.0"):
+        row = next(e for e in catalog if e["id"] == model_id)
+        assert row["downloaded"] and row["gaia_model"]
+        assert row["roles"] == ["image_creation"] and row["support"] is None
+        assert not row["chat_choice"] and not row["planned"]
+    ids = [e["id"] for e in catalog]
+    # Not downloaded, or not a picture maker: nothing to free, nothing to list.
+    assert "SD-1.5" not in ids and "RealESRGAN" not in ids
+
+
+def test_a_listed_image_model_is_removed_like_any_other_model(
+    client, image_box, config_file
+):
+    r = client.post(
+        "/api/setup/models/remove", json={"model_id": "SDXL-Base-1.0"}, headers=UI
+    )
+    assert r.status_code == 200 and r.json()["freed_gb"] == 6.5
+    assert image_box.deleted == ["SDXL-Base-1.0"]
+    assert json.loads(config_file.read_text())["skipped_models"] == ["SDXL-Base-1.0"]
+
+
 @pytest.mark.parametrize(
     "entry, kept",
     [

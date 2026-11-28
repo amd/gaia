@@ -912,15 +912,30 @@ class ChatDatabase:
             updates.append("mail_provider = ?")
             params.append(mail_provider)
 
-        updates.append("updated_at = ?")
-        params.append(self._now())
+        # A rename or title pin isn't activity: the chat keeps its place in the list.
+        changes_more_than_title = any(
+            v is not None
+            for v in (
+                model,
+                system_prompt,
+                private,
+                agent_type,
+                device,
+                mail_provider,
+                document_ids,
+            )
+        )
+        if changes_more_than_title:
+            updates.append("updated_at = ?")
+            params.append(self._now())
         params.append(session_id)
 
         with self._transaction():
-            self._conn.execute(
-                f"UPDATE sessions SET {', '.join(updates)} WHERE id = ?",
-                params,
-            )
+            if updates:
+                self._conn.execute(
+                    f"UPDATE sessions SET {', '.join(updates)} WHERE id = ?",
+                    params,
+                )
             # Update session-document attachments via the join table.
             # Replace the full set: delete all existing links then re-insert
             # so the final state exactly matches the supplied list.
