@@ -1529,6 +1529,8 @@ export const enMessages = {
     'prompt.always.file': '{action} {name}',
     'prompt.always.folder': '{action} in {folder}',
     'prompt.always.changes': 'changing files in {folder}',
+    'prompt.always.command': 'running {command}',
+    'prompt.always.commands': 'running {command} commands',
     'prompt.deny': 'Deny',
     'prompt.details': 'Details',
     'prompt.technicalDetails': 'Technical details',
