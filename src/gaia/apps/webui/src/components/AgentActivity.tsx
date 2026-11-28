@@ -227,14 +227,13 @@ const MCP_OUTPUT_PREVIEW_LINES = 5;
 /** Below this many call rows the list is short enough to scan without a filter. */
 const FILTER_MIN_TOOL_ROWS = 6;
 
-const FETCH_ERROR = /^Error fetching page:\s*(\d{3})?/;
+const FETCH_HTTP_STATUS = /(?:^Error fetching page:\s*|\bHTTP\s+)(\d{3})\b/;
 
-/** What a failed page fetch shows on its row; the library's own error stays in the opened step. */
+/** What a failed page fetch shows on its row; the tool's own error stays in the opened step. */
 export function failureText(step: AgentStep, t: Translate): string {
     const result = step.result ?? '';
-    const match = step.tool === 'fetch_page' ? FETCH_ERROR.exec(result) : null;
-    if (!match) return result;
-    const code = match[1];
+    if (step.tool !== 'fetch_page') return result;
+    const code = FETCH_HTTP_STATUS.exec(result)?.[1];
     if (code && ['401', '403', '429'].includes(code)) return t('activity.fetchBlocked', { code });
     return t('activity.fetchFailed');
 }

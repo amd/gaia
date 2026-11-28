@@ -71,6 +71,9 @@ public:
     /// Index (or re-index) a file. Returns the number of chunks added.
     size_t indexFile(const std::string& path);
 
+    /// Remove a file's chunks and vectors from the index.
+    void removeFile(const std::string& path);
+
     /// Index every supported file under `root`, skipping what .gitignore
     /// ignores, VCS / dependency / build folders and files over 1 MB.
     /// `failures` collects "path: reason" for files that couldn't be read.
@@ -92,7 +95,7 @@ public:
                        std::function<std::string(const std::string&)> checkPath = {});
 
 private:
-    void removeFile(const std::string& file);
+    void removeFileLocked(const std::string& file);
     std::vector<std::string> tokens(const std::string& text) const;
 
     EmbedFunction embed_;

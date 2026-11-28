@@ -2129,6 +2129,7 @@ const messages: Messages = {
     'settings.automations.cancel': 'إلغاء',
     'settings.automations.removeTitle': 'إزالة «{name}»؟',
     'settings.automations.removeBody': 'سيتوقف GAIA عن تشغيلها. لاستعادتها، اطلب من GAIA في المحادثة إعدادها مرة أخرى.',
+    'settings.automations.removeBodyNative': 'سيتوقف GAIA عن تشغيلها. لا يستطيع «سريع وخفيف» إعدادها مرة أخرى؛ انتقل إلى «كامل الميزات» من قسم الوكيل والنموذج لإعادة إنشائها في المحادثة.',
     'modelNeeded.dialog': 'تنزيل نموذج',
     'modelNeeded.title.chat': 'تحتاج المحادثة إلى نموذج',
     'modelNeeded.title.vision': 'تحتاج قراءة هذه الصورة إلى نموذج رؤية',
@@ -3166,6 +3167,9 @@ const messages: Messages = {
     // The model chip's status icons
     'modelChip.notDownloaded': 'غير منزَّل',
     'modelChip.switchFailed': 'تعذّر تبديل النموذج',
+    'modelChip.next': 'التالي',
+    'modelChip.queuedTitle': 'يُستخدم {model} بدءًا من رسالتك التالية.',
+    'modelChip.notDownloadedTitle': 'لم يُنزَّل {name} بعد. افتح القائمة لتنزيله.',
 
     // The update chip
 

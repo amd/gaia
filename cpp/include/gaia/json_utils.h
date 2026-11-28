@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -46,6 +47,9 @@ GAIA_API std::optional<json> extractJsonFromResponse(const std::string& response
 /// @throws std::runtime_error if response cannot be parsed
 GAIA_API json validateJsonResponse(const std::string& responseText);
 
+/// Says whether a name is a registered tool.
+using ToolNameCheck = std::function<bool(const std::string&)>;
+
 /// Parse an LLM response into a structured ParsedResponse.
 /// Mirrors Python Agent._parse_llm_response().
 ///
@@ -56,8 +60,10 @@ GAIA_API json validateJsonResponse(const std::string& responseText);
 ///   - Field-by-field extraction as last resort
 ///
 /// @param response Raw response from LLM
+/// @param isTool Whether a name is a registered tool. With it, a call whose arguments sit beside
+///               "tool" instead of inside "tool_args" still runs when it follows prose.
 /// @return Parsed response structure
-GAIA_API ParsedResponse parseLlmResponse(const std::string& response);
+GAIA_API ParsedResponse parseLlmResponse(const std::string& response, const ToolNameCheck& isTool = {});
 
 /// Fix common JSON syntax errors.
 /// - Remove trailing commas before } or ]
