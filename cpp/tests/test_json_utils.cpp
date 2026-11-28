@@ -401,3 +401,56 @@ TEST(JsonUtilsTest, AVeryLongReplyIsParsedWithoutThrowing) {
     }
     EXPECT_EQ(parseLlmResponse("{\"thought\": \"t\", \"answer\": \"" + filler + "\", }}").answer.value_or(""), filler);
 }
+
+namespace {
+bool knownTool(const std::string& name) {
+    return name == "file_write" || name == "bash_execute";
+}
+}  // namespace
+
+TEST(JsonUtilsTest, ArgumentsWrittenBesideTheToolNameAreItsArguments) {
+    auto whole = parseLlmResponse("{\"tool\": \"bash_execute\", \"command\": \"echo hi\"}");
+    ASSERT_TRUE(whole.toolName.has_value());
+    EXPECT_EQ((*whole.toolArgs)["command"], "echo hi");
+
+    auto thought = parseLlmResponse("{\"thought\": \"look\", \"tool\": \"bash_execute\", \"command\": \"ls\"}");
+    EXPECT_EQ(thought.thought, "look");
+    EXPECT_EQ(*thought.toolArgs, json({{"command", "ls"}}));
+
+    auto afterProse = parseLlmResponse(
+        "I will write the file.\n\n{\"tool\": \"file_write\", \"path\": \"a.txt\", \"content\": \"x {y}\"}", knownTool);
+    ASSERT_TRUE(afterProse.toolName.has_value());
+    EXPECT_EQ(*afterProse.toolName, "file_write");
+    EXPECT_EQ(*afterProse.toolArgs, json({{"path", "a.txt"}, {"content", "x {y}"}}));
+    EXPECT_EQ(afterProse.thought, "I will write the file.");
+}
+
+TEST(JsonUtilsTest, DataThatNamesNoRealToolStaysAnAnswerAfterProse) {
+    const std::string text = "The part is {\"tool\": \"saw\", \"teeth\": 40}";
+    EXPECT_EQ(parseLlmResponse(text, knownTool).answer.value_or(""), text);
+    EXPECT_EQ(parseLlmResponse(text).answer.value_or(""), text);
+}
+
+TEST(JsonUtilsTest, TheFirstOfSeveralCallsAfterProseRunsAndTheRestAreCounted) {
+    auto p = parseLlmResponse(
+        "Writing it, then compiling.\n\n"
+        "{\"tool\": \"file_write\", \"tool_args\": {\"path\": \"p.c\", \"content\": \"int main() { return 0; }\"}}\n\n"
+        "{\"tool\": \"bash_execute\", \"tool_args\": {\"command\": \"gcc p.c\"}}",
+        knownTool);
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ(*p.toolName, "file_write") << "compiling before the file is written fails";
+    EXPECT_EQ((*p.toolArgs)["path"], "p.c");
+    EXPECT_EQ(p.droppedToolCalls, 1u);
+    EXPECT_EQ(p.thought, "Writing it, then compiling.");
+}
+
+TEST(JsonUtilsTest, BracesInsideAnEarlierCallsTextDoNotHideTheCalls) {
+    auto p = parseLlmResponse(
+        "Writing it, then compiling.\n\n"
+        "{\"tool\": \"file_write\", \"path\": \"p.c\", \"content\": \"int main() {\\n  if (1) { return 0; }\\n}\\n\"}\n\n"
+        "{\"tool\": \"bash_execute\", \"command\": \"gcc p.c\"}",
+        knownTool);
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ(*p.toolName, "file_write");
+    EXPECT_EQ(p.droppedToolCalls, 1u);
+}

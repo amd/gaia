@@ -1639,6 +1639,39 @@ TEST(AgentResilience, ATextToolCallWithWordsAfterItIsSentBackNotTakenForTheAnswe
     EXPECT_NE(bodies[1].find("must be the last thing in a reply"), std::string::npos);
 }
 
+TEST(AgentResilience, ATextToolCallWithItsArgumentsBesideTheNameRunsWithThem) {
+    for (const char* reply :
+         {R"({"tool": "add", "a": 1, "b": 2})", "I'll add them.\n\n{\"tool\": \"add\", \"a\": 1, \"b\": 2}"}) {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(reply));
+        mock.pushResponse(answer("The sum is 3."));
+        ResilienceAgent agent(cfgFor(mock));
+        agent.initForTest();
+        json r = agent.processQuery("add 1 and 2");
+        EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"})) << reply;
+        EXPECT_EQ(r["result"], "The sum is 3.") << reply;
+        const auto bodies = mock.receivedBodies();
+        ASSERT_EQ(bodies.size(), 2u) << reply;
+        EXPECT_EQ(bodies[1].find("no arguments"), std::string::npos) << "the arguments were dropped: " << reply;
+    }
+}
+
+TEST(AgentResilience, AWholeRunWrittenOutInOneReplyIsSentBackNotTakenForTheAnswer) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("I'll add them.\n\n{\"tool\": \"add\", \"a\": 1, \"b\": 2}\n\nThat gave 3. Checking again.\n\n"
+                             "{\"tool\": \"add\", \"a\": 2, \"b\": 1}\n\nBoth runs gave 3, so the sum is 3."));
+    mock.pushResponse(answer(R"({"tool": "add", "tool_args": {"a": 1, "b": 2}})"));
+    mock.pushResponse(answer("The sum is 3."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("add 1 and 2");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"}));
+    EXPECT_EQ(r["result"], "The sum is 3.");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_GE(bodies.size(), 2u);
+    EXPECT_NE(bodies[1].find("held several tool calls and none of them ran"), std::string::npos);
+}
+
 TEST(AgentResilience, APlanWithNoCallAndNoAnswerIsSentBack) {
     bench::MockLlmServer mock;
     mock.pushResponse(answer(R"({"thought": "I need the sum", "plan": ["add the numbers"]})"));
