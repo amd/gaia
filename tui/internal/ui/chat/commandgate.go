@@ -53,8 +53,6 @@ var nativeLacks = map[string]string{
 	"/sessions":         "keep sessions",
 	"/context":          "report what fills the model's context",
 	skillsCommandPrefix: "list or add skills on command",
-	researchCommand:     "write research reports",
-	"/research-report":  "write research reports",
 	imageCommandPrefix:  "use GAIA's image settings",
 }
 

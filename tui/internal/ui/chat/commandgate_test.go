@@ -51,8 +51,8 @@ var worksOnGaiacpp = map[string]bool{
 	"/connectors": true, "/models": true, "/gpu": true, "/slack": true, "/discord": true,
 	"/automations": true, "/model": true, "/provider": true, "/gateway": true, "/cost": true,
 	"/copy": true, "/copy all": true, "/read-aloud": true, "/voice": true, "/agent": true,
-	"/agents": true, "/update": true, "/quit": true,
-	"/skills": false, "/research": false, "/context": false, "/image": false,
+	"/agents": true, "/update": true, "/quit": true, "/research": true,
+	"/skills": false, "/context": false, "/image": false,
 	"/sessions": false, "/sessions all": false,
 }
 
@@ -117,11 +117,17 @@ func TestTheNativeRefusalNamesTheWayToSwitch(t *testing.T) {
 	if got := m.WithAgentPrograms().nativeUnavailable("/context"); !strings.HasSuffix(got, "Type /agent gaiapy to switch.") {
 		t.Errorf("a chat that can switch does not say how: %q", got)
 	}
-	for _, line := range []string{"/research tides", "/research-report tides", "/skills add x", "/image open", "/Sessions all"} {
+	for _, line := range []string{"/skills add x", "/image open", "/Sessions all"} {
 		updated, _ := m.submit(line)
 		next := updated.(ChatModel)
 		if next.streaming || !strings.Contains(gateError(next), "(the Python agent)") {
 			t.Errorf("%q on gaiacpp was not refused: streaming=%v, %q", line, next.streaming, gateError(next))
+		}
+	}
+	for _, line := range []string{"/research tides", "/research-report tides"} {
+		updated, _ := m.submit(line)
+		if next := updated.(ChatModel); !sentToModel(next) {
+			t.Errorf("%q was not sent to gaiacpp: %q", line, gateError(next))
 		}
 	}
 }
@@ -263,7 +269,7 @@ func TestThePaletteOffersOnlyWhatGaiacppRuns(t *testing.T) {
 	for _, c := range filterPaletteCommands("/", m.availableCommandSet()) {
 		names = append(names, c.Name)
 	}
-	for _, hidden := range []string{"/sessions", "/sessions all", "/context", "/skills", "/research", "/image"} {
+	for _, hidden := range []string{"/sessions", "/sessions all", "/context", "/skills", "/image"} {
 		if slices.Contains(names, hidden) {
 			t.Errorf("gaiacpp's palette offers %s", hidden)
 		}
@@ -271,7 +277,7 @@ func TestThePaletteOffersOnlyWhatGaiacppRuns(t *testing.T) {
 			t.Errorf("gaiacpp's /help lists %s", hidden)
 		}
 	}
-	for _, shown := range []string{"/help", "/model", "/memory", "/quit", "/agent"} {
+	for _, shown := range []string{"/help", "/model", "/memory", "/research", "/quit", "/agent"} {
 		if !slices.Contains(names, shown) {
 			t.Errorf("gaiacpp's palette is missing %s", shown)
 		}
