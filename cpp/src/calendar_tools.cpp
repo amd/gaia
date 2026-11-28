@@ -1003,6 +1003,7 @@ void CalendarTools::registerAll(ToolRegistry& registry) {
         if (tool == kCreate || tool == kUpdate || tool == kCancel) {
             info.policy = ToolPolicy::CONFIRM;
             info.personMustApprove = true;
+            approval::setSummary(kPrefix + tool, &CalendarTools::approvalSummary);
             info.preflight = [state, tool](const json& args) {
                 std::lock_guard<std::mutex> lock(state->mu);
                 return state->preflight(tool, args);

@@ -15,7 +15,6 @@
 #include <string>
 #include <vector>
 
-#include "gaia/calendar_tools.h"
 #include "gaia/clean_console.h"
 #include "gaia/person_approval.h"
 #include "gaia/secrets.h"
@@ -149,9 +148,8 @@ ToolConfirmCallback makeStdinConfirmCallback() {
             // Piped input is not a person: `printf 'cancel it\n1\n' | gaiacpp` must not approve.
             if (!stdinIsAPerson()) return ToolConfirmResult::UNATTENDED;
             // Approved one call at a time, from what the call will really do.
-            std::string body;
-            if (CalendarTools::isWriteTool(toolName)) {
-                body = CalendarTools::approvalSummary(args);
+            std::string body = approval::summaryOf(toolName, args);
+            if (!body.empty()) {
                 const json& note = args.value(approval::kRiskNoteArg, json());
                 if (note.is_string()) body += "\n" + note.get<std::string>();
             } else {

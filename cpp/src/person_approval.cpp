@@ -8,12 +8,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
-#include "gaia/idna.h"
-#include "mail_text.h"
 
 namespace gaia::approval {
 
@@ -188,62 +188,42 @@ bool hasUnseen(const std::string& text) {
         unfolded += text[i];
     }
     if (visible(text) != unfolded) return true;
-    for (char32_t cp : mail::text::decode(text)) {
+    for (size_t i = 0; i < text.size();) {
+        const auto [cp, len] = decodeAt(text, i);
         if (cp >= 0xE0100 && cp <= 0xE01EF) return true;
+        i += len ? len : 1;
     }
     return false;
 }
 
 namespace {
 
-std::string repr(const std::string& s) { return mail::text::pyRepr(json(s)); }
+std::mutex& summariesMutex() {
+    static std::mutex mu;
+    return mu;
+}
 
-bool isAscii(const std::string& s) {
-    for (unsigned char c : s) {
-        if (c >= 0x80) return false;
-    }
-    return true;
+std::map<std::string, Summary>& summaries() {
+    static std::map<std::string, Summary> registered;
+    return registered;
 }
 
 }  // namespace
 
-std::string sendableAddress(const std::string& address, const std::string& field) {
-    for (char32_t cp : mail::text::decode(address)) {
-        const std::string one = mail::text::encode(cp);
-        if (visible(one, Shown::Name) != one) {
-            char code[16];
-            std::snprintf(code, sizeof code, "%04X", static_cast<unsigned>(cp));
-            throw std::invalid_argument("`" + field + "` has an address with an invisible or control character (U+" +
-                                        code + "), which could disguise who receives it: " +
-                                        repr(visibleLine(address)) + ". Give the plain address.");
-        }
+void setSummary(const std::string& tool, Summary summary) {
+    std::lock_guard<std::mutex> lock(summariesMutex());
+    summaries()[tool] = std::move(summary);
+}
+
+std::string summaryOf(const std::string& tool, const nlohmann::json& shownArgs) {
+    Summary summary;
+    {
+        std::lock_guard<std::mutex> lock(summariesMutex());
+        const auto it = summaries().find(tool);
+        if (it == summaries().end()) return "";
+        summary = it->second;
     }
-    const size_t at = address.find('@');
-    bool shaped = at != std::string::npos && at > 0 && at + 1 < address.size() &&
-                  address.find('@', at + 1) == std::string::npos;
-    for (char32_t cp : mail::text::decode(address)) {
-        if (cp != U'@' && (mail::text::isSpace(cp) || cp == U'<' || cp == U'>' || cp == U'"' || cp == U',' ||
-                           cp == U';')) {
-            shaped = false;
-        }
-    }
-    if (!shaped) {
-        throw std::invalid_argument("`" + field + "` has an address that can't be used: " + repr(address) +
-                                    ". Give a plain address like name@example.com.");
-    }
-    const std::string local = address.substr(0, at);
-    const std::string domain = address.substr(at + 1);
-    if (!isAscii(local)) {
-        throw std::invalid_argument("`" + field + "` has non-ASCII characters before the @ in " + repr(address) +
-                                    ", which GAIA can't send to. Check the address with its owner.");
-    }
-    if (isAscii(domain)) return address;
-    try {
-        return local + "@" + idna::encodeUts46(mail::text::decode(domain));
-    } catch (const idna::IdnaError& e) {
-        throw std::invalid_argument("`" + field + "` has a domain that can't be used: " + repr(domain) + " (" +
-                                    e.what() + "). Check the spelling.");
-    }
+    return summary(shownArgs);
 }
 
 }  // namespace gaia::approval
