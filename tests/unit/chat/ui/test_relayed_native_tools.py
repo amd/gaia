@@ -321,6 +321,53 @@ class TestActivityLines:
         assert handler.events[0]["detail"] == "Checking git status"
         assert handler.events[0]["narration"] == "Checking git status"
 
+    @pytest.mark.parametrize("status", ["denied", "error"])
+    def test_a_denied_gaiacpp_call_is_normalized_without_raw_tool_name(self, status):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "bash_execute",
+                "args": {"command": "touch declined_demo.txt"},
+            },
+            {
+                "type": "tool_result",
+                "tool": "bash_execute",
+                "data": {
+                    "status": status,
+                    "error": "Tool 'bash_execute' execution denied by user",
+                },
+            },
+        )
+        result = handler.events[-1]
+        assert result["tool"] == "run_shell_command"
+        assert result["data"]["status"] == "denied"
+        assert result["summary"] == "Declined by user"
+        assert "bash_execute" not in result["summary"]
+
+    def test_an_already_declined_gaiacpp_call_stays_denied_without_raw_tool_name(self):
+        handler = _relay(
+            {
+                "type": "tool_call",
+                "tool": "file_write",
+                "args": {"path": "declined_demo.txt", "content": "x"},
+            },
+            {
+                "type": "tool_result",
+                "tool": "file_write",
+                "data": {
+                    "status": "denied",
+                    "not_executed": True,
+                    "already_declined": True,
+                    "error": "Not run, and not put to the user again",
+                },
+            },
+        )
+        result = handler.events[-1]
+        assert result["tool"] == "write_file"
+        assert result["data"]["status"] == "denied"
+        assert result["summary"] == "Not run (declined earlier)"
+        assert "file_write" not in result["summary"]
+
 
 @pytest.mark.parametrize(
     "tool,data,summary",
@@ -424,6 +471,84 @@ def test_only_gaiacpps_search_code_is_read_as_the_code_index():
     )
     python_call = {"pattern": "TODO", "directory": "."}
     assert as_flagship_call("search_code", python_call) == ("search_code", python_call)
+
+
+@pytest.mark.parametrize(
+    "data,expected_success,expected_text",
+    [
+        (
+            {
+                "status": "error",
+                "has_errors": True,
+                "indexed": [],
+                "failed": [
+                    {
+                        "document": "budget_sheet.xlsx",
+                        "error": "Can't index budget_sheet.xlsx: Excel (.xlsx) files aren't supported.",
+                    },
+                    {
+                        "document": "pitch_deck.pptx",
+                        "error": "Can't index pitch_deck.pptx: PowerPoint (.pptx) files aren't supported.",
+                    },
+                ],
+                "summary": (
+                    "Couldn't index 2 documents:\n"
+                    "- budget_sheet.xlsx: Excel (.xlsx) files aren't supported for automatic indexing.\n"
+                    "- pitch_deck.pptx: PowerPoint (.pptx) files aren't supported for automatic indexing."
+                ),
+            },
+            False,
+            "pitch_deck.pptx",
+        ),
+        (
+            {
+                "status": "partial",
+                "has_errors": True,
+                "indexed": [{"document": "memo.txt", "chunks": 1}],
+                "failed": [
+                    {
+                        "document": "budget_sheet.xlsx",
+                        "error": "Can't index budget_sheet.xlsx: Excel (.xlsx) files aren't supported.",
+                    }
+                ],
+                "summary": "Indexed memo.txt (1 passage); couldn't index budget_sheet.xlsx.",
+            },
+            False,
+            "Indexed memo.txt",
+        ),
+        (
+            {
+                "status": "ok",
+                "indexed": [{"document": "quarterly_report.pdf", "chunks": 2}],
+                "failed": [],
+                "summary": "Indexed quarterly_report.pdf (2 passages)",
+            },
+            True,
+            "Indexed quarterly_report.pdf (2 passages)",
+        ),
+    ],
+)
+def test_relayed_index_documents_preserves_status_and_full_summary(
+    data, expected_success, expected_text
+):
+    handler = _relay(
+        {
+            "type": "tool_call",
+            "tool": "index_documents",
+            "args": {"documents": ["budget_sheet.xlsx", "pitch_deck.pptx"]},
+        },
+        {
+            "type": "tool_result",
+            "tool": "index_documents",
+            "data": data,
+        },
+    )
+    result = handler.events[-1]
+    assert result["type"] == "tool_result"
+    assert result["tool"] == "index_documents"
+    assert result["success"] is expected_success
+    assert expected_text in result["summary"]
+    assert result["summary"] == data["summary"]
 
 
 def test_index_document_path_arg_is_mapped_to_file_path():

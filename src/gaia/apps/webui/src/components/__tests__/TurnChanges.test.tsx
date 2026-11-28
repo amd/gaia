@@ -370,6 +370,16 @@ describe('TurnChanges on gaiacpp', () => {
         expect(ranChangingTool([step({ tool: 'write_file', success: true })])).toBe(true);
         expect(ranChangingTool([step({ tool: 'edit_file', success: true })])).toBe(true);
         expect(ranChangingTool([step({ tool: 'run_shell_command', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: touch a.txt', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: echo hi > a.txt', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: find . -delete', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: env rm -rf build', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: tree -o out.txt', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: uniq in.txt out.txt', success: true })])).toBe(true);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: ls -la', success: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: pwd', success: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: git status', success: true })])).toBe(false);
+        expect(ranChangingTool([step({ tool: 'run_shell_command', detail: 'command: ls -la | head -n 5', success: true })])).toBe(false);
         expect(ranChangingTool([step({ tool: 'read_file', success: true })])).toBe(false);
         expect(ranChangingTool([step({ tool: 'run_shell_command', active: false })])).toBe(false);
         expect(ranChangingTool([step({ tool: 'write_file', active: true, success: true })])).toBe(false);
@@ -380,6 +390,23 @@ describe('TurnChanges on gaiacpp', () => {
         expect(ranChangingTool([step({ tool: 'write_file', success: false })])).toBe(false);
         expect(ranChangingTool([step({ type: 'status', label: 'write_file', success: true })])).toBe(false);
         expect(ranChangingTool(undefined)).toBe(false);
+    });
+
+    it('uses the persisted agentProgram without polling capabilities on reopened chats', async () => {
+        vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [] });
+        const asked = vi.spyOn(api, 'getCapabilities').mockRejectedValue(new Error('409 not running'));
+        render(<TurnChanges sessionId="s1" messageId={7} ranChangingTool agentProgram="gaiacpp" />);
+        expect(await screen.findByRole('note')).toHaveTextContent(LINE);
+        expect(asked).not.toHaveBeenCalled();
+    });
+
+    it('skips capabilities and renders nothing when persisted agentProgram is gaiapy', async () => {
+        const list = vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [] });
+        const asked = vi.spyOn(api, 'getCapabilities');
+        const { container } = render(<TurnChanges sessionId="s1" messageId={7} ranChangingTool agentProgram="gaiapy" />);
+        await waitFor(() => expect(list).toHaveBeenCalled());
+        expect(container).toBeEmptyDOMElement();
+        expect(asked).not.toHaveBeenCalled();
     });
 });
 

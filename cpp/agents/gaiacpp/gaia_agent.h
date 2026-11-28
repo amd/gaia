@@ -253,6 +253,7 @@ private:
     /// folder it had drifted to, "" when it was inside.
     static std::string returnShellInside(const Workspace& ws, ShellSession& session);
     bool memoryOff() const { return options_.memoryOff && options_.memoryOff->load(); }
+    bool memoryPrivate() const { return options_.memoryPrivate && options_.memoryPrivate->load(); }
 
     Options options_;
     mutable std::mutex turnListingMu_;

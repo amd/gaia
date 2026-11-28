@@ -9,6 +9,7 @@
 //   gaiacpp --stdio                          The GAIA terminal UI's agent child (JSON Lines)
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -164,8 +165,9 @@ void printUsage() {
         "                            window the model is loaded with)\n"
         "  --temperature T           Sampling temperature\n"
         "Run:\n"
-        "  -p, --print [PROMPT]      Headless: answer on stdout, exit 0/1\n"
-        "  --prompt-file FILE        Read the prompt from FILE\n"
+        "  -p, --print [PROMPT]      Headless: answer on stdout, exit 0/1 (pass -- before\n"
+        "                            a flag-shaped prompt)\n"
+        "  --prompt-file FILE        Read the prompt from FILE (not with an inline PROMPT)\n"
         "  --output-format FMT       text (default) or json\n"
         "  -y, --yes                 Download the model without asking when it is not\n"
         "                            on disk (otherwise asked; refused with no terminal)\n"
@@ -264,6 +266,22 @@ double toTemperature(const std::string& flag, const std::string& v) {
     return t;
 }
 
+// True when a token looks like a CLI option (`-x`, `--flag`, `--flag=value`, or `--`), so `-p`
+// leaves it to the flag parser instead of consuming it as a prompt.
+bool looksLikeOption(const std::string& s) {
+    if (s == "--") return true;
+    if (s.size() == 2 && s[0] == '-' && std::isalpha(static_cast<unsigned char>(s[1]))) return true;
+    if (s.size() >= 3 && s[0] == '-' && s[1] == '-' && std::isalpha(static_cast<unsigned char>(s[2]))) {
+        for (size_t i = 3; i < s.size(); ++i) {
+            const unsigned char c = static_cast<unsigned char>(s[i]);
+            if (c == '=') return true;
+            if (!std::isalnum(c) && c != '-' && c != '_') return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 Cli parseArgs(int argc, char** argv) {
     Cli cli;
     auto need = [&](int& i, const std::string& flag) -> std::string {
@@ -280,12 +298,22 @@ Cli parseArgs(int argc, char** argv) {
     };
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
+        if (a == "--") {
+            for (++i; i < argc; ++i) {
+                if (cli.mode == Cli::Mode::Print && !cli.prompt) {
+                    cli.prompt = argv[i];
+                } else {
+                    usageError(std::string("unknown argument '") + argv[i] + "'");
+                }
+            }
+            break;
+        }
         if (a == "-h" || a == "--help") { printUsage(); std::exit(0); }
         else if (a == "-v" || a == "--version") { std::cout << "gaiacpp " GAIACPP_VERSION "\n"; std::exit(0); }
         else if (a == "serve" && i == 1) setMode(Cli::Mode::Serve, a);
         else if (a == "-p" || a == "--print") {
             setMode(Cli::Mode::Print, a);
-            if (i + 1 < argc && argv[i + 1][0] != '-') cli.prompt = argv[++i];
+            if (!cli.prompt && i + 1 < argc && !looksLikeOption(argv[i + 1])) cli.prompt = argv[++i];
         }
         else if (a == "--mcp") setMode(Cli::Mode::Mcp, a);
         else if (a == "--stdio") setMode(Cli::Mode::Stdio, a);
@@ -335,6 +363,9 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--expose-tool-routes") cli.exposeToolRoutes = true;
         else if (a == "--debug") cli.debug = true;
         else usageError("unknown argument '" + a + "'");
+    }
+    if (cli.prompt && !cli.promptFile.empty()) {
+        usageError("pass a prompt argument or --prompt-file, not both");
     }
     if (cli.outputFormat != "text" && cli.outputFormat != "json") {
         usageError("--output-format must be text or json");
@@ -967,8 +998,39 @@ int runInteractive(const Cli& cli) {
 
 } // namespace
 
+void printSkillsUsage() {
+    std::cout <<
+        "Usage:\n"
+        "  gaiacpp skills list\n"
+        "  gaiacpp skills install <folder>|<name>[@version] [--allow-experimental]\n"
+        "  gaiacpp skills remove <name>\n\n"
+        "Manage installed SKILL.md skills (local folder or hub).\n";
+}
+
+void printModelsUsage() {
+    std::cout <<
+        "Usage:\n"
+        "  gaiacpp models list [options]\n"
+        "  gaiacpp models pull <name> [--checkpoint C --recipe R] [options]\n\n"
+        "Options:\n"
+        "  --checkpoint C      Model checkpoint when registering a user.* model\n"
+        "  --recipe R          Model recipe when registering a user.* model\n"
+        "  --base-url URL      OpenAI-compatible / Lemonade endpoint\n"
+        "  --provider NAME     lemonade (default) or fireworks\n"
+        "  --api-key-env VAR   Variable holding the endpoint key\n"
+        "  --config FILE       Settings file\n"
+        "  -h, --help          Show this help\n";
+}
+
 // gaiacpp skills list | install <folder>|<name>[@version] [--allow-experimental] | remove <name>
 int runSkills(int argc, char** argv) {
+    for (int i = 2; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "-h" || a == "--help") {
+            printSkillsUsage();
+            return 0;
+        }
+    }
     const std::string sub = argc > 2 ? argv[2] : "list";
     if (sub == "list") {
         gaia::SkillLibrary lib;
@@ -1042,6 +1104,10 @@ int runModels(int argc, char** argv) {
     std::vector<std::string> words;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
+        if (a == "-h" || a == "--help") {
+            printModelsUsage();
+            return 0;
+        }
         std::string* target = a == "--checkpoint"    ? &checkpoint
                               : a == "--recipe"      ? &recipe
                               : a == "--base-url"    ? &cli.baseUrl
