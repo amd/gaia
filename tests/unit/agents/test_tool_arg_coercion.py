@@ -133,7 +133,7 @@ class TestUnconvertibleValuesAreRefusedNotPassedOn:
 
 class TestTheDispatcherActuallyCallsIt:
     def test_execute_tool_coerces_before_dispatch(self):
-        src = inspect.getsource(Agent._execute_tool)
+        src = inspect.getsource(Agent._dispatch_tool)
         assert (
             "_coerce_tool_args" in src
         ), "coercion is not wired into the dispatch path, so no tool benefits"

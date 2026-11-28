@@ -22,6 +22,7 @@ from .reasoning_tools import ReasoningEffortToolsMixin
 from .scratchpad_tools import ScratchpadToolsMixin
 from .screenshot_tools import ScreenshotToolsMixin
 from .shell_tools import ShellToolsMixin
+from .user_input_tools import UserInputToolsMixin
 from .wait_tools import WaitToolsMixin
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "ScratchpadToolsMixin",
     "ScreenshotToolsMixin",
     "ShellToolsMixin",
+    "UserInputToolsMixin",
     "WaitToolsMixin",
     "DictationToolsMixin",
 ]
