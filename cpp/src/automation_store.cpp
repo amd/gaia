@@ -1278,16 +1278,18 @@ void AutomationStore::dropWaitingFor(const std::string& storePath, const std::st
 
     AdvisoryFileLock lock(outboxPath);
     if (!fs::exists(outboxPath, ec)) return;
-    std::ifstream in(outboxPath, std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("Cannot read " + outboxPath.u8string() + ". Check its permissions.");
-    }
     json root;
-    try {
-        in >> root;
-    } catch (const std::exception& e) {
-        throw std::runtime_error(outboxPath.u8string() + " is not valid JSON: " + e.what() +
-                                 ". Delete it to drop waiting automation deliveries.");
+    {
+        std::ifstream in(outboxPath, std::ios::binary);
+        if (!in) {
+            throw std::runtime_error("Cannot read " + outboxPath.u8string() + ". Check its permissions.");
+        }
+        try {
+            in >> root;
+        } catch (const std::exception& e) {
+            throw std::runtime_error(outboxPath.u8string() + " is not valid JSON: " + e.what() +
+                                     ". Delete it to drop waiting automation deliveries.");
+        }
     }
     if (!root.is_object() || !root.contains("deliveries") || !root["deliveries"].is_array()) {
         throw std::runtime_error(outboxPath.u8string() +
@@ -1317,16 +1319,18 @@ std::optional<Automation> AutomationStore::dropWaitingById(const std::string& st
 
     AdvisoryFileLock lock(outboxPath);
     if (!fs::exists(outboxPath, ec)) return std::nullopt;
-    std::ifstream in(outboxPath, std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("Cannot read " + outboxPath.u8string() + ". Check its permissions.");
-    }
     json root;
-    try {
-        in >> root;
-    } catch (const std::exception& e) {
-        throw std::runtime_error(outboxPath.u8string() + " is not valid JSON: " + e.what() +
-                                 ". Delete it to drop waiting automation deliveries.");
+    {
+        std::ifstream in(outboxPath, std::ios::binary);
+        if (!in) {
+            throw std::runtime_error("Cannot read " + outboxPath.u8string() + ". Check its permissions.");
+        }
+        try {
+            in >> root;
+        } catch (const std::exception& e) {
+            throw std::runtime_error(outboxPath.u8string() + " is not valid JSON: " + e.what() +
+                                     ". Delete it to drop waiting automation deliveries.");
+        }
     }
     if (!root.is_object() || !root.contains("deliveries") || !root["deliveries"].is_array()) {
         throw std::runtime_error(outboxPath.u8string() +
@@ -1361,16 +1365,18 @@ std::optional<Automation> AutomationStore::dropWaitingByName(const std::string& 
 
     AdvisoryFileLock lock(outboxPath);
     if (!fs::exists(outboxPath, ec)) return std::nullopt;
-    std::ifstream in(outboxPath, std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("Cannot read " + outboxPath.u8string() + ". Check its permissions.");
-    }
     json root;
-    try {
-        in >> root;
-    } catch (const std::exception& e) {
-        throw std::runtime_error(outboxPath.u8string() + " is not valid JSON: " + e.what() +
-                                 ". Delete it to drop waiting automation deliveries.");
+    {
+        std::ifstream in(outboxPath, std::ios::binary);
+        if (!in) {
+            throw std::runtime_error("Cannot read " + outboxPath.u8string() + ". Check its permissions.");
+        }
+        try {
+            in >> root;
+        } catch (const std::exception& e) {
+            throw std::runtime_error(outboxPath.u8string() + " is not valid JSON: " + e.what() +
+                                     ". Delete it to drop waiting automation deliveries.");
+        }
     }
     if (!root.is_object() || !root.contains("deliveries") || !root["deliveries"].is_array()) {
         throw std::runtime_error(outboxPath.u8string() +

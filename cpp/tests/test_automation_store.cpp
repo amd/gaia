@@ -200,9 +200,11 @@ TEST(AutomationStoreTest, RemoveDropsAlreadyFiredOutboxEntries) {
     EXPECT_EQ(byWaitingId.kind, "waiting");
     EXPECT_EQ(byWaitingId.name, "Water plants");
 
-    std::ifstream in(outboxPath);
-    const json obJson = json::parse(in);
-    EXPECT_TRUE(obJson["deliveries"].empty());
+    {
+        std::ifstream in(outboxPath);
+        const json obJson = json::parse(in);
+        EXPECT_TRUE(obJson["deliveries"].empty());
+    }
     EXPECT_THROW(store.remove("waiting:d2"), std::invalid_argument);
 }
 
@@ -226,17 +228,19 @@ TEST(AutomationStoreTest, CrudLifecycleSchemaAndOutboxDrop) {
     EXPECT_DOUBLE_EQ(created.nextAt, localEpoch(2026, 11, 6, 17, 0));
     EXPECT_FALSE(created.paused);
 
-    // Verify exact Python AutomationStore JSON schema on disk.
-    std::ifstream in(storePath);
-    ASSERT_TRUE(in);
-    const json raw = json::parse(in);
-    ASSERT_TRUE(raw.is_object() && raw["automations"].is_array());
-    ASSERT_EQ(raw["automations"].size(), 1u);
-    const json& row = raw["automations"][0];
-    for (const char* key : {"id", "name", "kind", "prompt", "say", "every_seconds", "next_at", "check", "quiet",
-                            "days", "paused", "created_at", "last_run_at", "runs", "last_output", "checked",
-                            "failures", "last_alert"}) {
-        EXPECT_TRUE(row.contains(key)) << "missing key: " << key;
+    // Verify exact Python AutomationStore JSON schema on disk (close handle before edit replaces file on Windows).
+    {
+        std::ifstream in(storePath);
+        ASSERT_TRUE(in);
+        const json raw = json::parse(in);
+        ASSERT_TRUE(raw.is_object() && raw["automations"].is_array());
+        ASSERT_EQ(raw["automations"].size(), 1u);
+        const json& row = raw["automations"][0];
+        for (const char* key : {"id", "name", "kind", "prompt", "say", "every_seconds", "next_at", "check", "quiet",
+                                "days", "paused", "created_at", "last_run_at", "runs", "last_output", "checked",
+                                "failures", "last_alert"}) {
+            EXPECT_TRUE(row.contains(key)) << "missing key: " << key;
+        }
     }
 
     // Duplicate name (case-insensitive) fails loudly.
